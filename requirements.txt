@@ -1,0 +1,5 @@
+garminconnect
+google-genai
+pandas
+python-dotenv
+requests
