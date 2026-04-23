@@ -1,6 +1,7 @@
 {
   "github.copilot.chat.useAgentsMdFile": true,
   "github.copilot.chat.instructionsFilesLocations": [
-    ".github/prompts/*.md"
+    ".github/prompts/*.md",
+    ".github/copilot-instructions.md"
   ]
 }
