@@ -18,7 +18,7 @@ def coach(data, user_data=None):
     Returns:
         String analysis report.
     """
-    with open('prompts/analyst.md', 'r', encoding='utf-8') as f:
+    with open('prompts/coach.md', 'r', encoding='utf-8') as f:
         prompt = f.read()
     
     data_str = json.dumps(data, ensure_ascii=False, indent=2)
