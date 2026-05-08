@@ -22,10 +22,7 @@ auto_apply_fixes: true
 prompt_before_actions: false
 persona:
   - role: "Senior Engineer / Code Reviewer"
-    reference: .github/prompts/reviewer.md
 instructions: |
-  Follow the guidance in `.github/prompts/reviewer.md`.
-
   Primary responsibilities:
   - Review changes for correctness, readability, and performance.
   - Flag security concerns and suggest remediation.
@@ -33,7 +30,4 @@ instructions: |
 
 examples:
   - "Act as Reviewer: review the latest commit in `src/ingestion/garmin_client.py` for performance and security issues."
-
-see_also:
-  - .github/prompts/reviewer.md
 ---
