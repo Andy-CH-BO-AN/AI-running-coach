@@ -27,7 +27,17 @@ print("=" * 80)
 if activities:
     print("\nFirst activity details:")
     for key, value in activities[0].items():
-        print(f"  {key}: {value}")
+        if key != 'splits':  # Skip splits in the main details
+            print(f"  {key}: {value}")
+    
+    # Show splits for first activity
+    if activities[0].get('splits'):
+        print(f"\n  Splits for first activity ({len(activities[0]['splits'])} splits):")
+        for split in activities[0]['splits']:
+            hr_str = f"{split.get('average_heart_rate', 'N/A'):.0f}" if split.get('average_heart_rate') else "N/A"
+            max_hr_str = f"{split.get('max_heart_rate', 'N/A'):.0f}" if split.get('max_heart_rate') else "N/A"
+            pace_str = f"{split['pace']:.1f}" if split['pace'] is not None else "N/A"
+            print(f"    Split {split['split_index']}: {split['distance']:.1f}km, {split['duration']:.1f}min, pace: {pace_str:>5}min/km, HR: {hr_str:>3}, max: {max_hr_str:>3}")
     
     print(f"\nAll {len(activities)} activities summary:")
     for i, activity in enumerate(activities, 1):
@@ -37,7 +47,8 @@ if activities:
         max_hr_str = f"{max_hr_val:.0f}" if max_hr_val is not None else "N/A"
         avg_pace = activity.get('average_pace')
         pace_str = f"{avg_pace:.1f}" if avg_pace is not None else "N/A"
-        print(f"{i:3}. {activity['date']} - {activity['distance']:5.1f}km, {activity['duration']:5.1f}min, pace: {pace_str:>4}min/km, HR: {hr_str:>3}, max HR: {max_hr_str:>3}")
+        splits_count = len(activity.get('splits', []))
+        print(f"{i:3}. {activity['date']} - {activity['distance']:5.1f}km, {activity['duration']:5.1f}min, pace: {pace_str:>4}min/km, HR: {hr_str:>3}, max HR: {max_hr_str:>3}, splits: {splits_count}")
 else:
     print("No activities retrieved!")
 
