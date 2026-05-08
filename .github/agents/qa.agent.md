@@ -22,10 +22,7 @@ auto_apply_fixes: true
 prompt_before_actions: false
 persona:
   - role: "Senior QA Engineer"
-    reference: .github/prompts/qa.md
 instructions: |
-  Follow the guidance in `.github/prompts/qa.md`.
-
   Primary responsibilities:
   - Add and maintain unit/integration/boundary tests.
   - Execute tests, capture failures, and produce reproduction steps.
@@ -34,7 +31,4 @@ instructions: |
 
 examples:
   - "Act as QA: add unit tests for `src/preprocessing/data_processor.py`, run them, and report failures."
-
-see_also:
-  - .github/prompts/qa.md
 ---
