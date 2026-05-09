@@ -18,14 +18,16 @@ def coach(data, user_data=None):
     
     data_str = json.dumps(data, ensure_ascii=False, indent=2)
     
-    context = f"User Biometric Data:\n"
+    # --- 核心修正：建構完整的 User Context ---
+    context = "### User Biometric Data & PRs\n"
     if user_data:
-        context += f"- Max Heart Rate: {user_data.get('max_heart_rate', 'Unknown')}\n"
-        context += f"- Resting Heart Rate: {user_data.get('resting_heart_rate', 'Unknown')}\n"
+        # 直接序列化整個 user_data，確保 AI 能看到 PRs (跑步、游泳、單車)
+        user_context_str = json.dumps(user_data, ensure_ascii=False, indent=2)
+        context += user_context_str
     else:
         context += "- No biometric data available\n"
     
-    context += f"\nActivity Data:\n{data_str}"
+    context += f"\n\n### Activity Data to Analyze:\n{data_str}"
     full_prompt = f"{system_prompt}\n\n{context}"
 
     # 定義模型優先順序
@@ -49,6 +51,48 @@ def coach(data, user_data=None):
             print(f"模型 {model_name} 暫時無法使用（可能達到額度限制），準備切換至下一個備援模型...")
             continue
 
-# 使用範例:
-# report = coach(running_data, user_biometrics)
-# print(report)
+def run_local_analysis(csv_path, json_path):
+    """
+    讀取地端 CSV 和 JSON 檔案並執行 AI 分析
+    """
+    # 1. 讀取活動數據 (CSV)
+    # 這裡假設你的 CSV 是經過 data_processor 處理過的格式
+    try:
+        import pandas as pd
+        df = pd.read_csv(csv_path)
+        # 將 DataFrame 轉為 List of Dict，這通常是 AI 最容易讀取的 JSON 結構
+        running_data = df.to_dict(orient='records')
+        print(f"成功讀取活動數據: {csv_path} (共 {len(running_data)} 筆紀錄)")
+    except Exception as e:
+        print(f"讀取 CSV 失敗: {e}")
+        return
+
+    # 2. 讀取使用者生理與 PR 數據 (JSON)
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            user_biometrics = json.load(f)
+        print(f"成功讀取使用者數據: {json_path}")
+    except Exception as e:
+        print(f"讀取 JSON 失敗: {e}")
+        user_biometrics = None
+
+    # 3. 執行分析
+    print("正在送往 Gemini 進行深度分析...")
+    report = coach(running_data, user_biometrics)
+    
+    print("\n" + "="*30 + " AI 教練分析報告 " + "="*30)
+    print(report)
+    print("="*75)
+
+    # 4. (選填) 將報告存檔
+    report_filename = csv_path.replace('.csv', '_report.md')
+    with open(report_filename, 'w', encoding='utf-8') as f:
+        f.write(report)
+    print(f"報告已存檔至: {report_filename}")
+
+if __name__ == "__main__":
+    # 指定你的地端路徑
+    CSV_FILE = "data/processed/processed_20260509_175604.csv"
+    JSON_FILE = "data/raw/garmin_user_20260509_175604.json"
+    
+    run_local_analysis(CSV_FILE, JSON_FILE)

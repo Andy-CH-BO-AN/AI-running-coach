@@ -1,361 +1,272 @@
 import os
 import time
 import logging
+import random
 from typing import List, Dict, Any, Optional
 from garminconnect import Garmin
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
+from src.preprocessing.data_processor import calculate_pace
 
 load_dotenv()
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
+# Configuration constants
+API_RETRY_MAX = 3
+API_RETRY_BACKOFF_BASE = 2
+GARMIN_PR_MAPS = {
+    "RUNNING": {
+        1: '1km', 2: '1mile', 3: '5km', 4: '10km', 
+        5: 'half_marathon', 6: 'marathon', 7: 'longest_run'
+    },
+    "SWIMMING": {
+        18: '100m_swim', 20: '400m_swim', 22: '750m_swim'
+    },
+    "CYCLING": {
+        8: 'longest_ride', 14: '20min_max_power'
+    },
+    "MISC": {
+        13: 'max_ascent', 15: 'goal_streak'
+    }
+}
 
-def get_user_biometric_data(client: Garmin) -> Dict[str, Optional[float]]:
-    """
-    Get user's biometric data including max heart rate and resting heart rate.
-    
-    Args:
-        client: Garmin client instance
-    
-    Returns:
-        Dict with biometric info (max_heart_rate, resting_heart_rate)
-    """
-    try:
-        max_hr = None
-        resting_hr = None
-        
-        # Try different methods to get HR data
+def safe_api_call(func, *args, **kwargs) -> Any:
+    """具備指數退避邏輯的 API 呼叫包裝器"""
+    for attempt in range(API_RETRY_MAX):
         try:
-            # Try get_personal_records
-            personal_records = client.get_personal_records()
-            if personal_records:
-                # Look for HR related records
-                for record in personal_records:
-                    if 'maxHeartRate' in str(record).lower():
-                        max_hr = record.get('value')
-                        break
-                    if 'restingHeartRate' in str(record).lower():
-                        resting_hr = record.get('value')
-                        break
+            result = func(*args, **kwargs)
+            # 只要不是 None 就回傳，如果是空串列/字典也算成功
+            return result if result is not None else {}
         except Exception as e:
-            logger.debug(f"Error occurred while fetching personal records: {e}")
-        
-        # Try to estimate max HR from activities (use the max value we've seen)
-        # This will be calculated after we get all activities
-        
-        return {
-            'max_heart_rate': max_hr,
-            'resting_heart_rate': resting_hr
-        }
-    except Exception as e:
-        logger.warning(f"Could not fetch biometric data: {e}")
-        return {
-            'max_heart_rate': None,
-            'resting_heart_rate': None
-        }
+            if attempt < API_RETRY_MAX - 1:
+                # 修正 random 呼叫方式
+                wait_time = (API_RETRY_BACKOFF_BASE ** attempt) + random.uniform(0, 1)
+                logger.warning(f"API 重試中 {attempt + 1}/{API_RETRY_MAX}，等待 {wait_time:.1f}s: {e}")
+                time.sleep(wait_time)
+            else:
+                logger.error(f"API 呼叫徹底失敗: {e}")
+                return None
 
+def get_user_biometric_data(client):
+    data = {
+        'max_heart_rate': None,
+        'resting_heart_rate': None,
+        'pr_running': {}, 'pr_swimming': {}, 'pr_cycling': {}
+    }
 
-def estimate_max_hr_from_activities(activities: List[Dict[str, Any]]) -> Optional[int]:
-    """
-    Estimate user's max heart rate from activities data.
+    today = datetime.now().date().isoformat()
     
-    Args:
-        activities: List of activity dicts
-    
-    Returns:
-        Estimated max HR as int, or None if no HR data available
-    """
-    max_hrs = [a.get('max_heart_rate') for a in activities if a.get('max_heart_rate')]
-    if max_hrs:
-        return int(max(max_hrs))
-    return None
+    rhr_response = client.get_rhr_day(today)
 
+    if rhr_response:
+        try:
+            rhr = (
+                rhr_response["allMetrics"]["metricsMap"]
+                ["WELLNESS_RESTING_HEART_RATE"][0]["value"]
+            )
+        except (KeyError, IndexError, TypeError):
+            rhr = None
+    else:
+        rhr = None
+    
+    profile = client.get_user_profile()
+    if profile:
+        data['max_heart_rate'] = profile.get('maxHeartRate')
+        if not rhr:
+            rhr = profile.get('restingHeartRate')
+    
+    data['resting_heart_rate'] = rhr
+
+    # 處理個人紀錄
+    pr_records = client.get_personal_record()
+    if pr_records:
+        for record in pr_records:
+            tid, val = record.get('typeId'), record.get('value')
+            if tid is None or val is None: continue
+            
+            f_val, pace = format_garmin_value(val, tid)
+            display = f"{f_val} ({pace})" if pace else f_val
+
+            if tid in GARMIN_PR_MAPS["RUNNING"]:
+                data['pr_running'][GARMIN_PR_MAPS["RUNNING"][tid]] = display
+            elif tid in GARMIN_PR_MAPS["SWIMMING"]:
+                data['pr_swimming'][GARMIN_PR_MAPS["SWIMMING"][tid]] = display
+            elif tid in GARMIN_PR_MAPS["CYCLING"]:
+                data['pr_cycling'][GARMIN_PR_MAPS["CYCLING"][tid]] = display
+            elif tid in GARMIN_PR_MAPS["MISC"]:
+                data[GARMIN_PR_MAPS["MISC"][tid]] = display
+    return data
+
+
+def format_garmin_value(value, typeId):
+    """
+    客製化格式化函數：
+    1. 自動計算配速 (/km)
+    2. 自動修正單位：功率 (mW -> W), 距離 (m -> km)
+    3. 修正 7, 8 號紀錄的誤植問題
+    """
+    # --- 1. 跑步與一般時間類 (1km, 1mile, 5km, 10km, 半馬) ---
+    if typeId in [1, 2, 3, 4, 5]:
+        total_seconds = round(value)
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        formatted_value = f"{minutes}:{seconds:02d}"
+        
+        # 計算配速邏輯
+        if typeId == 1: # 1K
+            pace = f"{formatted_value} /km"
+        elif typeId == 2: # 1mile
+            p_sec = total_seconds / 1.60934
+            pace = f"{int(p_sec // 60)}:{int(p_sec % 60):02d} /km"
+        elif typeId == 3: # 5k
+            p_sec = total_seconds / 5
+            pace = f"{int(p_sec // 60)}:{int(p_sec % 60):02d} /km"
+        elif typeId == 4: # 10k
+            p_sec = total_seconds / 10
+            pace = f"{int(p_sec // 60)}:{int(p_sec % 60):02d} /km"
+        elif typeId == 5: # Half
+            p_sec = total_seconds / 21.0975
+            pace = f"{int(p_sec // 60)}:{int(p_sec % 60):02d} /km"
+        elif typeId == 6: # Marathon
+            p_sec = total_seconds / 42.195
+            pace = f"{int(p_sec // 60)}:{int(p_sec % 60):02d} /km"
+        
+        return formatted_value, pace
+
+    # --- 2. 距離類 (最長跑步, 最長騎乘) ---
+    if typeId in [7, 8]:
+        # 你的數據顯示 7 號是 21334.5 (m)，所以要除以 1000
+        value_km = value / 1000
+        return f"{value_km:.2f} km", ""
+
+    # --- 3. 功率類 (20min 最大功率) ---
+    if typeId == 14:
+        # 修正 mW -> W 的問題 (你的數據 519438.0)
+        if value > 5000:
+            val_w = int(value // 1000)
+        else:
+            val_w = int(value)
+        return f"{val_w} W", ""
+
+    # --- 4. 游泳類 (100m, 400m, 750m) ---
+    if typeId in [18, 20, 22]:
+        total_seconds = round(value)
+        return f"{total_seconds // 60}:{total_seconds % 60:02d}", ""
+
+    # --- 5. 爬升類 ---
+    if typeId == 13:
+        # 修正你的 154133.0 單位誤植問題
+        if value > 5000:
+            val_m = int(value // 1000)
+        else:
+            val_m = int(value)
+        return f"{val_m} m", ""
+
+    # 預設直接回傳
+    return str(round(value, 2)), ""
+
+def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -> Dict[str, Any]:
+    details = {}
+    full_detail = safe_api_call(client.get_activity, activity_id)
+    if not full_detail: return details
+    
+    summary = full_detail.get('summaryDTO', {})
+    details.update({
+        'elevation_gain': summary.get('elevationGain'),
+        'elevation_loss': summary.get('elevationLoss'),
+        'temperature': summary.get('averageTemperature'),
+        'training_stress_score': summary.get('activityTrainingLoad'),
+        'intensity_factor': summary.get('intensityFactor')
+    })
+
+    if activity_type == 'running':
+        details.update({
+            'cadence': summary.get('averageRunCadence'),
+            'stride_length': summary.get('strideLength'),
+            'power_avg': summary.get('averagePower')
+        })
+    elif activity_type == 'cycling':
+        details['power_avg'] = summary.get('averagePower') or summary.get('avgPower')
+        details['cadence'] = summary.get('averageBikeCadence') or summary.get('avgCadence')
+    
+    return details
 
 def get_activity_splits(client: Garmin, activity_id: int) -> List[Dict[str, Any]]:
-    """
-    Fetch split data for a specific activity.
-    
-    Args:
-        client: Garmin client instance
-        activity_id: ID of the activity to fetch splits for
-    
-    Returns:
-        List of split dicts, each containing:
-        - distance: distance in km
-        - duration: duration in minutes
-        - pace: pace in min/km (None if distance is 0)
-        - average_heart_rate: average heart rate for this split
-        - max_heart_rate: max heart rate for this split
-        - split_index: lap/split number (1-indexed)
-    """
     splits = []
-    try:
-        # Get splits/laps data from the activity
-        splits_data = client.get_activity_splits(activity_id)
+    splits_data = safe_api_call(client.get_activity_splits, activity_id)
+    if not splits_data: return splits
+
+    lap_dtos = splits_data.get('lapDTOs', [])
+    for idx, lap in enumerate(lap_dtos, 1):
+        dist, dur = lap.get('distance', 0), lap.get('duration', 0)
+        if dur < 1 or dist < 1: continue
         
-        if splits_data and isinstance(splits_data, dict):
-            lap_dtos = splits_data.get('lapDTOs', [])
-            
-            if lap_dtos:
-                for lap_index, lap_data in enumerate(lap_dtos, 1):
-                    try:
-                        # Convert distance from meters to km
-                        distance_m = lap_data.get('distance', 0)
-                        distance = distance_m / 1000 if distance_m else 0
-                        
-                        # Convert duration from seconds to minutes (not milliseconds)
-                        duration_s = lap_data.get('duration', 0)
-                        duration = duration_s / 60 if duration_s else 0
-                        
-                        # Calculate pace (min/km)
-                        pace = duration / distance if distance > 0 else None
-                        
-                        # Get heart rate data (note: API uses 'averageHR' and 'maxHR', not 'avgHeartRate')
-                        avg_hr = lap_data.get('averageHR')
-                        max_hr = lap_data.get('maxHR')
-                        
-                        splits.append({
-                            'distance': distance,
-                            'duration': duration,
-                            'pace': pace,
-                            'average_heart_rate': avg_hr,
-                            'max_heart_rate': max_hr,
-                            'split_index': lap_index
-                        })
-                        
-                    except Exception as e:
-                        logger.debug(f"Failed to process lap {lap_index}: {e}")
-                        continue
-    except Exception as e:
-        logger.warning(f"Could not fetch splits for activity {activity_id}: {e}")
-    
+        cadence = (lap.get('averageRunCadence') or lap.get('averageBikeCadence') or 
+                   lap.get('averageSwimCadence') or lap.get('avgCadence'))
+
+        splits.append({
+            'split_index': idx,
+            'distance': dist / 1000,
+            'duration': dur / 60,
+            'pace': calculate_pace(dur * 1000, dist),
+            'average_heart_rate': lap.get('averageHR'),
+            'avg_cadence': cadence
+        })
     return splits
 
-
 def get_garmin_activities(n: Optional[int] = 30) -> Dict[str, Any]:
-    """
-    Fetch all running activities from Garmin Connect with retry logic.
-    
-    Args:
-        n: Maximum number of activities to fetch (default 30, None = all activities)
-    
-    Returns:
-        Dict with:
-        - 'activities': List of running activities with splits data
-        - 'user_data': Dict with max_heart_rate, resting_heart_rate, etc.
-    """
-    email = os.getenv('GARMIN_ACCOUNT')
-    password = os.getenv('GARMIN_PASSWORD')
-    
+    email, password = os.getenv('GARMIN_ACCOUNT'), os.getenv('GARMIN_PASSWORD')
     if not email or not password:
-        logger.error("GARMIN_ACCOUNT or GARMIN_PASSWORD not set in .env")
+        logger.error("帳號密碼未設定")
         return {'activities': [], 'user_data': {}}
+
+    client = Garmin(email, password)
+    client.login()
     
-    max_retries = 3
-    retry_count = 0
+    # 抓取生理數據
+    user_data = get_user_biometric_data(client)
+
+    running_activities = []
+    start, page_size = 0, 50
+
+    while len(running_activities) < (n or 999):
+        activities = safe_api_call(client.get_activities, start, page_size)
+        if not activities: break
+
+        for activity in activities:
+            if len(running_activities) >= (n or 999): break
+            max_hr = max(
+                user_data.get('max_heart_rate') or 0, 
+                activity.get('maxHR') or 0
+            )
+            user_data['max_heart_rate'] = max_hr
+            
+            type_info = activity.get('activityType', {})
+            type_key = type_info.get('typeKey') if isinstance(type_info, dict) else type_info
+            target_types = {'running': 'running', 'lap_swimming': 'swimming', 'cycling': 'cycling'}
+            
+            if type_key in target_types:
+                act_id = activity.get('activityId')
+                act_type = target_types[type_key]
+                dist_m, dur_s = activity.get('distance', 0), activity.get('duration', 0)
+                
+                running_activities.append({
+                    'type': act_type,
+                    'date': activity.get('startTimeLocal', '')[:10],
+                    'distance': dist_m / 1000,
+                    'duration': dur_s / 60,
+                    'average_pace': calculate_pace(dur_s * 1000, dist_m),
+                    'average_heart_rate': activity.get('averageHR'),
+                    'activity_id': act_id,
+                    'splits': get_activity_splits(client, act_id),
+                    'raw_data': get_activity_details(client, act_id, act_type)
+                })
+        
+        start += page_size
+        if len(activities) < page_size: break
+
     
-    while retry_count < max_retries:
-        try:
-            logger.info(f"Connecting to Garmin (attempt {retry_count + 1}/{max_retries})...")
-            client = Garmin(email, password)
-            client.login()
-            
-            # Get user biometric data first
-            logger.info("Fetching user biometric data...")
-            user_data = get_user_biometric_data(client)
-            logger.debug(f"Max HR: {user_data.get('max_heart_rate')}")
-            logger.debug(f"Resting HR: {user_data.get('resting_heart_rate')}")
-            
-            # Fetch activities with pagination
-            running_activities = []
-            page_size = 100  # Garmin typically returns up to 100 per page
-            start = 0
-            
-            logger.info("Fetching all running activities...")
-            
-            while True:
-                try:
-                    # Fetch a page of activities
-                    activities = client.get_activities(start, page_size)
-                    
-                    if not activities:
-                        logger.info(f"Reached end of activities at page starting from {start}")
-                        break
-                    
-                    activities_before = len(running_activities)
-                    
-                    for activity in activities:
-                        # Filter only running activities
-                        activity_type = activity.get('activityType', {})
-                        type_key = activity_type.get('typeKey') if isinstance(activity_type, dict) else activity_type
-                        print(f"Processing activity {activity.get('activityId')} of type {type_key}...")
-                        
-                        if type_key == 'running':
-                            try:
-                                # Extract date (format: YYYY-MM-DD)
-                                date = activity.get('startTimeLocal', '')[:10]
-                                
-                                # Convert distance from meters to km
-                                distance_m = activity.get('distance', 0)
-                                distance = distance_m / 1000 if distance_m else 0
-                                
-                                # Convert duration from seconds to minutes
-                                duration_s = activity.get('duration', 0)
-                                duration = duration_s / 60 if duration_s else 0
-                                
-                                # Calculate average pace (min/km)
-                                avg_pace = duration / distance if distance > 0 else None
-                                
-                                # Get average and max heart rate
-                                avg_hr = activity.get('averageHR')
-                                max_hr_activity = activity.get('maxHR')
-                                
-                                # Fetch splits data for this activity
-                                activity_splits = get_activity_splits(client, activity.get('activityId'))
-                                
-                                running_activities.append({
-                                    'type': 'running',
-                                    'date': date,
-                                    'distance': distance,
-                                    'duration': duration,
-                                    'average_pace': avg_pace,
-                                    'average_heart_rate': avg_hr,
-                                    'max_heart_rate': max_hr_activity,
-                                    'activity_id': activity.get('activityId'),
-                                    'splits': activity_splits
-                                })
-                                
-                            except Exception as e:
-                                logger.debug(f"Failed to process activity {activity.get('activityId')}: {e}")
-                                continue
-                        elif type_key == 'lap_swimming':
-                            try:
-                                # Extract date (format: YYYY-MM-DD)
-                                date = activity.get('startTimeLocal', '')[:10]
-                                
-                                # Convert distance from meters to km
-                                distance_m = activity.get('distance', 0)
-                                distance = distance_m / 1000 if distance_m else 0
-                                
-                                # Convert duration from seconds to minutes
-                                duration_s = activity.get('duration', 0)
-                                duration = duration_s / 60 if duration_s else 0
-                                
-                                # Calculate average pace (min/km)
-                                avg_pace = duration / distance if distance > 0 else None
-                                
-                                # Get average and max heart rate
-                                avg_hr = activity.get('averageHR')
-                                max_hr_activity = activity.get('maxHR')
-                                
-                                # Fetch splits data for this activity
-                                activity_splits = get_activity_splits(client, activity.get('activityId'))
-                                
-                                running_activities.append({
-                                    'type': 'swimming',
-                                    'date': date,
-                                    'distance': distance,
-                                    'duration': duration,
-                                    'average_pace': avg_pace,
-                                    'average_heart_rate': avg_hr,
-                                    'max_heart_rate': max_hr_activity,
-                                    'activity_id': activity.get('activityId'),
-                                    'splits': activity_splits
-                                })
-                                
-                            except Exception as e:
-                                logger.debug(f"Failed to process activity {activity.get('activityId')}: {e}")
-                                continue
-                        elif type_key == 'cycling':
-                            try:
-                                # Extract date (format: YYYY-MM-DD)
-                                date = activity.get('startTimeLocal', '')[:10]
-                                
-                                # Convert distance from meters to km
-                                distance_m = activity.get('distance', 0)
-                                distance = distance_m / 1000 if distance_m else 0
-                                
-                                # Convert duration from seconds to minutes
-                                duration_s = activity.get('duration', 0)
-                                duration = duration_s / 60 if duration_s else 0
-                                
-                                # Calculate average pace (min/km)
-                                avg_pace = duration / distance if distance > 0 else None
-                                
-                                # Get average and max heart rate
-                                avg_hr = activity.get('averageHR')
-                                max_hr_activity = activity.get('maxHR')
-                                
-                                # Fetch splits data for this activity
-                                activity_splits = get_activity_splits(client, activity.get('activityId'))
-                                
-                                running_activities.append({
-                                    'type': 'cycling',
-                                    'date': date,
-                                    'distance': distance,
-                                    'duration': duration,
-                                    'average_pace': avg_pace,
-                                    'average_heart_rate': avg_hr,
-                                    'max_heart_rate': max_hr_activity,
-                                    'activity_id': activity.get('activityId'),
-                                    'splits': activity_splits
-                                })
-                                
-                            except Exception as e:
-                                logger.debug(f"Failed to process activity {activity.get('activityId')}: {e}")
-                                continue
-                    
-                    activities_added = len(running_activities) - activities_before
-                    logger.debug(f"Page {start // page_size + 1}: Added {activities_added} running activities (total: {len(running_activities)})")
-                    
-                    # Check if we've reached the limit
-                    if n and len(running_activities) >= n:
-                        logger.info(f"Reached limit of {n} activities")
-                        running_activities = running_activities[:n]
-                        break
-                    
-                    # If we got fewer activities than page size, we're at the end
-                    if len(activities) < page_size:
-                        logger.debug(f"Got {len(activities)} activities, which is less than page size {page_size}")
-                        break
-                    
-                    start += page_size
-                    
-                except Exception as e:
-                    logger.error(f"Error fetching page starting at {start}: {e}")
-                    break
-            
-            logger.info(f"Successfully fetched {len(running_activities)} total running activities")
-            
-            # Estimate max HR from activities if not already set
-            if not user_data.get('max_heart_rate'):
-                estimated_max_hr = estimate_max_hr_from_activities(running_activities)
-                if estimated_max_hr:
-                    logger.info(f"Estimated max HR from activities: {estimated_max_hr}")
-                    user_data['max_heart_rate'] = estimated_max_hr
-            
-            return {
-                'activities': running_activities,
-                'user_data': user_data
-            }
-            
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Error fetching Garmin data (attempt {retry_count + 1}): {error_msg}")
-            
-            # Check if it's a rate limit error (429)
-            if "429" in error_msg or "rate limit" in error_msg.lower():
-                retry_count += 1
-                if retry_count < max_retries:
-                    wait_time = 2 ** retry_count  # Exponential backoff: 2, 4, 8 seconds
-                    logger.warning(f"Rate limited. Waiting {wait_time} seconds before retry...")
-                    time.sleep(wait_time)
-                else:
-                    logger.error("Max retries exceeded. Giving up.")
-                    return {'activities': [], 'user_data': {}}
-            else:
-                # For other errors, return empty
-                logger.error(f"Non-recoverable error: {error_msg}")
-                return {'activities': [], 'user_data': {}}
-    return {'activities': [], 'user_data': {}}
+    print(f"✅ 成功抓取 {len(running_activities)} 筆活動並完成數據校正")
+    return {'activities': running_activities, 'user_data': user_data}
