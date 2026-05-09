@@ -58,9 +58,8 @@ def classify_runner_type(cadence: Optional[float]) -> Optional[str]:
         return None
     
     # 驗證合理範圍 (40-220 spm 是正常範圍)
-    if cadence < 40 or cadence > 220:
-        logger.warning(f"Unrealistic cadence value: {cadence} spm, skipping classification")
-        return None
+    if cadence < 40:
+        return "walking or resting"
     
     if cadence >= 180:
         return "frequency_runner"  # 頻率型
@@ -223,6 +222,10 @@ def preprocess_data(raw_activities: List[Dict[str, Any]]) -> List[Dict[str, Any]
         # --- 修正：先抓取 raw_data 字典，防呆預設為空字典 ---
         raw_data = item.get('raw_data', {})
         
+        # 心率區間與功率區間時間分布（所有活動都有）
+        hr_zone_data = {f'hr_zone_{i}': raw_data.get(f'hr_zone_{i}') for i in range(1, 6)}
+        power_zone_data = {f'power_zone_{i}': raw_data.get(f'power_zone_{i}') for i in range(1, 6)}
+        
         if a_type == 'running':
             # 修正 Garmin Key 名稱對應至 raw_data 中的實際名稱
             cadence = raw_data.get('cadence')
@@ -243,7 +246,9 @@ def preprocess_data(raw_activities: List[Dict[str, Any]]) -> List[Dict[str, Any]
                     'aerobic': raw_data.get('aerobic_training_effect'),
                     'anaerobic': raw_data.get('anaerobic_training_effect')
                 },
-                'training_load': raw_data.get('training_stress_score') # 對應 JSON 中的 TSS
+                'training_load': raw_data.get('training_stress_score'), # 對應 JSON 中的 TSS
+                'hr_zones': hr_zone_data,
+                'power_zones': power_zone_data
             }
             
             if cadence:
@@ -257,7 +262,9 @@ def preprocess_data(raw_activities: List[Dict[str, Any]]) -> List[Dict[str, Any]
                 'stroke_count': raw_data.get('total_strokes'),
                 'avg_swolf': raw_data.get('avg_swolf'),
                 'pool_length': raw_data.get('pool_length'),
-                'stroke_style': raw_data.get('avg_stroke_type') 
+                'stroke_style': raw_data.get('avg_stroke_type'),
+                'hr_zones': hr_zone_data,
+                'power_zones': power_zone_data
             }
             
             swolf = raw_data.get('avg_swolf')
@@ -268,6 +275,8 @@ def preprocess_data(raw_activities: List[Dict[str, Any]]) -> List[Dict[str, Any]
             processed_item['advanced_metrics'] = {
                 'elevation_gain': raw_data.get('elevation_gain'),
                 'elevation_loss': raw_data.get('elevation_loss'),
+                'hr_zones': hr_zone_data,
+                'power_zones': power_zone_data,
                 'power_avg': raw_data.get('power_avg'),
                 'power_max': raw_data.get('power_max'),
                 'avg_cadence': raw_data.get('cadence')
