@@ -22,13 +22,13 @@ GARMIN_PR_MAPS = {
         5: 'half_marathon', 6: 'marathon', 7: 'longest_run'
     },
     "SWIMMING": {
-        18: '100m_swim', 20: '400m_swim', 22: '750m_swim'
+        17: 'longest_swim', 18: '100m_swim', 20: '400m_swim', 22: '750m_swim'
     },
     "CYCLING": {
-        8: 'longest_ride', 14: '20min_max_power'
+        8: 'longest_ride'
     },
     "MISC": {
-        13: 'max_ascent', 15: 'goal_streak'
+        13: 'max_ascent', 14: 'monthly_max_steps', 15: 'goal_streak'
     }
 }
 
@@ -53,6 +53,14 @@ def get_user_biometric_data(client):
     data = {
         'max_heart_rate': None,
         'resting_heart_rate': None,
+        'vo2max_running': None,
+        'lactate_threshold_speed_mps': None,   # m/s，原始值
+        'lactate_threshold_pace': None,         # 格式化 MM:SS /km
+        'lactate_threshold_heart_rate': None,
+        'weight_kg': None,
+        'height_cm': None,
+        'available_training_days': [],
+        'preferred_long_training_days': [],
         'pr_running': {}, 'pr_swimming': {}, 'pr_cycling': {}
     }
 
@@ -76,6 +84,34 @@ def get_user_biometric_data(client):
         data['max_heart_rate'] = profile.get('maxHeartRate')
         if not rhr:
             rhr = profile.get('restingHeartRate')
+        
+        # 從 userData 抓進階生理數據
+        user_data_raw = profile.get('userData', {})
+        if user_data_raw:
+            data['vo2max_running'] = user_data_raw.get('vo2MaxRunning')
+            data['lactate_threshold_heart_rate'] = user_data_raw.get('lactateThresholdHeartRate')
+            
+            # 體重 (g -> kg)、身高 (cm)
+            weight_g = user_data_raw.get('weight')
+            if weight_g:
+                data['weight_kg'] = round(weight_g / 1000, 1)
+            data['height_cm'] = user_data_raw.get('height')
+            
+            # 乳酸閾值配速
+            # Garmin API 的 lactateThresholdSpeed 單位實測為 m/s 但數值縮小 10 倍
+            # 0.3778 × 10 = 3.778 m/s → 264.7 sec/km → 4:24 /km（符合你的半馬配速附近）
+            lt_speed = user_data_raw.get('lactateThresholdSpeed')
+            if lt_speed and lt_speed > 0:
+                data['lactate_threshold_speed_mps'] = lt_speed
+                corrected_speed = lt_speed * 10  # 修正縮放
+                pace_sec_per_km = 1000 / corrected_speed
+                lt_min = int(pace_sec_per_km // 60)
+                lt_sec = int(pace_sec_per_km % 60)
+                data['lactate_threshold_pace'] = f"{lt_min}:{lt_sec:02d} /km"
+            
+            # 訓練日偏好
+            data['available_training_days'] = user_data_raw.get('availableTrainingDays', [])
+            data['preferred_long_training_days'] = user_data_raw.get('preferredLongTrainingDays', [])
     
     data['resting_heart_rate'] = rhr
 
@@ -141,30 +177,34 @@ def format_garmin_value(value, typeId):
         value_km = value / 1000
         return f"{value_km:.2f} km", ""
 
-    # --- 3. 功率類 (20min 最大功率) ---
+    # --- 3. 單月最多步數 ---
     if typeId == 14:
-        # 修正 mW -> W 的問題 (你的數據 519438.0)
-        if value > 5000:
-            val_w = int(value // 1000)
-        else:
-            val_w = int(value)
-        return f"{val_w} W", ""
+        return f"{int(value):,} 步", ""
 
     # --- 4. 游泳類 (100m, 400m, 750m) ---
     if typeId in [18, 20, 22]:
         total_seconds = round(value)
         return f"{total_seconds // 60}:{total_seconds % 60:02d}", ""
 
+    # --- 4b. 游泳最長距離 (typeId 17, 單位 m) ---
+    if typeId == 17:
+        return f"{int(value)} m", ""
+
     # --- 5. 爬升類 ---
     if typeId == 13:
-        # 修正你的 154133.0 單位誤植問題
         if value > 5000:
             val_m = int(value // 1000)
         else:
             val_m = int(value)
         return f"{val_m} m", ""
 
-    # 預設直接回傳
+    # --- 6. 連續目標天數（整數顯示）---
+    if typeId == 15:
+        return f"{int(value)} 天", ""
+
+    # 預設直接回傳（整數就不顯示小數）
+    if value == int(value):
+        return str(int(value)), ""
     return str(round(value, 2)), ""
 
 def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -> Dict[str, Any]:
@@ -172,24 +212,53 @@ def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -
     full_detail = safe_api_call(client.get_activity, activity_id)
     if not full_detail: return details
     
+    # get_activity 回傳的結構：有些欄位在 summaryDTO，有些直接在頂層
     summary = full_detail.get('summaryDTO', {})
+    # 若 summaryDTO 是空的，頂層本身就是 activity_info 格式
+    top = full_detail if not summary else summary
+
+    # 溫度：取 min/max 平均
+    min_temp = top.get('minTemperature')
+    max_temp = top.get('maxTemperature')
+    if min_temp is not None and max_temp is not None:
+        avg_temp = round((min_temp + max_temp) / 2, 1)
+    else:
+        avg_temp = min_temp if min_temp is not None else max_temp
+
+    # 心率區間與功率區間時間分布
+    hr_zones = {f'hr_zone_{i}': full_detail.get(f'hrTimeInZone_{i}') for i in range(1, 6)}
+    power_zones = {f'power_zone_{i}': full_detail.get(f'powerTimeInZone_{i}') for i in range(1, 6)}
+
     details.update({
-        'elevation_gain': summary.get('elevationGain'),
-        'elevation_loss': summary.get('elevationLoss'),
-        'temperature': summary.get('averageTemperature'),
-        'training_stress_score': summary.get('activityTrainingLoad'),
-        'intensity_factor': summary.get('intensityFactor')
+        'elevation_gain': top.get('elevationGain'),
+        'elevation_loss': top.get('elevationLoss'),
+        'temperature': avg_temp,
+        'training_stress_score': top.get('activityTrainingLoad'),
+        'intensity_factor': top.get('intensityFactor'),
+        'aerobic_training_effect': top.get('aerobicTrainingEffect'),
+        'anaerobic_training_effect': top.get('anaerobicTrainingEffect')
     })
 
     if activity_type == 'running':
+        # averageRunningCadenceInStepsPerMinute 是單腳，×2 才是正確 spm
+        raw_cadence = top.get('averageRunCadence') or top.get('averageRunningCadenceInStepsPerMinute')
+        raw_max_cad = top.get('maxRunCadence') or top.get('maxRunningCadenceInStepsPerMinute') or top.get('maxDoubleCadence')
         details.update({
-            'cadence': summary.get('averageRunCadence'),
-            'stride_length': summary.get('strideLength'),
-            'power_avg': summary.get('averagePower')
+            'cadence': raw_cadence if raw_cadence else None,
+            'max_cadence': raw_max_cad if raw_max_cad else None,
+            'stride_length': top.get('avgStrideLength'),
+            'power_avg': top.get('avgPower'),
+            'power_max': top.get('maxPower'),
+            'vertical_oscillation': top.get('avgVerticalOscillation'),
+            'ground_contact_time': top.get('avgGroundContactTime'),
+            'vertical_ratio': top.get('avgVerticalRatio'),
         })
     elif activity_type == 'cycling':
-        details['power_avg'] = summary.get('averagePower') or summary.get('avgPower')
-        details['cadence'] = summary.get('averageBikeCadence') or summary.get('avgCadence')
+        details.update({
+            'power_avg': top.get('avgPower') or top.get('averagePower'),
+            'power_max': top.get('maxPower'),
+            'cadence': top.get('averageBikeCadence') or top.get('avgCadence'),
+        })
     
     return details
 
@@ -212,7 +281,18 @@ def get_activity_splits(client: Garmin, activity_id: int) -> List[Dict[str, Any]
             'duration': dur / 60,
             'pace': calculate_pace(dur * 1000, dist),
             'average_heart_rate': lap.get('averageHR'),
-            'avg_cadence': cadence
+            'max_heart_rate': lap.get('maxHR'),
+            'avg_cadence': cadence,
+            # 步幅與生物力學
+            'stride_length': lap.get('strideLength'),          # cm
+            'ground_contact_time': lap.get('groundContactTime'),  # ms
+            'vertical_oscillation': lap.get('verticalOscillation'),  # cm
+            'vertical_ratio': lap.get('verticalRatio'),
+            # 功率
+            'power_avg': lap.get('averagePower'),
+            'power_max': lap.get('maxPower'),
+            # 溫度
+            'temperature': lap.get('averageTemperature'),
         })
     return splits
 
@@ -245,7 +325,7 @@ def get_garmin_activities(n: Optional[int] = 30) -> Dict[str, Any]:
             
             type_info = activity.get('activityType', {})
             type_key = type_info.get('typeKey') if isinstance(type_info, dict) else type_info
-            target_types = {'running': 'running', 'lap_swimming': 'swimming', 'cycling': 'cycling'}
+            target_types = {'running': 'running', 'lap_swimming': 'swimming'} # , 'cycling': 'cycling' 目前只分析跑步與游泳，騎車先不分析
             
             if type_key in target_types:
                 act_id = activity.get('activityId')
