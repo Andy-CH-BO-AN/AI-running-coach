@@ -234,6 +234,45 @@ def _get_activity_value(source: Any, *keys: str) -> Any:
             return value
     return None
 
+def _extract_zone_seconds(zone_payload: Any, zone_base: str) -> Dict[str, Any]:
+    """
+    Normalize Garmin time-in-zone payloads.
+
+    Expected API payload shape:
+      [
+        {"zoneNumber": 1, "secsInZone": 273.906, ...},
+        ...
+      ]
+
+    Returns both the internal normalized keys and Garmin-compatible keys.
+    """
+    zone_data = {f'{zone_base}_zone_{i}': None for i in range(1, 6)}
+    zone_data.update({f'{zone_base}TimeInZone_{i}': None for i in range(1, 6)})
+
+    if isinstance(zone_payload, list):
+        for entry in zone_payload:
+            if not isinstance(entry, dict):
+                continue
+            zone_number = entry.get('zoneNumber')
+            secs_in_zone = entry.get('secsInZone')
+            if zone_number in range(1, 6):
+                zone_data[f'{zone_base}_zone_{zone_number}'] = secs_in_zone
+                zone_data[f'{zone_base}TimeInZone_{zone_number}'] = secs_in_zone
+        return zone_data
+
+    if isinstance(zone_payload, dict):
+        for i in range(1, 6):
+            zone_data[f'{zone_base}_zone_{i}'] = _get_activity_value(
+                zone_payload,
+                f'{zone_base}TimeInZone_{i}',
+                f'{zone_base}_zone_{i}',
+                f'secsInZone_{i}',
+                f'zone_{i}',
+            )
+            zone_data[f'{zone_base}TimeInZone_{i}'] = zone_data[f'{zone_base}_zone_{i}']
+
+    return zone_data
+
 def _log_activity_payload_debug(activity_id: int, activity_type: str, sources: Dict[str, Any]) -> None:
     """Print payload shapes and zone candidates when debug mode is enabled."""
     if not os.getenv('GARMIN_DEBUG_ACTIVITY_DETAILS'):
@@ -243,19 +282,15 @@ def _log_activity_payload_debug(activity_id: int, activity_type: str, sources: D
     for source_name, payload in sources.items():
         if isinstance(payload, dict):
             print(f"[garmin_debug] {source_name} top-level keys: {list(payload.keys())}")
+        elif isinstance(payload, list):
+            print(f"[garmin_debug] {source_name} list length: {len(payload)}")
         else:
             print(f"[garmin_debug] {source_name}: {type(payload).__name__}")
 
-    for i in range(1, 6):
-        hr_value = None
-        power_value = None
-        for payload in sources.values():
-            if hr_value is None:
-                hr_value = _get_activity_value(payload, f'hrTimeInZone_{i}', f'hr_zone_{i}_sec')
-            if power_value is None:
-                power_value = _get_activity_value(payload, f'powerTimeInZone_{i}', f'power_zone_{i}_sec')
-
-        print(f"[garmin_debug] zone_{i}: hr={hr_value}, power={power_value}")
+    hr_map = _extract_zone_seconds(sources.get('hr_timezones'), 'hr')
+    power_map = _extract_zone_seconds(sources.get('power_timezones'), 'power')
+    print(f"[garmin_debug] hr_timezones normalized: {hr_map}")
+    print(f"[garmin_debug] power_timezones normalized: {power_map}")
 
 def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -> Dict[str, Any]:
     details = {}
@@ -288,16 +323,15 @@ def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -
     else:
         avg_temp = min_temp if min_temp is not None else max_temp
 
-    # HR / power zone 秒數：保留 data_processor 需要的欄位，也額外保留原始 Garmin key
-    hr_zones = {}
-    power_zones = {}
-    for i in range(1, 6):
-        hr_seconds = get_value(f'hrTimeInZone_{i}', f'hr_zone_{i}_sec')
-        power_seconds = get_value(f'powerTimeInZone_{i}', f'power_zone_{i}_sec')
-        hr_zones[f'hr_zone_{i}'] = hr_seconds
-        hr_zones[f'hrTimeInZone_{i}'] = hr_seconds
-        power_zones[f'power_zone_{i}'] = power_seconds
-        power_zones[f'powerTimeInZone_{i}'] = power_seconds
+    # HR / power zone 秒數：主要來源是獨立 time-in-zone endpoint
+    hr_zones = _extract_zone_seconds(hr_timezones, 'hr')
+    power_zones = _extract_zone_seconds(power_timezones, 'power')
+
+    # 如果 endpoint 沒回資料，才從 activity payload 補抓一次
+    if not any(v is not None for v in hr_zones.values()):
+        hr_zones = _extract_zone_seconds(full_detail, 'hr')
+    if not any(v is not None for v in power_zones.values()):
+        power_zones = _extract_zone_seconds(full_detail, 'power')
 
     _log_activity_payload_debug(activity_id, activity_type, sources)
 
@@ -341,7 +375,6 @@ def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -
             'cadence': get_value('averageBikeCadence', 'avgCadence'),
             **power_zones,
         })
-    
     return details
 
 def get_activity_splits(client: Garmin, activity_id: int, activity_type: str = 'running') -> List[Dict[str, Any]]:

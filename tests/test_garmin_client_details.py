@@ -150,24 +150,20 @@ class GarminClientDetailTests(unittest.TestCase):
                 'maxPower': 240.0,
             }
         }
-        hr_payload = {
-            'hrTimeInZones': {
-                'hrTimeInZone_1': 101.0,
-                'hrTimeInZone_2': 102.0,
-                'hrTimeInZone_3': 103.0,
-                'hrTimeInZone_4': 104.0,
-                'hrTimeInZone_5': 105.0,
-            }
-        }
-        power_payload = {
-            'powerTimeInZones': {
-                'powerTimeInZone_1': 201.0,
-                'powerTimeInZone_2': 202.0,
-                'powerTimeInZone_3': 203.0,
-                'powerTimeInZone_4': 204.0,
-                'powerTimeInZone_5': 205.0,
-            }
-        }
+        hr_payload = [
+            {'zoneNumber': 1, 'secsInZone': 101.0},
+            {'zoneNumber': 2, 'secsInZone': 102.0},
+            {'zoneNumber': 3, 'secsInZone': 103.0},
+            {'zoneNumber': 4, 'secsInZone': 104.0},
+            {'zoneNumber': 5, 'secsInZone': 105.0},
+        ]
+        power_payload = [
+            {'zoneNumber': 1, 'secsInZone': 201.0},
+            {'zoneNumber': 2, 'secsInZone': 202.0},
+            {'zoneNumber': 3, 'secsInZone': 203.0},
+            {'zoneNumber': 4, 'secsInZone': 204.0},
+            {'zoneNumber': 5, 'secsInZone': 205.0},
+        ]
 
         details = get_activity_details(
             FakeGarminClient(payload, hr_payload=hr_payload, power_payload=power_payload),
@@ -179,6 +175,8 @@ class GarminClientDetailTests(unittest.TestCase):
         self.assertEqual(details['hrTimeInZone_5'], 105.0)
         self.assertEqual(details['power_zone_3'], 203.0)
         self.assertEqual(details['powerTimeInZone_4'], 204.0)
+        self.assertEqual(details['hrTimeInZone_1'], 101.0)
+        self.assertEqual(details['powerTimeInZone_5'], 205.0)
 
 
 if __name__ == '__main__':
