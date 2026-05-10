@@ -3,3 +3,7 @@ google-genai
 pandas
 python-dotenv
 requests
+sqlalchemy
+alembic
+psycopg[binary]
+pydantic
