@@ -1,69 +1,97 @@
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import pandas as pd
+
+from src.agents.coach import coach
 from src.ingestion.garmin_client import get_garmin_activities
 from src.preprocessing.data_processor import preprocess_data
-from agents.coach import coach
-import json
-import pandas as pd
-import os
-from datetime import datetime
 
-def run_pipeline():
-    """
-    執行完整的 AI 教練 Pipeline，僅儲存原始數據與 Markdown 報告。
-    """
+RAW_DATA_DIR = Path("data/raw")
+PROCESSED_DATA_DIR = Path("data/processed")
+OUTPUT_DIR = Path("output")
+GOAL_PROMPT_PATH = Path("prompts/goal.md")
+
+
+def _build_timestamp() -> str:
+    return datetime.now().strftime("%Y%m%d")
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as file_obj:
+        json.dump(payload, file_obj, ensure_ascii=False, indent=4)
+
+
+def _write_processed_csv(path: Path, processed_data: List[Dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.json_normalize(processed_data).to_csv(path, index=False, encoding="utf-8-sig")
+
+
+def _write_markdown_report(path: Path, response: str, activity_count: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as file_obj:
+        file_obj.write("# 🏃‍♂️ Garmin AI Coach Training Report\n\n")
+        file_obj.write(f"- **分析日期:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        file_obj.write(f"- **分析活動數量:** {activity_count}\n\n")
+        file_obj.write("---\n\n")
+        file_obj.write(response)
+        file_obj.write("\n\n---\n*Happy Running!*")
+
+
+def _persist_pipeline_artifacts(
+    timestamp: str,
+    processed_data: List[Dict[str, Any]],
+    response: str,
+) -> Path:
+    _write_processed_csv(PROCESSED_DATA_DIR / f"processed_{timestamp}.csv", processed_data)
+
+    report_path = OUTPUT_DIR / f"ai_report_{timestamp}.md"
+    _write_markdown_report(report_path, response, len(processed_data))
+    return report_path
+
+
+def _persist_raw_artifacts(
+    timestamp: str,
+    raw_activities: List[Dict[str, Any]],
+    user_data: Dict[str, Any],
+) -> None:
+    _write_json(RAW_DATA_DIR / f"garmin_raw_{timestamp}.json", raw_activities)
+    _write_json(RAW_DATA_DIR / f"garmin_user_{timestamp}.json", user_data)
+
+
+def run_pipeline(activity_limit: int = 75) -> Optional[str]:
     print("🚀 Starting Garmin AI Coach Pipeline...")
-    
-    # 1. Ingestion (擷取數據)
-    garmin_data = get_garmin_activities(75)
-    raw_activities = garmin_data.get('activities', [])
-    user_data = garmin_data.get('user_data', {})
-    
+
+    garmin_data = get_garmin_activities(activity_limit)
+    raw_activities = garmin_data.get("activities", [])
+    user_data = garmin_data.get("user_data", {})
+
     if not raw_activities:
         print("❌ No activities found.")
         return None
-    
-    # 儲存 Raw Data
-    os.makedirs('data/raw', exist_ok=True)
-    timestamp = datetime.now().strftime('%Y%m%d')
-    with open(f'data/raw/garmin_raw_{timestamp}.json', 'w', encoding='utf-8') as f:
-        json.dump(raw_activities, f, ensure_ascii=False, indent=4)
-    with open(f'data/raw/garmin_user_{timestamp}.json', 'w', encoding='utf-8') as f:
-        json.dump(user_data, f, ensure_ascii=False, indent=4)
-    
-    # 2. Preprocessing (預處理)
+
+    timestamp = _build_timestamp()
+    _persist_raw_artifacts(timestamp=timestamp, raw_activities=raw_activities, user_data=user_data)
+
     print("🧹 Preprocessing data...")
     processed_data = preprocess_data(raw_activities)
-    
     if not processed_data:
         print("⚠️ No data left after preprocessing.")
         return None
 
-    # 儲存已處理的資料 (CSV 僅作為數據備份)
-    os.makedirs('data/processed', exist_ok=True)
-    df_processed = pd.json_normalize(processed_data)
-    df_processed.to_csv(f'data/processed/processed_{timestamp}.csv', index=False, encoding='utf-8-sig')
-    
-    # 3. Analysis (AI 分析)
     print("🤖 Analyzing data with AI Coach...")
-    response = coach(data=processed_data, user_data=user_data, goal_path="prompts/goal.md")
-    
-    # 4. Output Markdown Report (移除 CSV 分析備份)
-    print("💾 Generating Markdown report...")
-    os.makedirs('output', exist_ok=True)
-    
-    md_filename = f'output/ai_report_{timestamp}.md'
-    with open(md_filename, 'w', encoding='utf-8') as f:
-        # 寫入報告標題與元數據
-        f.write(f"# 🏃‍♂️ Garmin AI Coach Training Report\n\n")
-        f.write(f"- **分析日期:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"- **分析活動數量:** {len(processed_data)}\n\n")
-        f.write(f"---\n\n")
-        
-        # 直接寫入 AI 的分析內容（ response 本身就是 Markdown 格式）
-        f.write(response)
-        
-        f.write(f"\n\n---\n*Happy Running!*")
+    response = coach(data=processed_data, user_data=user_data, goal_path=str(GOAL_PROMPT_PATH))
 
-    print(f"✨ Pipeline completed!")
-    print(f"📄 Markdown Report: {md_filename}")
-    
-    return md_filename
+    print("💾 Generating Markdown report...")
+    report_path = _persist_pipeline_artifacts(
+        timestamp=timestamp,
+        processed_data=processed_data,
+        response=response,
+    )
+
+    print("✨ Pipeline completed!")
+    print(f"📄 Markdown Report: {report_path}")
+    return str(report_path)
