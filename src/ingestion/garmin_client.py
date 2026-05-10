@@ -207,69 +207,100 @@ def format_garmin_value(value, typeId):
         return str(int(value)), ""
     return str(round(value, 2)), ""
 
+def _find_nested_value(data: Any, target_key: str) -> Any:
+    """Recursively search dict/list payloads and return the first non-None match."""
+    if isinstance(data, dict):
+        if target_key in data and data[target_key] is not None:
+            return data[target_key]
+
+        for value in data.values():
+            found = _find_nested_value(value, target_key)
+            if found is not None:
+                return found
+
+    elif isinstance(data, list):
+        for item in data:
+            found = _find_nested_value(item, target_key)
+            if found is not None:
+                return found
+
+    return None
+
+def _get_activity_value(source: Any, *keys: str) -> Any:
+    """Fetch the first matching value from a Garmin activity payload."""
+    for key in keys:
+        value = _find_nested_value(source, key)
+        if value is not None:
+            return value
+    return None
+
 def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -> Dict[str, Any]:
     details = {}
     full_detail = safe_api_call(client.get_activity, activity_id)
     if not full_detail: return details
-    
-    # get_activity 回傳的結構：有些欄位在 summaryDTO，有些直接在頂層
-    summary = full_detail.get('summaryDTO', {})
-    # 若 summaryDTO 是空的，頂層本身就是 activity_info 格式
-    top = full_detail if not summary else summary
+
+    # Garmin 的 activity payload 可能出現在頂層、summaryDTO、activity_info，
+    # 也可能藏在巢狀的 splitSummaries / other lists 裡，所以統一做遞迴查找。
+    get_value = lambda *keys: _get_activity_value(full_detail, *keys)
 
     # 溫度：取 min/max 平均
-    min_temp = top.get('minTemperature')
-    max_temp = top.get('maxTemperature')
+    min_temp = get_value('minTemperature')
+    max_temp = get_value('maxTemperature')
     if min_temp is not None and max_temp is not None:
         avg_temp = round((min_temp + max_temp) / 2, 1)
     else:
         avg_temp = min_temp if min_temp is not None else max_temp
 
-    # HR 心率區間（秒）：跑步/游泳/騎車都在 activity_info 頂層
-    # key 命名對齊 data_processor：hr_zone_1 ~ hr_zone_5
-    hr_zones = {f'hr_zone_{i}': top.get(f'hrTimeInZone_{i}') for i in range(1, 6)}
+    # HR / power zone 秒數：保留 data_processor 需要的欄位，也額外保留原始 Garmin key
+    hr_zones = {}
+    power_zones = {}
+    for i in range(1, 6):
+        hr_seconds = get_value(f'hrTimeInZone_{i}', f'hr_zone_{i}_sec')
+        power_seconds = get_value(f'powerTimeInZone_{i}', f'power_zone_{i}_sec')
+        hr_zones[f'hr_zone_{i}'] = hr_seconds
+        hr_zones[f'hrTimeInZone_{i}'] = hr_seconds
+        power_zones[f'power_zone_{i}'] = power_seconds
+        power_zones[f'powerTimeInZone_{i}'] = power_seconds
 
     details.update({
-        'elevation_gain': top.get('elevationGain'),
-        'elevation_loss': top.get('elevationLoss'),
+        'elevation_gain': get_value('elevationGain'),
+        'elevation_loss': get_value('elevationLoss'),
         'temperature': avg_temp,
-        'training_stress_score': top.get('activityTrainingLoad'),
-        'intensity_factor': top.get('intensityFactor'),
-        'aerobic_training_effect': top.get('aerobicTrainingEffect'),
-        'anaerobic_training_effect': top.get('anaerobicTrainingEffect'),
+        'training_stress_score': get_value('activityTrainingLoad'),
+        'intensity_factor': get_value('intensityFactor'),
+        'aerobic_training_effect': get_value('aerobicTrainingEffect'),
+        'anaerobic_training_effect': get_value('anaerobicTrainingEffect'),
         **hr_zones,
+        **power_zones,
     })
 
     if activity_type == 'running':
         # averageRunningCadenceInStepsPerMinute 是單腳 spm，×2 才是雙腳 spm
-        raw_cadence = top.get('averageRunCadence') or top.get('averageRunningCadenceInStepsPerMinute')
-        raw_max_cad = top.get('maxRunCadence') or top.get('maxRunningCadenceInStepsPerMinute') or top.get('maxDoubleCadence')
-        # 功率區間（秒）：key 命名對齊 data_processor：power_zone_1 ~ power_zone_5
-        power_zones = {f'power_zone_{i}': top.get(f'powerTimeInZone_{i}') for i in range(1, 6)}
+        raw_cadence = get_value('averageRunCadence', 'averageRunningCadenceInStepsPerMinute')
+        raw_max_cad = get_value('maxRunCadence', 'maxRunningCadenceInStepsPerMinute', 'maxDoubleCadence')
         details.update({
             'cadence': raw_cadence,
             'max_cadence': raw_max_cad,  # maxDoubleCadence 已是雙腳，不需 ×2
-            'stride_length': top.get('avgStrideLength'),
-            'power_avg': top.get('avgPower'),
-            'power_max': top.get('maxPower'),
-            'vertical_oscillation': top.get('avgVerticalOscillation'),
-            'ground_contact_time': top.get('avgGroundContactTime'),
-            'vertical_ratio': top.get('avgVerticalRatio'),
+            'stride_length': get_value('avgStrideLength', 'strideLength'),
+            'power_avg': get_value('avgPower', 'averagePower'),
+            'power_max': get_value('maxPower'),
+            'vertical_oscillation': get_value('avgVerticalOscillation', 'verticalOscillation'),
+            'ground_contact_time': get_value('avgGroundContactTime', 'groundContactTime'),
+            'vertical_ratio': get_value('avgVerticalRatio', 'verticalRatio'),
             **power_zones,
         })
-        print(details)
-        assert(False)
     elif activity_type == 'swimming':
         details.update({
-            'avg_swolf': top.get('averageSWOLF') or top.get('avgSWOLF'),
-            'total_strokes': top.get('totalNumberOfStrokes'),
-            'avg_stroke_cadence': top.get('averageSwimCadence'),
+            'avg_swolf': get_value('averageSWOLF', 'avgSWOLF', 'averageSwolf'),
+            'total_strokes': get_value('totalNumberOfStrokes'),
+            'avg_stroke_cadence': get_value('averageSwimCadence', 'averageSwimCadenceInStrokesPerMinute'),
         })
     elif activity_type == 'cycling':
         details.update({
-            'power_avg': top.get('avgPower') or top.get('averagePower'),
-            'power_max': top.get('maxPower'),
-            'cadence': top.get('averageBikeCadence') or top.get('avgCadence'),
+            'power_avg': get_value('avgPower', 'averagePower'),
+            'power_max': get_value('maxPower'),
+            'cadence': get_value('averageBikeCadence', 'avgCadence'),
+            **power_zones,
         })
     
     return details
