@@ -1,109 +1,145 @@
-# AI 跑步教練
+# AI Running Coach
 
-這是一個 AI 驅動的跑步教練系統，可以從 Garmin 取得訓練數據，使用人工智慧分析並提供個人化的訓練建議。
+AI Running Coach is a local Garmin-to-AI training analysis pipeline. It fetches recent Garmin Connect activities, normalizes activity metrics, sends the structured data to Gemini, and writes a Markdown coaching report.
 
-## 功能特色
+The current training prompt is focused on a 1500m goal, recent 1-2 week freshness, training load, heart-rate zones, running mechanics, and cross-training context.
 
-### 數據獲取
-- 自動從 Garmin Connect 獲取跑步、游泳、自行車活動數據
-- 完整的 Raw Data 支持，包括：
+## What It Does
 
-#### 跑步 (Running)
-- **步頻 (Cadence)**: 判斷是「力量型」還是「頻率型」跑者（目標 180spm）
-- **垂直振幅 (Vertical Oscillation)**: 評估跑步效率，避免體力浪費在向上跳
-- **觸地時間 (Ground Contact Time)**: 判斷推蹬力量與受傷風險
-- **安靜心率 (Resting HR)**: 計算「儲備心率 (HRR)」，比單看心率區間更準確
-- **坡度 (Elevation)**: 高度增益/下降，不同坡度耗力完全不同
-- **氣溫 (Temperature)**: 冬天夏天配速相同但耗力差異大
-- **心率區間時間分布 (HR Time in Zone)**: Zone 1-5 各區間的訓練時間，了解訓練強度分布
-- **功率區間時間分布 (Power Time in Zone)**: Zone 1-5 各區間的功率輸出時間分布（需支持功率計）
-- **各距離 PB**: 1k, 2k, 5k, 10k, 半馬, 全馬
-- **分段數據**: 每圈/每段的詳細配速、心率、步頻
+- Fetches Garmin profile, personal records, recent activities, splits, and activity detail payloads.
+- Currently ingests `running` and `lap_swimming` activities from Garmin Connect.
+- Normalizes running, swimming, and cycling-style metrics in preprocessing; cycling support exists in the processor, but Garmin cycling ingestion is currently disabled in `src/ingestion/garmin_client.py`.
+- Saves raw Garmin activity and user data under `data/raw/`.
+- Saves processed activity rows as CSV under `data/processed/`.
+- Generates the final AI coaching report as Markdown under `output/`.
+- Keeps AI agent workflow rules in shared Markdown so GitHub Copilot, Codex, and future adapters can reuse the same reviewer and QA instructions.
 
-#### 游泳 (Swimming)
-- **划手數 (Stroke Count)** 及 **SWOLF**: 衡量游泳效率的關鍵指標（支持低分值，如快速游泳 <50 秒/25m）
-- **泳池長度與泳姿**: 記錄訓練環境與技術類型
-- **心率區間時間分布 (HR Time in Zone)**: Zone 1-5 各區間的訓練時間
-- **功率區間時間分布 (Power Time in Zone)**: Zone 1-5 各區間的功率輸出時間分布
-- **各距離 PB**: 50m, 100m, 200m 等
-- **分段數據**: 每段的效率指標
+## Data Pipeline
 
-#### 自行車 (Cycling)
-- **高度增益 (Elevation Gain)**: 區分平路 vs 爬坡
-- **功率數據 (Power)**: 平均和最大功率輸出
-- **踏頻 (Cadence)**: 騎行效率指標
-- **心率區間時間分布 (HR Time in Zone)**: Zone 1-5 各區間的訓練時間
-- **功率區間時間分布 (Power Time in Zone)**: Zone 1-5 各區間的功率輸出時間分布
-- **各距離 PB**
-- **分段數據**
-
-### 數據分析
-- AI 分析訓練趨勢和表現
-- 自動分類跑者類型（力量型 vs 頻率型）
-- 計算跑步效率指標（垂直振幅、觸地時間等），由 AI 分析並提供評估
-- 評估游泳效率（SWOLF 分數）：支持快速游泳的低分值（<50秒/25m）
-- 評估自行車效率（功率比）：衡量騎行穩定性和爆發力
-- 計算儲備心率與心率區間
-- 生成個人化訓練建議
-
-### 輸出報告
-- 輸出結構化分析報告 CSV
-- 包含所有 Raw Data 和計算後的指標
-
-## 安裝與使用
-
-1. 安裝依賴：
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. 配置環境變數（.env 文件已包含）：
-   - GARMIN_ACCOUNT: Garmin 帳號
-   - GARMIN_PASSWORD: Garmin 密碼
-   - GEMINI_KEY: Google Gemini API 金鑰
-
-3. 運行管道：
-   ```bash
-   python run_pipeline.py
-   ```
-
-4. 查看輸出：`output/ai_analysis_YYYYMMDD.md`
-
-## 專案結構
-
-- `src/`: 源代碼
-  - `ingestion/garmin_client.py`: Garmin API 集成，獲取完整的 raw data
-  - `preprocessing/data_processor.py`: 數據預處理、指標計算與分類
-  - `agents/coach.py`: AI 教練代理
-  - `pipeline/runner.py`: 管道控制
-- `prompts/`: AI 提示詞
-- `output/`: 輸出文件
-
-## 數據流水線
-
-```
-Garmin API
+```text
+Garmin Connect
     ↓
-garmin_client.py (獲取原始活動數據 + 詳細指標)
+src/ingestion/garmin_client.py
     ↓
-data_processor.py (清理、計算、分類、分析)
+src/preprocessing/data_processor.py
     ↓
-coach.py (AI 分析與建議)
+src/agents/coach.py
     ↓
-output CSV (最終報告)
+output/ai_report_YYYYMMDD.md
 ```
 
-## 技術棧
+## Project Layout
 
-- Python 3.13+
-- Garmin Connect API (garminconnect library)
-- Google Gemini AI
-- Pandas
+- `run_pipeline.py`: CLI entrypoint that adds `src/` to `sys.path` and runs the pipeline.
+- `src/pipeline/runner.py`: Orchestrates ingestion, preprocessing, Gemini analysis, and file output.
+- `src/ingestion/garmin_client.py`: Handles Garmin login, retry/backoff, profile/PR fetches, activity details, splits, HR zones, and power zones.
+- `src/preprocessing/data_processor.py`: Calculates pace/speed, formats metrics, normalizes advanced activity data, and derives efficiency summaries.
+- `src/agents/coach.py`: Builds the Gemini prompt context and writes local analysis reports.
+- `prompts/coach.md`: Main coaching prompt.
+- `prompts/goal.md`: Current race goal and training constraints.
+- `data/raw/`: Ignored local Garmin raw JSON output.
+- `data/processed/`: Ignored local processed CSV output.
+- `data/sample/`: Ignored local raw API samples for debugging.
+- `output/`: Ignored local Markdown reports.
+- `ai/shared/`: Canonical AI workflow, reviewer, and QA instructions.
+- `.github/`: GitHub Copilot adapters that point to `ai/shared/`.
+- `.codex/`: Codex adapters that point to `ai/shared/`.
 
-## 注意事項
+## Setup
 
-- 確保 Garmin 帳號有數據
-- API 可能有速率限制
-- 首次運行可能需要手動驗證
-- 某些高級指標（如功率數據）需要相應的 Garmin 設備支持
-- **心率和功率區間數據需要兼容的 Garmin 設備支持，舊活動可能缺少此數據**
+1. Create and activate a Python environment.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+2. Install dependencies.
+
+```bash
+pip install -r requirements.txt
+```
+
+3. Create a local `.env` file.
+
+```text
+GARMIN_ACCOUNT=your_garmin_email
+GARMIN_PASSWORD=your_garmin_password
+GEMINI_KEY=your_gemini_api_key
+```
+
+## Run
+
+Run the full Garmin ingestion and AI analysis pipeline:
+
+```bash
+python run_pipeline.py
+```
+
+Expected local outputs:
+
+- `data/raw/garmin_raw_YYYYMMDD.json`
+- `data/raw/garmin_user_YYYYMMDD.json`
+- `data/processed/processed_YYYYMMDD.csv`
+- `output/ai_report_YYYYMMDD.md`
+
+Garmin login can require manual verification or hit rate limits. The ingestion code uses retry/backoff, but repeated API calls should still be avoided when debugging.
+
+## Local Analysis
+
+To analyze existing local files without fetching Garmin again, use `run_local_analysis` from `src/agents/coach.py` with a processed CSV, raw user JSON, and optional goal prompt.
+
+Example:
+
+```bash
+python src/agents/coach.py
+```
+
+The hardcoded file names in the `__main__` block are examples, so update them before using that path.
+
+## Tests
+
+Run the automated unit tests:
+
+```bash
+PYTHONPATH=. pytest -q tests/test_garmin_client_details.py
+```
+
+Current tracked tests include:
+
+- `tests/test_garmin_client_details.py`: Unit tests for Garmin activity detail parsing, nested metric extraction, and time-in-zone fallback payloads.
+- `test_garmin_client.py`: Manual Garmin smoke-test script that calls the real Garmin API and requires local credentials.
+
+`pytest -q` may try to collect local/manual scripts at the repo root. Prefer the explicit unit-test command above for automation, and use the manual Garmin script sparingly:
+
+```bash
+python test_garmin_client.py
+```
+
+## AI Agent Workflow
+
+This repo uses shared Markdown as the single source of truth for AI coding workflow instructions.
+
+Canonical docs:
+
+- `ai/shared/instructions.md`
+- `ai/shared/reviewer.agent.md`
+- `ai/shared/qa.agent.md`
+
+Adapters:
+
+- `.github/copilot-instructions.md`
+- `.github/agents/reviewer.agent.md`
+- `.github/agents/qa.agent.md`
+- `.codex/copilot-instructions.md`
+- `.codex/agents/reviewer.agent.md`
+- `.codex/agents/qa.agent.md`
+
+When adding Claude, Gemini, or another tool later, create a thin adapter that points back to `ai/shared/` instead of duplicating reviewer or QA rules.
+
+## Notes
+
+- `.env`, `data/`, `output/`, `.venv/`, and CSV files are ignored by git.
+- The primary final report is Markdown, not CSV. CSV files are processed-data backups.
+- Some advanced Garmin metrics depend on device support and may be missing for older activities.
+- `GARMIN_DEBUG_ACTIVITY_DETAILS=1` enables extra activity payload debugging in `garmin_client.py`.
