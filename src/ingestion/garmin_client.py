@@ -207,71 +207,174 @@ def format_garmin_value(value, typeId):
         return str(int(value)), ""
     return str(round(value, 2)), ""
 
+def _find_nested_value(data: Any, target_key: str) -> Any:
+    """Recursively search dict/list payloads and return the first non-None match."""
+    if isinstance(data, dict):
+        if target_key in data and data[target_key] is not None:
+            return data[target_key]
+
+        for value in data.values():
+            found = _find_nested_value(value, target_key)
+            if found is not None:
+                return found
+
+    elif isinstance(data, list):
+        for item in data:
+            found = _find_nested_value(item, target_key)
+            if found is not None:
+                return found
+
+    return None
+
+def _get_activity_value(source: Any, *keys: str) -> Any:
+    """Fetch the first matching value from a Garmin activity payload."""
+    for key in keys:
+        value = _find_nested_value(source, key)
+        if value is not None:
+            return value
+    return None
+
+def _extract_zone_seconds(zone_payload: Any, zone_base: str) -> Dict[str, Any]:
+    """
+    Normalize Garmin time-in-zone payloads.
+
+    Expected API payload shape:
+      [
+        {"zoneNumber": 1, "secsInZone": 273.906, ...},
+        ...
+      ]
+
+    Returns both the internal normalized keys and Garmin-compatible keys.
+    """
+    zone_data = {f'{zone_base}_zone_{i}': None for i in range(1, 6)}
+    zone_data.update({f'{zone_base}TimeInZone_{i}': None for i in range(1, 6)})
+
+    if isinstance(zone_payload, list):
+        for entry in zone_payload:
+            if not isinstance(entry, dict):
+                continue
+            zone_number = entry.get('zoneNumber')
+            secs_in_zone = entry.get('secsInZone')
+            if zone_number in range(1, 6):
+                zone_data[f'{zone_base}_zone_{zone_number}'] = secs_in_zone
+                zone_data[f'{zone_base}TimeInZone_{zone_number}'] = secs_in_zone
+        return zone_data
+
+    if isinstance(zone_payload, dict):
+        for i in range(1, 6):
+            zone_data[f'{zone_base}_zone_{i}'] = _get_activity_value(
+                zone_payload,
+                f'{zone_base}TimeInZone_{i}',
+                f'{zone_base}_zone_{i}',
+                f'secsInZone_{i}',
+                f'zone_{i}',
+            )
+            zone_data[f'{zone_base}TimeInZone_{i}'] = zone_data[f'{zone_base}_zone_{i}']
+
+    return zone_data
+
+def _log_activity_payload_debug(activity_id: int, activity_type: str, sources: Dict[str, Any]) -> None:
+    """Print payload shapes and zone candidates when debug mode is enabled."""
+    if not os.getenv('GARMIN_DEBUG_ACTIVITY_DETAILS'):
+        return
+
+    print(f"\n[garmin_debug] activity_id={activity_id} activity_type={activity_type}")
+    for source_name, payload in sources.items():
+        if isinstance(payload, dict):
+            print(f"[garmin_debug] {source_name} top-level keys: {list(payload.keys())}")
+        elif isinstance(payload, list):
+            print(f"[garmin_debug] {source_name} list length: {len(payload)}")
+        else:
+            print(f"[garmin_debug] {source_name}: {type(payload).__name__}")
+
+    hr_map = _extract_zone_seconds(sources.get('hr_timezones'), 'hr')
+    power_map = _extract_zone_seconds(sources.get('power_timezones'), 'power')
+    print(f"[garmin_debug] hr_timezones normalized: {hr_map}")
+    print(f"[garmin_debug] power_timezones normalized: {power_map}")
+
 def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -> Dict[str, Any]:
     details = {}
     full_detail = safe_api_call(client.get_activity, activity_id)
     if not full_detail: return details
-    
-    # get_activity 回傳的結構：有些欄位在 summaryDTO，有些直接在頂層
-    summary = full_detail.get('summaryDTO', {})
-    # 若 summaryDTO 是空的，頂層本身就是 activity_info 格式
-    top = full_detail if not summary else summary
+
+    hr_timezones = safe_api_call(client.get_activity_hr_in_timezones, activity_id)
+    power_timezones = safe_api_call(client.get_activity_power_in_timezones, activity_id)
+
+    sources = {
+        'activity': full_detail,
+        'hr_timezones': hr_timezones,
+        'power_timezones': power_timezones,
+    }
+
+    # Garmin 的 activity payload 可能出現在頂層、summaryDTO、activity_info，
+    # 也可能在獨立 time-zone endpoint，所以統一做遞迴查找。
+    def get_value(*keys: str) -> Any:
+        for source in sources.values():
+            value = _get_activity_value(source, *keys)
+            if value is not None:
+                return value
+        return None
 
     # 溫度：取 min/max 平均
-    min_temp = top.get('minTemperature')
-    max_temp = top.get('maxTemperature')
+    min_temp = get_value('minTemperature')
+    max_temp = get_value('maxTemperature')
     if min_temp is not None and max_temp is not None:
         avg_temp = round((min_temp + max_temp) / 2, 1)
     else:
         avg_temp = min_temp if min_temp is not None else max_temp
 
-    # HR 心率區間（秒）：跑步/游泳/騎車都在 activity_info 頂層
-    # key 命名對齊 data_processor：hr_zone_1 ~ hr_zone_5
-    hr_zones = {f'hr_zone_{i}': top.get(f'hrTimeInZone_{i}') for i in range(1, 6)}
+    # HR / power zone 秒數：主要來源是獨立 time-in-zone endpoint
+    hr_zones = _extract_zone_seconds(hr_timezones, 'hr')
+    power_zones = _extract_zone_seconds(power_timezones, 'power')
+
+    # 如果 endpoint 沒回資料，才從 activity payload 補抓一次
+    if not any(v is not None for v in hr_zones.values()):
+        hr_zones = _extract_zone_seconds(full_detail, 'hr')
+    if not any(v is not None for v in power_zones.values()):
+        power_zones = _extract_zone_seconds(full_detail, 'power')
+
+    _log_activity_payload_debug(activity_id, activity_type, sources)
 
     details.update({
-        'elevation_gain': top.get('elevationGain'),
-        'elevation_loss': top.get('elevationLoss'),
+        'elevation_gain': get_value('elevationGain'),
+        'elevation_loss': get_value('elevationLoss'),
         'temperature': avg_temp,
-        'training_stress_score': top.get('activityTrainingLoad'),
-        'intensity_factor': top.get('intensityFactor'),
-        'aerobic_training_effect': top.get('aerobicTrainingEffect'),
-        'anaerobic_training_effect': top.get('anaerobicTrainingEffect'),
+        'training_stress_score': get_value('activityTrainingLoad'),
+        'intensity_factor': get_value('intensityFactor'),
+        'aerobic_training_effect': get_value('aerobicTrainingEffect'),
+        'anaerobic_training_effect': get_value('anaerobicTrainingEffect'),
         **hr_zones,
+        **power_zones,
     })
 
     if activity_type == 'running':
         # averageRunningCadenceInStepsPerMinute 是單腳 spm，×2 才是雙腳 spm
-        raw_cadence = top.get('averageRunCadence') or top.get('averageRunningCadenceInStepsPerMinute')
-        raw_max_cad = top.get('maxRunCadence') or top.get('maxRunningCadenceInStepsPerMinute') or top.get('maxDoubleCadence')
-        # 功率區間（秒）：key 命名對齊 data_processor：power_zone_1 ~ power_zone_5
-        power_zones = {f'power_zone_{i}': top.get(f'powerTimeInZone_{i}') for i in range(1, 6)}
+        raw_cadence = get_value('averageRunCadence', 'averageRunningCadenceInStepsPerMinute')
+        raw_max_cad = get_value('maxRunCadence', 'maxRunningCadenceInStepsPerMinute', 'maxDoubleCadence')
         details.update({
             'cadence': raw_cadence,
             'max_cadence': raw_max_cad,  # maxDoubleCadence 已是雙腳，不需 ×2
-            'stride_length': top.get('avgStrideLength'),
-            'power_avg': top.get('avgPower'),
-            'power_max': top.get('maxPower'),
-            'vertical_oscillation': top.get('avgVerticalOscillation'),
-            'ground_contact_time': top.get('avgGroundContactTime'),
-            'vertical_ratio': top.get('avgVerticalRatio'),
+            'stride_length': get_value('avgStrideLength', 'strideLength'),
+            'power_avg': get_value('avgPower', 'averagePower'),
+            'power_max': get_value('maxPower'),
+            'vertical_oscillation': get_value('avgVerticalOscillation', 'verticalOscillation'),
+            'ground_contact_time': get_value('avgGroundContactTime', 'groundContactTime'),
+            'vertical_ratio': get_value('avgVerticalRatio', 'verticalRatio'),
             **power_zones,
         })
-        print(details)
-        assert(False)
     elif activity_type == 'swimming':
         details.update({
-            'avg_swolf': top.get('averageSWOLF') or top.get('avgSWOLF'),
-            'total_strokes': top.get('totalNumberOfStrokes'),
-            'avg_stroke_cadence': top.get('averageSwimCadence'),
+            'avg_swolf': get_value('averageSWOLF', 'avgSWOLF', 'averageSwolf'),
+            'total_strokes': get_value('totalNumberOfStrokes'),
+            'avg_stroke_cadence': get_value('averageSwimCadence', 'averageSwimCadenceInStrokesPerMinute'),
         })
     elif activity_type == 'cycling':
         details.update({
-            'power_avg': top.get('avgPower') or top.get('averagePower'),
-            'power_max': top.get('maxPower'),
-            'cadence': top.get('averageBikeCadence') or top.get('avgCadence'),
+            'power_avg': get_value('avgPower', 'averagePower'),
+            'power_max': get_value('maxPower'),
+            'cadence': get_value('averageBikeCadence', 'avgCadence'),
+            **power_zones,
         })
-    
     return details
 
 def get_activity_splits(client: Garmin, activity_id: int, activity_type: str = 'running') -> List[Dict[str, Any]]:
