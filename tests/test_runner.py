@@ -47,7 +47,8 @@ def _fake_json_normalize(rows):
 pandas_stub.json_normalize = _fake_json_normalize
 sys.modules.setdefault("google", google_stub)
 sys.modules.setdefault("google.genai", genai_stub)
-sys.modules.setdefault("pandas", pandas_stub)
+pandas_module = sys.modules.setdefault("pandas", pandas_stub)
+pandas_module.json_normalize = _fake_json_normalize
 
 garminconnect_stub = types.ModuleType("garminconnect")
 garminconnect_stub.Garmin = object

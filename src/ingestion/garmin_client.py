@@ -446,15 +446,19 @@ def get_activity_splits(client: Garmin, activity_id: int, activity_type: str = '
         splits.append(split)
     return splits
 
-def get_garmin_activities(n: Optional[int] = 30) -> Dict[str, Any]:
+def get_garmin_activities(n: Optional[int] = 30, progress: bool = False) -> Dict[str, Any]:
     email, password = os.getenv('GARMIN_ACCOUNT'), os.getenv('GARMIN_PASSWORD')
     if not email or not password:
         logger.error("帳號密碼未設定")
         return {'activities': [], 'user_data': {}}
 
+    if progress:
+        print(f"🔐 Garmin login starting; target activities={n or 999}", flush=True)
     client = Garmin(email, password)
     client.login()
-    
+
+    if progress:
+        print("✅ Garmin login completed; fetching user profile/biometrics", flush=True)
     # 抓取生理數據
     user_data = get_user_biometric_data(client)
 
@@ -462,6 +466,11 @@ def get_garmin_activities(n: Optional[int] = 30) -> Dict[str, Any]:
     start, page_size = 0, 50
 
     while len(running_activities) < (n or 999):
+        if progress:
+            print(
+                f"📄 Fetching Garmin activities page start={start}, collected={len(running_activities)}",
+                flush=True,
+            )
         activities = safe_api_call(client.get_activities, start, page_size)
         if not activities: break
 
@@ -481,7 +490,13 @@ def get_garmin_activities(n: Optional[int] = 30) -> Dict[str, Any]:
                 act_id = activity.get('activityId')
                 act_type = target_types[type_key]
                 dist_m, dur_s = activity.get('distance', 0), activity.get('duration', 0)
-                
+
+                if progress:
+                    print(
+                        f"  ↳ Fetching {act_type} activity={act_id} date={activity.get('startTimeLocal', '')[:10]} "
+                        f"({len(running_activities) + 1}/{n or 999})",
+                        flush=True,
+                    )
                 running_activities.append({
                     'type': act_type,
                     'date': activity.get('startTimeLocal', '')[:10],
