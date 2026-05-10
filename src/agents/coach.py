@@ -94,7 +94,7 @@ def run_local_analysis(csv_path, json_path, goal_path='prompts/goal.md'):
     
     # 5. 生成報告存檔 (僅存 Markdown)
     os.makedirs('output', exist_ok=True)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = datetime.now().strftime('%Y%m%d')
     report_filename = f"output/ai_report_{timestamp}.md"
     
     with open(report_filename, 'w', encoding='utf-8') as f:

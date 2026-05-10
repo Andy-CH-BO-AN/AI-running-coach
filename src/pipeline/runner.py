@@ -23,7 +23,7 @@ def run_pipeline():
     
     # 儲存 Raw Data
     os.makedirs('data/raw', exist_ok=True)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = datetime.now().strftime('%Y%m%d')
     with open(f'data/raw/garmin_raw_{timestamp}.json', 'w', encoding='utf-8') as f:
         json.dump(raw_activities, f, ensure_ascii=False, indent=4)
     with open(f'data/raw/garmin_user_{timestamp}.json', 'w', encoding='utf-8') as f:
