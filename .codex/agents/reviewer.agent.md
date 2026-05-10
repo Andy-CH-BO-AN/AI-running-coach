@@ -2,15 +2,15 @@
 name: reviewer
 display_name: "Code Reviewer"
 description: |
-  GitHub adapter for the shared reviewer workflow. Use the shared
+  Codex adapter for the shared reviewer workflow. Use the shared
   reviewer instructions for review scope, style, and output format.
 applyTo:
   - "src/**"
   - "tests/**"
+  - "**/*.py"
   - ".github/**"
   - ".codex/**"
   - "ai/**"
-  - "**/*.py"
 tools:
   allow:
     - read_files
@@ -29,4 +29,3 @@ instructions: |
 
   Keep this adapter minimal and defer behavior details to the shared
   reviewer doc.
----

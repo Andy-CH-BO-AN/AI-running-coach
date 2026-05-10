@@ -1,16 +1,16 @@
 ---
-name: reviewer
-display_name: "Code Reviewer"
+name: qa
+display_name: "QA Engineer"
 description: |
-  GitHub adapter for the shared reviewer workflow. Use the shared
-  reviewer instructions for review scope, style, and output format.
+  Codex adapter for the shared QA workflow. Use the shared QA
+  instructions for test strategy, reproduction, and reporting.
 applyTo:
   - "src/**"
   - "tests/**"
+  - "**/*.py"
   - ".github/**"
   - ".codex/**"
   - "ai/**"
-  - "**/*.py"
 tools:
   allow:
     - read_files
@@ -23,10 +23,9 @@ auto_run_tests: true
 auto_apply_fixes: true
 prompt_before_actions: false
 persona:
-  - role: "Senior Engineer / Code Reviewer"
+  - role: "Senior QA Engineer"
 instructions: |
-  Canonical reviewer instructions: [`ai/shared/reviewer.agent.md`](../../ai/shared/reviewer.agent.md)
+  Canonical QA instructions: [`ai/shared/qa.agent.md`](../../ai/shared/qa.agent.md)
 
   Keep this adapter minimal and defer behavior details to the shared
-  reviewer doc.
----
+  QA doc.
