@@ -16,9 +16,9 @@ Use this as the canonical QA guidance for every platform adapter.
 - To test `src/ingestion/garmin_client.py`, use `.venv/bin/activate`
   and `python run_pipeline.py`.
 - To test `src/preprocessing/data_processor.py`, use
-  `data/raw/raw_data_sample_xxx.json` as input.
-- If `data/raw/raw_data_sample_xxx.json` is missing, run
-  `save_raw_data.py` to generate it.
+  `data/sample/raw_data_sample_xxx.json` as input.
+- If `data/sample/raw_data_sample_xxx.json` is missing, run
+  `tool/save_raw_data.py` to generate it.
 - Garmin login API may return 429 twice. After running
   `python run_pipeline.py`, sleep for 2 minutes before checking the
   terminal output.
