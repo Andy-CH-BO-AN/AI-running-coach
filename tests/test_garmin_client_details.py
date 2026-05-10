@@ -18,11 +18,19 @@ from ingestion.garmin_client import get_activity_details
 
 
 class FakeGarminClient:
-    def __init__(self, payload):
+    def __init__(self, payload, hr_payload=None, power_payload=None):
         self.payload = payload
+        self.hr_payload = hr_payload
+        self.power_payload = power_payload
 
     def get_activity(self, activity_id):
         return self.payload
+
+    def get_activity_hr_in_timezones(self, activity_id):
+        return self.hr_payload
+
+    def get_activity_power_in_timezones(self, activity_id):
+        return self.power_payload
 
 
 class GarminClientDetailTests(unittest.TestCase):
@@ -128,6 +136,49 @@ class GarminClientDetailTests(unittest.TestCase):
         self.assertEqual(details['powerTimeInZone_5'], 14.0)
         self.assertEqual(details['cadence'], 88.0)
         self.assertEqual(details['power_avg'], 165.0)
+
+    def test_activity_details_falls_back_to_time_zone_endpoints(self):
+        payload = {
+            'activity_info': {
+                'activityTrainingLoad': 1.21,
+                'minTemperature': 24.0,
+                'maxTemperature': 25.0,
+                'elevationGain': 5.0,
+                'elevationLoss': 2.0,
+                'averageBikeCadence': 88.0,
+                'avgPower': 165.0,
+                'maxPower': 240.0,
+            }
+        }
+        hr_payload = {
+            'hrTimeInZones': {
+                'hrTimeInZone_1': 101.0,
+                'hrTimeInZone_2': 102.0,
+                'hrTimeInZone_3': 103.0,
+                'hrTimeInZone_4': 104.0,
+                'hrTimeInZone_5': 105.0,
+            }
+        }
+        power_payload = {
+            'powerTimeInZones': {
+                'powerTimeInZone_1': 201.0,
+                'powerTimeInZone_2': 202.0,
+                'powerTimeInZone_3': 203.0,
+                'powerTimeInZone_4': 204.0,
+                'powerTimeInZone_5': 205.0,
+            }
+        }
+
+        details = get_activity_details(
+            FakeGarminClient(payload, hr_payload=hr_payload, power_payload=power_payload),
+            123,
+            'cycling',
+        )
+
+        self.assertEqual(details['hr_zone_1'], 101.0)
+        self.assertEqual(details['hrTimeInZone_5'], 105.0)
+        self.assertEqual(details['power_zone_3'], 203.0)
+        self.assertEqual(details['powerTimeInZone_4'], 204.0)
 
 
 if __name__ == '__main__':

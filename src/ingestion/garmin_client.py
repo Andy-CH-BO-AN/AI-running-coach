@@ -234,14 +234,51 @@ def _get_activity_value(source: Any, *keys: str) -> Any:
             return value
     return None
 
+def _log_activity_payload_debug(activity_id: int, activity_type: str, sources: Dict[str, Any]) -> None:
+    """Print payload shapes and zone candidates when debug mode is enabled."""
+    if not os.getenv('GARMIN_DEBUG_ACTIVITY_DETAILS'):
+        return
+
+    print(f"\n[garmin_debug] activity_id={activity_id} activity_type={activity_type}")
+    for source_name, payload in sources.items():
+        if isinstance(payload, dict):
+            print(f"[garmin_debug] {source_name} top-level keys: {list(payload.keys())}")
+        else:
+            print(f"[garmin_debug] {source_name}: {type(payload).__name__}")
+
+    for i in range(1, 6):
+        hr_value = None
+        power_value = None
+        for payload in sources.values():
+            if hr_value is None:
+                hr_value = _get_activity_value(payload, f'hrTimeInZone_{i}', f'hr_zone_{i}_sec')
+            if power_value is None:
+                power_value = _get_activity_value(payload, f'powerTimeInZone_{i}', f'power_zone_{i}_sec')
+
+        print(f"[garmin_debug] zone_{i}: hr={hr_value}, power={power_value}")
+
 def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -> Dict[str, Any]:
     details = {}
     full_detail = safe_api_call(client.get_activity, activity_id)
     if not full_detail: return details
 
+    hr_timezones = safe_api_call(client.get_activity_hr_in_timezones, activity_id)
+    power_timezones = safe_api_call(client.get_activity_power_in_timezones, activity_id)
+
+    sources = {
+        'activity': full_detail,
+        'hr_timezones': hr_timezones,
+        'power_timezones': power_timezones,
+    }
+
     # Garmin 的 activity payload 可能出現在頂層、summaryDTO、activity_info，
-    # 也可能藏在巢狀的 splitSummaries / other lists 裡，所以統一做遞迴查找。
-    get_value = lambda *keys: _get_activity_value(full_detail, *keys)
+    # 也可能在獨立 time-zone endpoint，所以統一做遞迴查找。
+    def get_value(*keys: str) -> Any:
+        for source in sources.values():
+            value = _get_activity_value(source, *keys)
+            if value is not None:
+                return value
+        return None
 
     # 溫度：取 min/max 平均
     min_temp = get_value('minTemperature')
@@ -261,6 +298,8 @@ def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -
         hr_zones[f'hrTimeInZone_{i}'] = hr_seconds
         power_zones[f'power_zone_{i}'] = power_seconds
         power_zones[f'powerTimeInZone_{i}'] = power_seconds
+
+    _log_activity_payload_debug(activity_id, activity_type, sources)
 
     details.update({
         'elevation_gain': get_value('elevationGain'),
