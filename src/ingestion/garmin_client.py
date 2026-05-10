@@ -225,9 +225,9 @@ def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -
     else:
         avg_temp = min_temp if min_temp is not None else max_temp
 
-    # 心率區間與功率區間時間分布
-    hr_zones = {f'hr_zone_{i}': full_detail.get(f'hrTimeInZone_{i}') for i in range(1, 6)}
-    power_zones = {f'power_zone_{i}': full_detail.get(f'powerTimeInZone_{i}') for i in range(1, 6)}
+    # HR 心率區間（秒）：跑步/游泳/騎車都在 activity_info 頂層
+    # key 命名對齊 data_processor：hr_zone_1 ~ hr_zone_5
+    hr_zones = {f'hr_zone_{i}': top.get(f'hrTimeInZone_{i}') for i in range(1, 6)}
 
     details.update({
         'elevation_gain': top.get('elevationGain'),
@@ -236,22 +236,34 @@ def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -
         'training_stress_score': top.get('activityTrainingLoad'),
         'intensity_factor': top.get('intensityFactor'),
         'aerobic_training_effect': top.get('aerobicTrainingEffect'),
-        'anaerobic_training_effect': top.get('anaerobicTrainingEffect')
+        'anaerobic_training_effect': top.get('anaerobicTrainingEffect'),
+        **hr_zones,
     })
 
     if activity_type == 'running':
-        # averageRunningCadenceInStepsPerMinute 是單腳，×2 才是正確 spm
+        # averageRunningCadenceInStepsPerMinute 是單腳 spm，×2 才是雙腳 spm
         raw_cadence = top.get('averageRunCadence') or top.get('averageRunningCadenceInStepsPerMinute')
         raw_max_cad = top.get('maxRunCadence') or top.get('maxRunningCadenceInStepsPerMinute') or top.get('maxDoubleCadence')
+        # 功率區間（秒）：key 命名對齊 data_processor：power_zone_1 ~ power_zone_5
+        power_zones = {f'power_zone_{i}': top.get(f'powerTimeInZone_{i}') for i in range(1, 6)}
         details.update({
-            'cadence': raw_cadence if raw_cadence else None,
-            'max_cadence': raw_max_cad if raw_max_cad else None,
+            'cadence': raw_cadence,
+            'max_cadence': raw_max_cad,  # maxDoubleCadence 已是雙腳，不需 ×2
             'stride_length': top.get('avgStrideLength'),
             'power_avg': top.get('avgPower'),
             'power_max': top.get('maxPower'),
             'vertical_oscillation': top.get('avgVerticalOscillation'),
             'ground_contact_time': top.get('avgGroundContactTime'),
             'vertical_ratio': top.get('avgVerticalRatio'),
+            **power_zones,
+        })
+        print(details)
+        assert(False)
+    elif activity_type == 'swimming':
+        details.update({
+            'avg_swolf': top.get('averageSWOLF') or top.get('avgSWOLF'),
+            'total_strokes': top.get('totalNumberOfStrokes'),
+            'avg_stroke_cadence': top.get('averageSwimCadence'),
         })
     elif activity_type == 'cycling':
         details.update({
@@ -262,7 +274,7 @@ def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -
     
     return details
 
-def get_activity_splits(client: Garmin, activity_id: int) -> List[Dict[str, Any]]:
+def get_activity_splits(client: Garmin, activity_id: int, activity_type: str = 'running') -> List[Dict[str, Any]]:
     splits = []
     splits_data = safe_api_call(client.get_activity_splits, activity_id)
     if not splits_data: return splits
@@ -271,29 +283,64 @@ def get_activity_splits(client: Garmin, activity_id: int) -> List[Dict[str, Any]
     for idx, lap in enumerate(lap_dtos, 1):
         dist, dur = lap.get('distance', 0), lap.get('duration', 0)
         if dur < 1 or dist < 1: continue
-        
-        cadence = (lap.get('averageRunCadence') or lap.get('averageBikeCadence') or 
-                   lap.get('averageSwimCadence') or lap.get('avgCadence'))
 
-        splits.append({
+        # 步頻：Garmin averageRunCadence 已經是雙腳 spm，直接用
+        # 低步頻（間歇休息/走路）屬於正常數據，不過濾
+        raw_cad = (lap.get('averageRunCadence') or lap.get('averageBikeCadence') or
+                   lap.get('averageSwimCadence') or lap.get('avgCadence'))
+        raw_max_cad = (lap.get('maxRunCadence') or lap.get('maxBikeCadence') or lap.get('maxCadence'))
+
+        split = {
             'split_index': idx,
             'distance': dist / 1000,
             'duration': dur / 60,
-            'pace': calculate_pace(dur * 1000, dist),
+            'pace': calculate_pace(dur * 1000, dist, activity_type),
             'average_heart_rate': lap.get('averageHR'),
             'max_heart_rate': lap.get('maxHR'),
-            'avg_cadence': cadence,
-            # 步幅與生物力學
-            'stride_length': lap.get('strideLength'),          # cm
-            'ground_contact_time': lap.get('groundContactTime'),  # ms
-            'vertical_oscillation': lap.get('verticalOscillation'),  # cm
-            'vertical_ratio': lap.get('verticalRatio'),
-            # 功率
-            'power_avg': lap.get('averagePower'),
-            'power_max': lap.get('maxPower'),
-            # 溫度
+            'avg_cadence': raw_cad,
+            'max_cadence': raw_max_cad,
             'temperature': lap.get('averageTemperature'),
-        })
+        }
+
+        if activity_type == 'running':
+            split.update({
+                'stride_length': lap.get('strideLength'),
+                'ground_contact_time': lap.get('groundContactTime'),
+                'vertical_oscillation': lap.get('verticalOscillation'),
+                'vertical_ratio': lap.get('verticalRatio'),
+                'power_avg': lap.get('averagePower'),
+                'power_max': lap.get('maxPower'),
+            })
+        elif activity_type == 'swimming':
+            # 每圈的泳姿、SWOLF、划手數
+            split.update({
+                'swim_stroke': lap.get('swimStroke'),
+                'avg_swolf': lap.get('averageSWOLF'),
+                'total_strokes': lap.get('totalNumberOfStrokes'),
+                'active_lengths': lap.get('numberOfActiveLengths'),
+                # lengthDTOs：每 25m 一筆，含泳姿 + 每趟 SWOLF
+                'lengths': [
+                    {
+                        'length_index': ln.get('lengthIndex'),
+                        'distance': ln.get('distance'),
+                        'duration': ln.get('duration'),
+                        'swim_stroke': ln.get('swimStroke'),
+                        'strokes': ln.get('totalNumberOfStrokes'),
+                        'swolf': ln.get('averageSWOLF'),
+                        'avg_hr': ln.get('averageHR'),
+                    }
+                    for ln in lap.get('lengthDTOs', [])
+                ],
+            })
+        elif activity_type == 'cycling':
+            split.update({
+                'power_avg': lap.get('averagePower'),
+                'power_max': lap.get('maxPower'),
+                'elevation_gain': lap.get('elevationGain'),
+                'elevation_loss': lap.get('elevationLoss'),
+            })
+
+        splits.append(split)
     return splits
 
 def get_garmin_activities(n: Optional[int] = 30) -> Dict[str, Any]:
@@ -340,7 +387,7 @@ def get_garmin_activities(n: Optional[int] = 30) -> Dict[str, Any]:
                     'average_pace': calculate_pace(dur_s * 1000, dist_m),
                     'average_heart_rate': activity.get('averageHR'),
                     'activity_id': act_id,
-                    'splits': get_activity_splits(client, act_id),
+                    'splits': get_activity_splits(client, act_id, act_type),
                     'raw_data': get_activity_details(client, act_id, act_type)
                 })
         

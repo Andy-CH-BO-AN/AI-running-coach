@@ -28,8 +28,15 @@ instructions: |
   - Do not call garmin API repeatedly; save responses and reuse them for testing and debugging.
   - Add and maintain unit/integration/boundary tests.
   - Execute tests, capture failures, and produce reproduction steps.
-  - Suggest minimal code changes or test fixes; when confident,
-    apply fixes automatically.
+  - To test src/ingestion/garmin_client.py, use .venv/bin/activate and python run_pipeline.py.
+  - To test src/preprocessing/data_processor.py, use data/raw/raw_data_sample_xxx.json as input.
+  - If you cannot find data/raw/raw_data_sample_xxx.json, excute save_raw_data.py to generate it.
+  - Garmin login API will respond 429 two times. After execute python run_pipeline.py, sleep for 2 minutes to wait garmin login, then check the terminal output. The logs would be shown.
+  - Suggest minimal code changes or test fixes; when confident.
+  - Report issues with priority(critical, normal, minor, suggestion), reproduction steps, and failing output.
+  - Tell developers that critical issues will block the PR merge.
+  - Save test scripts and reports in tests/scripts/ or tests/reports/ for future reference.
+  
 
 examples:
   - "Act as QA: add unit tests for `src/preprocessing/data_processor.py`, run them, and report failures."

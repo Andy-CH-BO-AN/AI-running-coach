@@ -104,14 +104,6 @@ def calculate_running_efficiency(vertical_oscillation: Optional[float], ground_c
         if vertical_oscillation < 0 or vertical_oscillation > 20:
             logger.warning(f"Unrealistic vertical oscillation: {vertical_oscillation} cm, skipping")
         else:
-            if vertical_oscillation < 6:
-                efficiency['oscillation_grade'] = "excellent"  # 卓越
-            elif vertical_oscillation < 8:
-                efficiency['oscillation_grade'] = "good"  # 良好
-            elif vertical_oscillation < 10:
-                efficiency['oscillation_grade'] = "fair"  # 一般
-            else:
-                efficiency['oscillation_grade'] = "poor"  # 不佳
             efficiency['vertical_oscillation'] = round(vertical_oscillation, 1)
     
     if ground_contact_time is not None:
@@ -119,14 +111,6 @@ def calculate_running_efficiency(vertical_oscillation: Optional[float], ground_c
         if ground_contact_time < 100 or ground_contact_time > 500:
             logger.warning(f"Unrealistic ground contact time: {ground_contact_time} ms, skipping")
         else:
-            if ground_contact_time < 200:
-                efficiency['contact_grade'] = "excellent"
-            elif ground_contact_time < 250:
-                efficiency['contact_grade'] = "good"
-            elif ground_contact_time < 300:
-                efficiency['contact_grade'] = "fair"
-            else:
-                efficiency['contact_grade'] = "poor"
             efficiency['ground_contact_time'] = round(ground_contact_time, 1)
     
     return efficiency if efficiency else None
@@ -147,14 +131,6 @@ def calculate_cycling_efficiency(power_avg: Optional[float], power_max: Optional
         ratio = power_max / power_avg if power_avg > 0 else None
         if ratio:
             efficiency['power_ratio'] = round(ratio, 2)
-            if ratio < 1.2:
-                efficiency['power_consistency'] = "very_steady"  # 非常穩定
-            elif ratio < 1.5:
-                efficiency['power_consistency'] = "steady"  # 穩定
-            elif ratio < 2.0:
-                efficiency['power_consistency'] = "variable"  # 可變
-            else:
-                efficiency['power_consistency'] = "spiky"  # 多峰值
     
     return efficiency if efficiency else None
 
@@ -167,21 +143,12 @@ def calculate_swimming_efficiency(avg_swolf: Optional[float]) -> Optional[Dict[s
     efficiency = {}
     
     if avg_swolf is not None:
-        # 驗證合理範圍 (一般 100-180)
-        if avg_swolf < 50 or avg_swolf > 250:
+        # 驗證合理範圍 (允許從快速游泳的低分值，但拒絕 >= 250 和負值)
+        if avg_swolf <= 0 or avg_swolf >= 250:
             logger.warning(f"Unrealistic SWOLF: {avg_swolf}")
             return None
         
         efficiency['avg_swolf'] = round(avg_swolf, 1)
-        
-        if avg_swolf < 120:
-            efficiency['swolf_grade'] = "excellent"
-        elif avg_swolf < 140:
-            efficiency['swolf_grade'] = "good"
-        elif avg_swolf < 160:
-            efficiency['swolf_grade'] = "fair"
-        else:
-            efficiency['swolf_grade'] = "poor"
     
     return efficiency if efficiency else None
 
