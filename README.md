@@ -102,12 +102,19 @@ python src/agents/coach.py
 執行自動化 unit tests：
 
 ```bash
-PYTHONPATH=. pytest -q tests/test_garmin_client_details.py
+python3 -m pytest -q \
+  tests/test_data_processor.py \
+  tests/test_garmin_client_details.py \
+  tests/test_runner.py \
+  tests/test_coach.py
 ```
 
 目前已追蹤的測試包含：
 
+- `tests/test_data_processor.py`: 測試 preprocessing 的活動型別分流、效率指標、配速格式化，以及短距離自行車過濾邏輯。
 - `tests/test_garmin_client_details.py`: 測試 Garmin 活動詳細資料解析、巢狀指標擷取，以及 time-in-zone fallback payload。
+- `tests/test_runner.py`: 測試 pipeline 在 preprocessing 全數過濾時仍會保留 raw/user artifact，並驗證 processed CSV 與 Markdown report 的輸出流程。
+- `tests/test_coach.py`: 測試教練 prompt context 組裝，以及本機分析模式會讀取 user JSON 並寫出 Markdown report。
 - `test_garmin_client.py`: 手動 Garmin smoke test，會呼叫真實 Garmin API，且需要本機 credentials。
 
 `pytest -q` 可能會收集到 repo root 的本機/手動測試腳本。自動化測試建議使用上方明確指令，手動 Garmin script 請保守使用：
