@@ -127,7 +127,7 @@ python3 -m pytest -q \
 - `tests/test_coach.py`: 測試教練 prompt context 組裝，以及本機分析模式會讀取 user JSON 並寫出 Markdown report。
 - `tests/scripts/garmin_client_smoke.py`: 手動 Garmin smoke test，會呼叫真實 Garmin API，且需要本機 credentials。
 
-`pytest -q` 可能會收集到 repo root 的本機/手動測試腳本。自動化測試建議使用上方明確指令，手動 Garmin smoke test 請用：
+`pytest -q` 可能會收集到 repo root 的本機/手動測試腳本。自動化測試建議使用上方明確指令，手動 Garmin smoke test 請保守使用：
 
 ```bash
 python tests/scripts/garmin_client_smoke.py
