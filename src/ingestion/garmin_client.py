@@ -448,10 +448,6 @@ def get_activity_splits(client: Garmin, activity_id: int, activity_type: str = '
         splits.append(split)
     return splits
 
-def _build_target_activity_types() -> Dict[str, str]:
-    return dict(TARGET_ACTIVITY_TYPES)
-
-
 def _parse_activity_date(activity: Dict[str, Any]) -> Optional[date_cls]:
     value = activity.get('startTimeLocal') or activity.get('date')
     if not value:
@@ -473,7 +469,7 @@ def get_garmin_activities(
         return {'activities': [], 'user_data': {}}
 
     if progress:
-        types = ", ".join(_build_target_activity_types().values())
+        types = ", ".join(TARGET_ACTIVITY_TYPES.values())
         since_text = f"; since_date>={since_date.isoformat()}" if since_date else ""
         print(f"🔐 Garmin login starting; target activities={n or 999}; types={types}{since_text}", flush=True)
     client = Garmin(email, password)
@@ -486,7 +482,7 @@ def get_garmin_activities(
 
     collected_activities = []
     start, page_size = 0, 50
-    target_types = _build_target_activity_types()
+    target_types = TARGET_ACTIVITY_TYPES
 
     while len(collected_activities) < (n or 999):
         if progress:

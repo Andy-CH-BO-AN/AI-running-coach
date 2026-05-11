@@ -16,13 +16,13 @@ sys.modules.setdefault("dotenv", dotenv_stub)
 from datetime import date
 from unittest.mock import patch
 
-from ingestion.garmin_client import _build_target_activity_types, get_garmin_activities
+from ingestion.garmin_client import TARGET_ACTIVITY_TYPES, get_garmin_activities
 
 
 class GarminClientActivityTypeTests(unittest.TestCase):
     def test_default_target_types_include_running_swimming_and_cycling(self):
         self.assertEqual(
-            _build_target_activity_types(),
+            TARGET_ACTIVITY_TYPES,
             {"running": "running", "lap_swimming": "swimming", "cycling": "cycling"},
         )
 

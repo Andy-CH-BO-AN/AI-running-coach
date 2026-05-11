@@ -167,7 +167,7 @@ Garmin login API 很容易先顯示兩次 `429` rate limit 訊息，之後才繼
 
 目前 schema 使用 hybrid design：
 
-- 穩定且常查詢的欄位放 SQL columns，例如 `distance_km`、`duration_min`、`average_heart_rate`、`training_stress_score`。
+- 穩定且常查詢的欄位放 SQL columns，例如 `distance_km`、`duration_min`、`average_pace_min_per_km`、`average_speed_kmh`、`average_heart_rate`、`training_stress_score`。
 - Garmin 可能變動或不固定的 metrics 放 JSONB，例如 `raw_metrics`、split `metrics`、`raw_profile`。
 - 完整 raw payload 會保留在 `activities.raw_json` 與 `user_profile_snapshots.raw_profile`，之後 feature engineering 可以重跑。
 
