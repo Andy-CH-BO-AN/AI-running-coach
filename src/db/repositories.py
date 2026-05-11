@@ -56,6 +56,14 @@ def _int(value: Any) -> int | None:
     return int(number) if number is not None else None
 
 
+def _speed_kmh(distance_km: Any, duration_min: Any) -> float | None:
+    distance = _num(distance_km)
+    duration = _num(duration_min)
+    if distance is None or duration is None or duration <= 0:
+        return None
+    return round(distance / (duration / 60), 3)
+
+
 def _aware_datetime(value: Any) -> datetime:
     if isinstance(value, datetime):
         parsed = value
@@ -186,19 +194,32 @@ def upsert_activity(
     raw_metrics = activity_data.get("raw_data") or activity_data.get("raw_metrics") or {}
     started_at = _activity_started_at(activity_data)
     duration_min = _num(_first_present(activity_data.get("duration"), activity_data.get("duration_min")))
+    activity_type = activity_data.get("type") or activity_data.get("activity_type") or "unknown"
+    distance_km = _num(_first_present(activity_data.get("distance"), activity_data.get("distance_km")))
+    average_speed_kmh = None
+    if activity_type == "cycling":
+        average_speed_kmh = _num(
+            _first_present(
+                activity_data.get("average_speed_kmh"),
+                raw_metrics.get("average_speed_kmh"),
+                activity_data.get("average_pace"),
+                _speed_kmh(distance_km, duration_min),
+            )
+        )
     values = {
         "user_id": user_id,
         "garmin_activity_id": int(activity_data["activity_id"]),
-        "activity_type": activity_data.get("type") or activity_data.get("activity_type") or "unknown",
+        "activity_type": activity_type,
         "started_at": started_at,
         "activity_date": started_at.date(),
         "source_file": source_file,
-        "distance_km": _num(_first_present(activity_data.get("distance"), activity_data.get("distance_km"))),
+        "distance_km": distance_km,
         "duration_min": duration_min,
         "duration_sec": _num(_first_present(activity_data.get("duration_sec"), duration_min * 60 if duration_min is not None else None)),
-        "average_pace_min_per_km": _num(
-            _first_present(activity_data.get("average_pace"), activity_data.get("average_pace_min_per_km"))
-        ),
+        "average_pace_min_per_km": None
+        if activity_type == "cycling"
+        else _num(_first_present(activity_data.get("average_pace"), activity_data.get("average_pace_min_per_km"))),
+        "average_speed_kmh": average_speed_kmh,
         "average_heart_rate": _num(_first_present(activity_data.get("average_heart_rate"), activity_data.get("avg_hr"))),
         "max_heart_rate": _num(_first_present(activity_data.get("max_heart_rate"), raw_metrics.get("max_heart_rate"))),
         "average_power": _num(_first_present(activity_data.get("average_power"), raw_metrics.get("power_avg"))),
@@ -229,8 +250,19 @@ def upsert_activity(
     return activity
 
 
-def _split_values(activity_id: uuid.UUID, split: dict[str, Any]) -> dict[str, Any]:
+def _split_values(activity_id: uuid.UUID, split: dict[str, Any], activity_type: str | None = None) -> dict[str, Any]:
     duration_min = _num(_first_present(split.get("duration"), split.get("duration_min")))
+    distance_km = _num(_first_present(split.get("distance"), split.get("distance_km")))
+    speed_kmh = None
+    if activity_type == "cycling":
+        speed_kmh = _num(
+            _first_present(
+                split.get("speed_kmh"),
+                split.get("pace"),
+                split.get("pace_min_per_km"),
+                _speed_kmh(distance_km, duration_min),
+            )
+        )
     structured_keys = {
         "split_index",
         "distance",
@@ -240,6 +272,7 @@ def _split_values(activity_id: uuid.UUID, split: dict[str, Any]) -> dict[str, An
         "duration_sec",
         "pace",
         "pace_min_per_km",
+        "speed_kmh",
         "average_heart_rate",
         "max_heart_rate",
         "average_power",
@@ -258,10 +291,13 @@ def _split_values(activity_id: uuid.UUID, split: dict[str, Any]) -> dict[str, An
     return {
         "activity_id": activity_id,
         "split_index": int(split["split_index"]),
-        "distance_km": _num(_first_present(split.get("distance"), split.get("distance_km"))),
+        "distance_km": distance_km,
         "duration_min": duration_min,
         "duration_sec": _num(_first_present(split.get("duration_sec"), duration_min * 60 if duration_min is not None else None)),
-        "pace_min_per_km": _num(_first_present(split.get("pace"), split.get("pace_min_per_km"))),
+        "pace_min_per_km": None
+        if activity_type == "cycling"
+        else _num(_first_present(split.get("pace"), split.get("pace_min_per_km"))),
+        "speed_kmh": speed_kmh,
         "average_heart_rate": _num(split.get("average_heart_rate")),
         "max_heart_rate": _num(split.get("max_heart_rate")),
         "average_power": _num(_first_present(split.get("average_power"), split.get("power_avg"))),
@@ -283,12 +319,17 @@ def upsert_activity_splits(
     session: Session,
     activity_id: uuid.UUID,
     splits: list[dict[str, Any]],
+    activity_type: str | None = None,
 ) -> list[ActivitySplit]:
+    if activity_type is None:
+        activity = session.get(Activity, activity_id)
+        activity_type = activity.activity_type if activity else None
+
     persisted: list[ActivitySplit] = []
     for split in splits or []:
         if split.get("split_index") is None:
             continue
-        values = _split_values(activity_id, split)
+        values = _split_values(activity_id, split, activity_type=activity_type)
         stmt = pg_insert(ActivitySplit).values(**values)
         stmt = stmt.on_conflict_do_update(
             constraint="uq_activity_splits_activity_id_split_index",

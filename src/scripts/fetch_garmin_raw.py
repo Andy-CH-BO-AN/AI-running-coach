@@ -23,7 +23,10 @@ def _write_json(path: Path, payload: Any) -> None:
         json.dump(payload, file_obj, ensure_ascii=False, indent=4)
 
 
-def _get_garmin_activities(limit: int, progress: bool = True) -> dict[str, Any]:
+def _get_garmin_activities(
+    limit: int,
+    progress: bool = True,
+) -> dict[str, Any]:
     from src.ingestion.garmin_client import get_garmin_activities
 
     return get_garmin_activities(limit, progress=progress)
