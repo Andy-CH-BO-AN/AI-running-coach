@@ -120,7 +120,9 @@ python tool/save_raw_data.py
 
 ## Database persistence / Phase 2
 
-DB layer 是可選的，現有 `python run_pipeline.py` Markdown pipeline 仍然照原本方式運作，不需要 PostgreSQL。Phase 2 只提供另一條本機匯入路徑，把既有 `data/raw/` 與 `data/processed/` artifact 寫入 PostgreSQL，方便後續長期趨勢分析、weekly summary、fatigue tracking、feature engineering versioning 與 AI report evaluation。
+DB layer 會作為 `python run_pipeline.py` 的優先資料來源：pipeline 會先查 PostgreSQL 裡最近最新那天的活動，再向 Garmin 補抓該日期之後（含同日）的 `running`、`lap_swimming`、`cycling` 活動，靠 `garmin_activity_id` upsert 避免重複，最後固定從 DB 載入最近 75 筆活動送給 AI coach。若本機 DB 暫時無法連線，pipeline 仍會 fallback 成直接從 Garmin 抓最近 75 筆並輸出 Markdown。
+
+Phase 2 也提供另一條本機匯入路徑，把既有 `data/raw/` 與 `data/processed/` artifact 寫入 PostgreSQL，方便後續長期趨勢分析、weekly summary、fatigue tracking、feature engineering versioning 與 AI report evaluation。
 
 啟動本機 PostgreSQL：
 
@@ -143,7 +145,15 @@ python -m src.scripts.import_garmin_files \
   --processed-file data/processed/processed_20260510.csv
 ```
 
-如果要補大量歷史資料，建議先 raw-only fetch，不跑 preprocessing 與 AI coach：
+執行一般 AI coach pipeline：
+
+```bash
+python run_pipeline.py
+```
+
+建議先確認 PostgreSQL 已啟動且 migration 已套用。正常情況下它會先查 DB 最新活動日，只補抓尚未入庫的 Garmin 資料，再從 DB 取最近 75 筆分析。
+
+如果要補大量歷史資料，建議先 raw-only fetch，不跑 preprocessing 與 AI coach。raw-only fetch 預設會抓 `running`、`lap_swimming`，以及 `cycling`，方便把自行車交叉訓練一起匯入 DB：
 
 ```bash
 python -m src.scripts.fetch_garmin_raw --limit 999 --import-db
@@ -157,7 +167,7 @@ Garmin login API 很容易先顯示兩次 `429` rate limit 訊息，之後才繼
 
 目前 schema 使用 hybrid design：
 
-- 穩定且常查詢的欄位放 SQL columns，例如 `distance_km`、`duration_min`、`average_heart_rate`、`training_stress_score`。
+- 穩定且常查詢的欄位放 SQL columns，例如 `distance_km`、`duration_min`、`average_pace_min_per_km`、`average_speed_kmh`、`average_heart_rate`、`training_stress_score`。
 - Garmin 可能變動或不固定的 metrics 放 JSONB，例如 `raw_metrics`、split `metrics`、`raw_profile`。
 - 完整 raw payload 會保留在 `activities.raw_json` 與 `user_profile_snapshots.raw_profile`，之後 feature engineering 可以重跑。
 

@@ -5,7 +5,7 @@ import random
 from typing import List, Dict, Any, Optional
 from garminconnect import Garmin
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import date as date_cls, datetime, timedelta
 from src.preprocessing.data_processor import calculate_pace
 
 load_dotenv()
@@ -31,6 +31,7 @@ GARMIN_PR_MAPS = {
         13: 'max_ascent', 14: 'monthly_max_steps', 15: 'goal_streak'
     }
 }
+TARGET_ACTIVITY_TYPES = {'running': 'running', 'lap_swimming': 'swimming', 'cycling': 'cycling'}
 
 def safe_api_call(func, *args, **kwargs) -> Any:
     """具備指數退避邏輯的 API 呼叫包裝器"""
@@ -397,7 +398,7 @@ def get_activity_splits(client: Garmin, activity_id: int, activity_type: str = '
             'split_index': idx,
             'distance': dist / 1000,
             'duration': dur / 60,
-            'pace': calculate_pace(dur * 1000, dist, activity_type),
+            'pace': None if activity_type == 'cycling' else calculate_pace(dur * 1000, dist, activity_type),
             'average_heart_rate': lap.get('averageHR'),
             'max_heart_rate': lap.get('maxHR'),
             'avg_cadence': raw_cad,
@@ -441,19 +442,36 @@ def get_activity_splits(client: Garmin, activity_id: int, activity_type: str = '
                 'power_max': lap.get('maxPower'),
                 'elevation_gain': lap.get('elevationGain'),
                 'elevation_loss': lap.get('elevationLoss'),
+                'speed_kmh': calculate_pace(dur * 1000, dist, activity_type),
             })
 
         splits.append(split)
     return splits
 
-def get_garmin_activities(n: Optional[int] = 30, progress: bool = False) -> Dict[str, Any]:
+def _parse_activity_date(activity: Dict[str, Any]) -> Optional[date_cls]:
+    value = activity.get('startTimeLocal') or activity.get('date')
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value)[:10]).date()
+    except ValueError:
+        return None
+
+
+def get_garmin_activities(
+    n: Optional[int] = 30,
+    progress: bool = False,
+    since_date: Optional[date_cls] = None,
+) -> Dict[str, Any]:
     email, password = os.getenv('GARMIN_ACCOUNT'), os.getenv('GARMIN_PASSWORD')
     if not email or not password:
         logger.error("帳號密碼未設定")
         return {'activities': [], 'user_data': {}}
 
     if progress:
-        print(f"🔐 Garmin login starting; target activities={n or 999}", flush=True)
+        types = ", ".join(TARGET_ACTIVITY_TYPES.values())
+        since_text = f"; since_date>={since_date.isoformat()}" if since_date else ""
+        print(f"🔐 Garmin login starting; target activities={n or 999}; types={types}{since_text}", flush=True)
     client = Garmin(email, password)
     client.login()
 
@@ -462,20 +480,34 @@ def get_garmin_activities(n: Optional[int] = 30, progress: bool = False) -> Dict
     # 抓取生理數據
     user_data = get_user_biometric_data(client)
 
-    running_activities = []
+    collected_activities = []
     start, page_size = 0, 50
+    target_types = TARGET_ACTIVITY_TYPES
 
-    while len(running_activities) < (n or 999):
+    while len(collected_activities) < (n or 999):
         if progress:
             print(
-                f"📄 Fetching Garmin activities page start={start}, collected={len(running_activities)}",
+                f"📄 Fetching Garmin activities page start={start}, collected={len(collected_activities)}",
                 flush=True,
             )
         activities = safe_api_call(client.get_activities, start, page_size)
         if not activities: break
 
+        stop_after_page = False
         for activity in activities:
-            if len(running_activities) >= (n or 999): break
+            if len(collected_activities) >= (n or 999): break
+
+            activity_date = _parse_activity_date(activity)
+            if since_date and activity_date and activity_date < since_date:
+                stop_after_page = True
+                if progress:
+                    print(
+                        f"🧭 Reached activity date {activity_date.isoformat()} before "
+                        f"since_date {since_date.isoformat()}; stopping incremental fetch.",
+                        flush=True,
+                    )
+                break
+
             max_hr = max(
                 user_data.get('max_heart_rate') or 0, 
                 activity.get('maxHR') or 0
@@ -484,34 +516,38 @@ def get_garmin_activities(n: Optional[int] = 30, progress: bool = False) -> Dict
             
             type_info = activity.get('activityType', {})
             type_key = type_info.get('typeKey') if isinstance(type_info, dict) else type_info
-            target_types = {'running': 'running', 'lap_swimming': 'swimming'} # , 'cycling': 'cycling' 目前只分析跑步與游泳，騎車先不分析
             
             if type_key in target_types:
                 act_id = activity.get('activityId')
                 act_type = target_types[type_key]
                 dist_m, dur_s = activity.get('distance', 0), activity.get('duration', 0)
+                performance_value = calculate_pace(dur_s * 1000, dist_m, act_type)
+                raw_details = get_activity_details(client, act_id, act_type)
+                if act_type == 'cycling':
+                    raw_details['average_speed_kmh'] = performance_value
 
                 if progress:
                     print(
                         f"  ↳ Fetching {act_type} activity={act_id} date={activity.get('startTimeLocal', '')[:10]} "
-                        f"({len(running_activities) + 1}/{n or 999})",
+                        f"({len(collected_activities) + 1}/{n or 999})",
                         flush=True,
                     )
-                running_activities.append({
+                collected_activities.append({
                     'type': act_type,
                     'date': activity.get('startTimeLocal', '')[:10],
                     'distance': dist_m / 1000,
                     'duration': dur_s / 60,
-                    'average_pace': calculate_pace(dur_s * 1000, dist_m),
+                    'average_pace': None if act_type == 'cycling' else performance_value,
                     'average_heart_rate': activity.get('averageHR'),
                     'activity_id': act_id,
                     'splits': get_activity_splits(client, act_id, act_type),
-                    'raw_data': get_activity_details(client, act_id, act_type)
+                    'raw_data': raw_details,
                 })
         
         start += page_size
+        if stop_after_page: break
         if len(activities) < page_size: break
 
     
-    print(f"✅ 成功抓取 {len(running_activities)} 筆活動並完成數據校正")
-    return {'activities': running_activities, 'user_data': user_data}
+    print(f"✅ 成功抓取 {len(collected_activities)} 筆活動並完成數據校正")
+    return {'activities': collected_activities, 'user_data': user_data}

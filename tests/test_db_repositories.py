@@ -82,6 +82,32 @@ def test_activity_splits_and_swimming_lengths_are_idempotent(db_session):
     assert float(length.duration_sec) == 36.0
 
 
+def test_cycling_speed_values_are_persisted_without_polluting_pace_columns(db_session):
+    user = get_or_create_default_user(db_session)
+    cycling_payload = {
+        "activity_id": 456,
+        "type": "cycling",
+        "date": "2026-05-10",
+        "distance": 20.0,
+        "duration": 60.0,
+        "average_pace": 20.0,
+        "raw_data": {"average_speed_kmh": 20.0},
+    }
+
+    activity = upsert_activity(db_session, user.id, cycling_payload)
+    split = upsert_activity_splits(
+        db_session,
+        activity.id,
+        [{"split_index": 1, "distance": 10.0, "duration": 30.0, "pace": 20.0}],
+    )[0]
+
+    assert activity.average_pace_min_per_km is None
+    assert split.pace_min_per_km is None
+    assert float(activity.average_speed_kmh) == 20.0
+    assert float(split.speed_kmh) == 20.0
+    assert split.raw_json["pace"] == 20.0
+
+
 def test_profile_snapshots_preserve_vo2max_history(db_session):
     user = get_or_create_default_user(db_session)
     insert_user_profile_snapshot(
