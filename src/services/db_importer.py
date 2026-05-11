@@ -60,7 +60,12 @@ def import_garmin_raw_file(session: Session, user_id, path: str | Path) -> dict[
         activity = upsert_activity(session, user_id=user_id, activity_data=activity_data, source_file=str(path))
         counts["activities"] += 1
 
-        split_models = upsert_activity_splits(session, activity_id=activity.id, splits=activity_data.get("splits") or [])
+        split_models = upsert_activity_splits(
+            session,
+            activity_id=activity.id,
+            splits=activity_data.get("splits") or [],
+            activity_type=activity.activity_type,
+        )
         counts["splits"] += len(split_models)
         split_by_index = {split.split_index: split for split in split_models}
 
@@ -110,4 +115,3 @@ def import_processed_csv_file(
             )
             counts["features_saved"] += 1
     return counts
-
