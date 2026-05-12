@@ -15,12 +15,16 @@ touch `src/`, `tests/`, or Python files.
 2. Run the project test command locally. Prefer `pytest -q` if
    available; otherwise use the configured test runner.
 3. Capture failing test output and stack traces when tests fail.
-4. Send the patch to the reviewer agent first.
-5. If reviewer approves, hand off to QA for the full test suite and
+4. If the change touches DB logic, migrations, credentials, secrets,
+   `.env` handling, or Garmin password/account flows, review
+   `ai/shared/security.agent.md` and include a security pass before
+   final sign-off.
+5. Send the patch to the reviewer agent first.
+6. If reviewer approves, hand off to QA for the full test suite and
    exploratory checks.
-6. If reviewer or QA requests changes, fix the issue and repeat the
+7. If reviewer or QA requests changes, fix the issue and repeat the
    review→QA loop until both explicitly approve.
-7. When both approve, run the full test suite one final time and
+8. When both approve, run the full test suite one final time and
    summarize the commands and results.
 
 ## Interaction Rules
@@ -38,3 +42,4 @@ touch `src/`, `tests/`, or Python files.
 - `ai/shared/instructions.md`
 - `ai/shared/reviewer.agent.md`
 - `ai/shared/qa.agent.md`
+- `ai/shared/security.agent.md`
