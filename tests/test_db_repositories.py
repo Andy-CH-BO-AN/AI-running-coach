@@ -11,6 +11,7 @@ from src.db.repositories import (
     get_latest_user_profile,
     get_or_create_default_user,
     get_profile_history,
+    get_recent_max_heart_rate,
     insert_user_profile_snapshot,
     save_activity_features,
     save_ai_report,
@@ -130,6 +131,54 @@ def test_profile_snapshots_preserve_vo2max_history(db_session):
     assert float(history[0].vo2max_running) == 53.0
     assert float(latest.vo2max_running) == 56.0
     assert latest.raw_profile["max_heart_rate"] == 202
+
+
+def test_get_recent_max_heart_rate_only_uses_recent_half_year_activities(db_session):
+    user = get_or_create_default_user(db_session)
+    upsert_activity(
+        db_session,
+        user.id,
+        {
+            **_activity_payload(activity_id=201),
+            "date": "2025-10-01",
+            "max_heart_rate": 205,
+        },
+    )
+    upsert_activity(
+        db_session,
+        user.id,
+        {
+            **_activity_payload(activity_id=202),
+            "date": "2026-05-01",
+            "max_heart_rate": 188,
+        },
+    )
+    upsert_activity(
+        db_session,
+        user.id,
+        {
+            **_activity_payload(activity_id=203),
+            "date": "2026-05-10",
+            "max_heart_rate": 192,
+        },
+    )
+    upsert_activity(
+        db_session,
+        user.id,
+        {
+            **_activity_payload(activity_id=204),
+            "date": "2026-05-20",
+            "max_heart_rate": 210,
+        },
+    )
+
+    result = get_recent_max_heart_rate(
+        db_session,
+        user.id,
+        as_of_date=datetime(2026, 5, 13, tzinfo=timezone.utc).date(),
+    )
+
+    assert result == 192.0
 
 
 def test_activity_features_allow_multiple_versions(db_session):

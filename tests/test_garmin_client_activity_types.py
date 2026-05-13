@@ -89,6 +89,54 @@ class GarminClientActivityTypeTests(unittest.TestCase):
         self.assertIsNone(payload["activities"][1]["average_pace"])
         self.assertEqual(payload["activities"][1]["raw_data"]["average_speed_kmh"], 20.0)
 
+    def test_fallback_max_heart_rate_seeds_user_data_when_profile_is_missing(self):
+        class FakeGarminClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def login(self):
+                pass
+
+            def get_rhr_day(self, _date):
+                return {}
+
+            def get_user_profile(self):
+                return {}
+
+            def get_personal_record(self):
+                return []
+
+            def get_activities(self, _start, _limit):
+                return [
+                    {
+                        "activityId": 1,
+                        "activityType": {"typeKey": "running"},
+                        "startTimeLocal": "2026-05-10 07:00:00",
+                        "distance": 10000,
+                        "duration": 3000,
+                        "maxHR": 187,
+                    }
+                ]
+
+            def get_activity_splits(self, _activity_id):
+                return {"lapDTOs": []}
+
+            def get_activity(self, _activity_id):
+                return {}
+
+            def get_activity_hr_in_timezones(self, _activity_id):
+                return []
+
+            def get_activity_power_in_timezones(self, _activity_id):
+                return []
+
+        with patch.dict(os.environ, {"GARMIN_ACCOUNT": "user@example.com", "GARMIN_PASSWORD": "secret"}), patch(
+            "ingestion.garmin_client.Garmin", FakeGarminClient
+        ):
+            payload = get_garmin_activities(n=1, fallback_max_heart_rate=190)
+
+        self.assertEqual(payload["user_data"]["max_heart_rate"], 190)
+
     def test_zero_activity_limit_does_not_fetch_activity_pages(self):
         class FakeGarminClient:
             def __init__(self, *args, **kwargs):

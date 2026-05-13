@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from src.agents.coach import coach
 from src.db.models import Activity
 from src.db.repositories import get_latest_user_profile, get_or_create_default_user, get_recent_activities
+from src.db.repositories import get_recent_max_heart_rate
 from src.db.session import SessionLocal
 from src.ingestion.garmin_client import get_garmin_activities
 from src.pipeline.goal_prompt import GoalPromptOverrides, render_goal_prompt
@@ -90,6 +91,7 @@ def _load_latest_user_data(session: Any, user_id: Any) -> Dict[str, Any]:
 def _fetch_garmin_updates(
     latest_date: Optional[date],
     fetch_limit: int,
+    fallback_max_heart_rate: float | None = None,
 ) -> Dict[str, Any]:
     if latest_date:
         print(f"🗄️ Latest activity in DB: {latest_date.isoformat()}; fetching Garmin updates from that day.")
@@ -100,6 +102,7 @@ def _fetch_garmin_updates(
         fetch_limit,
         progress=True,
         since_date=latest_date,
+        fallback_max_heart_rate=fallback_max_heart_rate,
     )
 
 
@@ -170,7 +173,12 @@ def _load_or_fetch_activity_payloads(
         with SessionLocal() as session:
             user = get_or_create_default_user(session)
             latest_date = _get_latest_activity_date(session, user.id)
-            garmin_data = _fetch_garmin_updates(latest_date=latest_date, fetch_limit=fetch_limit)
+            fallback_max_heart_rate = get_recent_max_heart_rate(session, user.id)
+            garmin_data = _fetch_garmin_updates(
+                latest_date=latest_date,
+                fetch_limit=fetch_limit,
+                fallback_max_heart_rate=fallback_max_heart_rate,
+            )
             fetched_raw_activities = garmin_data.get("activities", [])
             fetched_user_data = garmin_data.get("user_data", {})
             _sync_garmin_to_db(
