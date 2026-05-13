@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, Iterable, List, Optional, Sequence
@@ -37,6 +38,37 @@ PACE_ZONE_NAMES = {
     4: "乳酸閾值",
     5: "間歇/速度",
 }
+WEEKLY_TOTAL_KEYS = {
+    "total_distance_km",
+    "total_duration_min",
+    "training_load",
+    "derived_total_distance_km",
+    "derived_total_duration_min",
+    "derived_training_load",
+}
+SESSION_OUTPUT_KEYS = (
+    "activity_id",
+    "date",
+    "type",
+    "distance_km",
+    "duration_min",
+    "training_load",
+    "avg_hr",
+    "avg_pace",
+    "training_effect_aerobic",
+    "training_effect_anaerobic",
+    "segments",
+    "environment",
+    "coaching_note",
+)
+SEGMENT_OUTPUT_KEYS = (
+    "segment_type",
+    "distance_km",
+    "avg_pace",
+    "avg_hr",
+    "cadence",
+    "note",
+)
 
 
 def _safe_float(value: Any) -> Optional[float]:
@@ -717,6 +749,175 @@ def _build_evidence_facts(
         }
     )
     return facts
+
+
+def _overlay_deterministic(ai_value: Any, deterministic_value: Any) -> Any:
+    if isinstance(ai_value, dict) and isinstance(deterministic_value, dict):
+        merged = deepcopy(ai_value)
+        for key, value in deterministic_value.items():
+            merged[key] = _overlay_deterministic(merged.get(key), value)
+        return merged
+    return deepcopy(deterministic_value)
+
+
+def _session_lookup(sessions: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    return {
+        _normalize_activity_id(session.get("activity_id")): session
+        for session in sessions
+        if isinstance(session, dict)
+    }
+
+
+def _output_segment(
+    context_segment: Dict[str, Any],
+    ai_segment: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    segment = {key: deepcopy(context_segment.get(key)) for key in SEGMENT_OUTPUT_KEYS}
+    if ai_segment and segment.get("note") in (None, "") and ai_segment.get("note"):
+        segment["note"] = ai_segment.get("note")
+    return segment
+
+
+def _output_session(
+    context_session: Dict[str, Any],
+    ai_session: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    session = {key: deepcopy(context_session.get(key)) for key in SESSION_OUTPUT_KEYS}
+    if ai_session and ai_session.get("coaching_note"):
+        session["coaching_note"] = ai_session.get("coaching_note")
+
+    ai_segments = ai_session.get("segments") if isinstance(ai_session, dict) else []
+    if not isinstance(ai_segments, list):
+        ai_segments = []
+    context_segments = context_session.get("segments") or []
+    session["segments"] = [
+        _output_segment(segment, ai_segments[index] if index < len(ai_segments) and isinstance(ai_segments[index], dict) else None)
+        for index, segment in enumerate(context_segments)
+        if isinstance(segment, dict)
+    ]
+    return session
+
+
+def _enforce_weekly_analysis(
+    report: Dict[str, Any],
+    deterministic_context: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    ai_weeks = {
+        week.get("week_start"): week
+        for week in report.get("weekly_analysis", [])
+        if isinstance(week, dict)
+    }
+    enforced_weeks: List[Dict[str, Any]] = []
+    for context_week in deterministic_context.get("weekly_analysis", []):
+        if not isinstance(context_week, dict):
+            continue
+        ai_week = ai_weeks.get(context_week.get("week_start"), {})
+        week = deepcopy(ai_week) if isinstance(ai_week, dict) else {}
+        for key in WEEKLY_TOTAL_KEYS:
+            week.pop(key, None)
+
+        ai_sessions = _session_lookup(week.get("sessions") or [])
+        week["week_label"] = context_week.get("week_label")
+        week["week_start"] = context_week.get("week_start")
+        week.setdefault("key_observation", "")
+        week.setdefault("weekly_assessment", "")
+        week.setdefault("weekly_recommendation", "")
+        week["risk_flags"] = deepcopy(context_week.get("risk_flags") or [])
+        week["sessions"] = [
+            _output_session(context_session, ai_sessions.get(_normalize_activity_id(context_session.get("activity_id"))))
+            for context_session in context_week.get("sessions", [])
+            if isinstance(context_session, dict)
+        ]
+        enforced_weeks.append(week)
+    return enforced_weeks
+
+
+def _enforce_next_week_plan(
+    report: Dict[str, Any],
+    deterministic_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    ai_plan = deepcopy(report.get("next_week_plan") or {})
+    seed = deterministic_context.get("next_week_plan_seed") or {}
+    ai_days = {
+        day.get("date"): day
+        for day in ai_plan.get("days", [])
+        if isinstance(day, dict)
+    }
+    days: List[Dict[str, Any]] = []
+    for seed_day in seed.get("days", []):
+        if not isinstance(seed_day, dict):
+            continue
+        ai_day = deepcopy(ai_days.get(seed_day.get("date"), {}))
+        ai_day["date"] = seed_day.get("date")
+        ai_day["day_of_week"] = seed_day.get("day_of_week")
+        ai_day.setdefault("session_type", "rest")
+        ai_day.setdefault("title", "恢復日")
+        ai_day.setdefault("description", "")
+        ai_day.setdefault("distance_km", 0)
+        ai_day.setdefault("duration_min", 0)
+        ai_day.setdefault("intensity", "rest")
+        ai_day.setdefault("key_workout", False)
+        ai_day.setdefault("weather_consideration", "")
+        days.append(ai_day)
+
+    if days:
+        ai_plan["week_start"] = seed.get("week_start")
+        ai_plan["days"] = days
+        ai_plan["total_distance_km"] = _round_or_none(sum(day.get("distance_km") or 0 for day in days), 2) or 0.0
+    return ai_plan
+
+
+def enforce_deterministic_report_fields(
+    report: Dict[str, Any],
+    deterministic_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Overlay deterministic source-of-truth fields after AI analysis."""
+
+    result = deepcopy(report) if isinstance(report, dict) else {}
+    meta = deepcopy(result.get("meta") or {})
+    context_meta = deterministic_context.get("meta") or {}
+    for key in ("analysis_period_weeks", "today"):
+        if key in context_meta:
+            meta[key] = context_meta[key]
+    result["meta"] = meta
+
+    result["weekly_analysis"] = _enforce_weekly_analysis(result, deterministic_context)
+
+    if deterministic_context.get("hr_zone_distribution"):
+        hr_zone_distribution = deepcopy(result.get("hr_zone_distribution") or {})
+        for key in ("period_weeks", "zones", "is_polarized"):
+            if key in deterministic_context["hr_zone_distribution"]:
+                hr_zone_distribution[key] = deepcopy(deterministic_context["hr_zone_distribution"][key])
+        result["hr_zone_distribution"] = hr_zone_distribution
+
+    if deterministic_context.get("physio_metrics"):
+        result["physio_metrics"] = _overlay_deterministic(
+            result.get("physio_metrics") or {},
+            deterministic_context["physio_metrics"],
+        )
+
+    if deterministic_context.get("running_mechanics"):
+        result["running_mechanics"] = _overlay_deterministic(
+            result.get("running_mechanics") or {},
+            deterministic_context["running_mechanics"],
+        )
+
+    if deterministic_context.get("cross_training"):
+        result["cross_training"] = _overlay_deterministic(
+            result.get("cross_training") or {},
+            deterministic_context["cross_training"],
+        )
+
+    load_context = deterministic_context.get("load_assessment") or {}
+    if load_context:
+        load_assessment = deepcopy(result.get("load_assessment") or {})
+        for key in ("current_tss_weekly", "optimal_tss_range", "status"):
+            if key in load_context:
+                load_assessment[key] = deepcopy(load_context[key])
+        result["load_assessment"] = load_assessment
+
+    result["next_week_plan"] = _enforce_next_week_plan(result, deterministic_context)
+    return result
 
 
 def build_deterministic_coach_context(

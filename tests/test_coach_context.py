@@ -3,7 +3,10 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.preprocessing.coach_context import build_deterministic_coach_context
+from src.preprocessing.coach_context import (
+    build_deterministic_coach_context,
+    enforce_deterministic_report_fields,
+)
 
 
 def _sample_user_data():
@@ -197,3 +200,119 @@ def test_next_week_seed_uses_training_preferences_without_ai():
         "preferred_long_run_day": False,
     }
     assert next_week["days"][6]["preferred_long_run_day"] is True
+
+
+def test_enforce_deterministic_report_fields_restores_pruned_sessions_and_metrics():
+    processed_data = [
+        {
+            "activity_id": 301,
+            "type": "running",
+            "date": "2026-05-05",
+            "distance_km": 5,
+            "performance_formatted": "05:00 /km",
+            "advanced_metrics": {
+                "training_load": 30,
+                "hr_zones": {
+                    "hr_zone_1": 600,
+                    "hr_zone_2": 0,
+                    "hr_zone_3": 0,
+                    "hr_zone_4": 0,
+                    "hr_zone_5": 0,
+                },
+            },
+        },
+        {
+            "activity_id": 302,
+            "type": "running",
+            "date": "2026-05-06",
+            "distance_km": 7,
+            "performance_formatted": "05:20 /km",
+            "advanced_metrics": {
+                "training_load": 40,
+                "hr_zones": {
+                    "hr_zone_1": 0,
+                    "hr_zone_2": 1200,
+                    "hr_zone_3": 0,
+                    "hr_zone_4": 0,
+                    "hr_zone_5": 0,
+                },
+            },
+        },
+    ]
+    context = build_deterministic_coach_context(
+        processed_data=processed_data,
+        user_data=_sample_user_data(),
+        raw_activities=[
+            {"activity_id": 301, "duration": 25},
+            {"activity_id": 302, "duration": 35},
+        ],
+        today="2026-05-14",
+    )
+    ai_report = {
+        "meta": {"today": "2026-05-12", "analysis_period_weeks": 4},
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-04",
+                "week_label": "AI label",
+                "key_observation": "保留 AI 觀察",
+                "weekly_assessment": "保留 AI 解讀",
+                "weekly_recommendation": "保留 AI 建議",
+                "total_distance_km": 5,
+                "sessions": [
+                    {
+                        "activity_id": 302,
+                        "date": "2026-05-06",
+                        "coaching_note": "保留單次活動教練備註",
+                    }
+                ],
+            }
+        ],
+        "hr_zone_distribution": {
+            "zones": [{"zone": 1, "minutes": 999, "percentage": 100}],
+            "assessment": "保留 HR 解讀",
+        },
+        "physio_metrics": {
+            "vo2max": {"value": 1, "unit": "bad", "assessment": "保留 VO2max 解讀"},
+            "pace_zones": [{"zone": 5, "pace_min": "00:00", "pace_max": "00:00"}],
+        },
+        "load_assessment": {
+            "current_tss_weekly": 999,
+            "status": "overtraining",
+            "label": "保留負荷標籤",
+        },
+        "next_week_plan": {
+            "week_start": "2026-05-19",
+            "days": [
+                {
+                    "date": "2026-05-18",
+                    "day_of_week": "Tue",
+                    "session_type": "easy",
+                    "title": "保留課表",
+                    "distance_km": 3,
+                    "duration_min": 20,
+                    "intensity": "easy",
+                    "key_workout": False,
+                }
+            ],
+        },
+    }
+
+    report = enforce_deterministic_report_fields(ai_report, context)
+    restored_week = report["weekly_analysis"][1]
+
+    assert report["meta"]["today"] == "2026-05-14"
+    assert restored_week["week_start"] == "2026-05-04"
+    assert restored_week["key_observation"] == "保留 AI 觀察"
+    assert "total_distance_km" not in restored_week
+    assert [session["activity_id"] for session in restored_week["sessions"]] == [301, 302]
+    assert restored_week["sessions"][1]["coaching_note"] == "保留單次活動教練備註"
+    assert report["hr_zone_distribution"]["assessment"] == "保留 HR 解讀"
+    assert report["hr_zone_distribution"]["zones"] == context["hr_zone_distribution"]["zones"]
+    assert report["physio_metrics"]["vo2max"]["value"] == 53
+    assert report["physio_metrics"]["vo2max"]["assessment"] == "保留 VO2max 解讀"
+    assert report["physio_metrics"]["pace_zones"][4]["pace_max"] is None
+    assert report["load_assessment"]["current_tss_weekly"] == context["load_assessment"]["current_tss_weekly"]
+    assert report["load_assessment"]["label"] == "保留負荷標籤"
+    assert report["next_week_plan"]["week_start"] == "2026-05-18"
+    assert report["next_week_plan"]["days"][0]["day_of_week"] == "Mon"
+    assert report["next_week_plan"]["total_distance_km"] == 3
