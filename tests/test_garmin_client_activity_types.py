@@ -89,6 +89,35 @@ class GarminClientActivityTypeTests(unittest.TestCase):
         self.assertIsNone(payload["activities"][1]["average_pace"])
         self.assertEqual(payload["activities"][1]["raw_data"]["average_speed_kmh"], 20.0)
 
+    def test_zero_activity_limit_does_not_fetch_activity_pages(self):
+        class FakeGarminClient:
+            def __init__(self, *args, **kwargs):
+                self.get_activities_called = False
+
+            def login(self):
+                pass
+
+            def get_rhr_day(self, _date):
+                return {}
+
+            def get_user_profile(self):
+                return {}
+
+            def get_personal_record(self):
+                return []
+
+            def get_activities(self, _start, _limit):
+                self.get_activities_called = True
+                raise AssertionError("get_activities should not be called when n=0")
+
+        with patch.dict(os.environ, {"GARMIN_ACCOUNT": "user@example.com", "GARMIN_PASSWORD": "secret"}), patch(
+            "ingestion.garmin_client.Garmin", FakeGarminClient
+        ):
+            payload = get_garmin_activities(n=0)
+
+        self.assertEqual(payload["activities"], [])
+        self.assertEqual(payload["user_data"]["available_training_days"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,7 @@ from src.db.models import Activity
 from src.db.repositories import get_latest_user_profile, get_or_create_default_user, get_recent_activities
 from src.db.session import SessionLocal
 from src.ingestion.garmin_client import get_garmin_activities
+from src.pipeline.goal_prompt import GoalPromptOverrides, render_goal_prompt
 from src.preprocessing.data_processor import preprocess_data
 from src.services.db_importer import import_garmin_raw_file, import_garmin_user_file
 
@@ -197,13 +198,17 @@ def _load_or_fetch_activity_payloads(
         return _fetch_without_db(activity_limit=activity_limit, timestamp=timestamp)
 
 
-def run_pipeline(activity_limit: int = 75, fetch_limit: int = 999) -> Optional[str]:
+def run_pipeline(
+    activity_limit: int = 75,
+    fetch_limit: int | None = None,
+    goal_overrides: GoalPromptOverrides | None = None,
+) -> Optional[str]:
     print("🚀 Starting Garmin AI Coach Pipeline...")
 
     timestamp = _build_timestamp()
     raw_activities, user_data = _load_or_fetch_activity_payloads(
         activity_limit=activity_limit,
-        fetch_limit=fetch_limit,
+        fetch_limit=activity_limit if fetch_limit is None else fetch_limit,
         timestamp=timestamp,
     )
 
@@ -218,7 +223,13 @@ def run_pipeline(activity_limit: int = 75, fetch_limit: int = 999) -> Optional[s
         return None
 
     print("🤖 Analyzing data with AI Coach...")
-    response = coach(data=processed_data, user_data=user_data, goal_path=str(GOAL_PROMPT_PATH))
+    goal_text = render_goal_prompt(GOAL_PROMPT_PATH, goal_overrides)
+    response = coach(
+        data=processed_data,
+        user_data=user_data,
+        goal_path=str(GOAL_PROMPT_PATH),
+        goal_text=goal_text,
+    )
 
     print("💾 Generating Markdown report...")
     report_path = _persist_pipeline_artifacts(

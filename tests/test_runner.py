@@ -58,6 +58,7 @@ garminconnect_stub.Garmin = object
 sys.modules.setdefault("garminconnect", garminconnect_stub)
 
 from src.pipeline import runner
+from src.pipeline.goal_prompt import GoalPromptOverrides
 
 
 class RunnerTests(unittest.TestCase):
@@ -190,9 +191,43 @@ class RunnerTests(unittest.TestCase):
             self.assertIsNone(report)
             load_payloads.assert_called_once_with(
                 activity_limit=75,
-                fetch_limit=999,
+                fetch_limit=75,
                 timestamp="20260510",
             )
+
+    def test_run_pipeline_defaults_fetch_limit_to_activity_limit(self):
+        raw_activities = [{"activity_id": 1, "type": "running", "distance": 10.0, "duration": 50.0}]
+
+        with patch.object(runner, "_build_timestamp", return_value="20260510"), patch.object(
+            runner,
+            "_load_or_fetch_activity_payloads",
+            return_value=(raw_activities, {"max_heart_rate": 190}),
+        ) as load_payloads, patch.object(runner, "preprocess_data", return_value=[]):
+            report = runner.run_pipeline(activity_limit=12)
+
+        self.assertIsNone(report)
+        load_payloads.assert_called_once_with(
+            activity_limit=12,
+            fetch_limit=12,
+            timestamp="20260510",
+        )
+
+    def test_run_pipeline_preserves_explicit_fetch_limit_zero(self):
+        raw_activities = [{"activity_id": 1, "type": "running", "distance": 10.0, "duration": 50.0}]
+
+        with patch.object(runner, "_build_timestamp", return_value="20260510"), patch.object(
+            runner,
+            "_load_or_fetch_activity_payloads",
+            return_value=(raw_activities, {"max_heart_rate": 190}),
+        ) as load_payloads, patch.object(runner, "preprocess_data", return_value=[]):
+            report = runner.run_pipeline(fetch_limit=0)
+
+        self.assertIsNone(report)
+        load_payloads.assert_called_once_with(
+            activity_limit=75,
+            fetch_limit=0,
+            timestamp="20260510",
+        )
 
     def test_run_pipeline_writes_processed_csv_and_markdown_report(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -217,6 +252,41 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(report, str(output_dir / "ai_report_20260510.md"))
             self.assertTrue((processed_dir / "processed_20260510.csv").exists())
             self.assertTrue((output_dir / "ai_report_20260510.md").exists())
+
+    def test_run_pipeline_passes_rendered_goal_overrides_to_coach(self):
+        raw_activities = [{"activity_id": 1, "type": "running", "distance": 10.0, "duration": 50.0}]
+        processed_data = [{"activity_id": 1, "performance_formatted": "5:00 /km"}]
+        overrides = GoalPromptOverrides(core_goal="目標成績：5K 20:00")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            goal_path = Path(temp_dir) / "goal.md"
+            goal_path.write_text(
+                "# Training Goal\n\n"
+                "## 🎯 核心目標\n"
+                "* old goal\n\n"
+                "## ⚙️ 訓練偏好與限制\n"
+                "* default preference\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(runner, "GOAL_PROMPT_PATH", goal_path), patch.object(
+                runner, "_build_timestamp", return_value="20260510"
+            ), patch.object(
+                runner,
+                "_load_or_fetch_activity_payloads",
+                return_value=(raw_activities, {"max_heart_rate": 190}),
+            ), patch.object(runner, "preprocess_data", return_value=processed_data), patch.object(
+                runner, "_persist_pipeline_artifacts", return_value=Path("output/report.md")
+            ), patch.object(
+                runner, "coach", return_value="# report"
+            ) as coach_mock:
+                report = runner.run_pipeline(goal_overrides=overrides)
+
+        self.assertEqual(report, "output/report.md")
+        _, kwargs = coach_mock.call_args
+        self.assertIn("* 目標成績：5K 20:00", kwargs["goal_text"])
+        self.assertIn("* default preference", kwargs["goal_text"])
+        self.assertEqual(kwargs["goal_path"], str(goal_path))
 
     def test_fetch_without_db_persists_raw_artifacts(self):
         with tempfile.TemporaryDirectory() as temp_dir:

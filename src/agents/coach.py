@@ -27,10 +27,13 @@ def _build_context(
     data: List[Dict[str, Any]],
     user_data: Optional[Dict[str, Any]],
     goal_path: Optional[str],
+    goal_text: Optional[str] = None,
 ) -> str:
     sections = []
 
-    if goal_path:
+    if goal_text is not None:
+        sections.append(f"### 我的訓練目標 (My Goals):\n{goal_text}")
+    elif goal_path:
         goal_file = Path(goal_path)
         if goal_file.exists():
             sections.append(f"### 我的訓練目標 (My Goals):\n{_read_text_file(goal_file)}")
@@ -51,9 +54,10 @@ def coach(
     data: List[Dict[str, Any]],
     user_data: Optional[Dict[str, Any]] = None,
     goal_path: str = "",
+    goal_text: Optional[str] = None,
 ) -> str:
     system_prompt = _read_text_file(PROMPT_PATH)
-    full_prompt = f"{system_prompt}\n\n{_build_context(data, user_data, goal_path)}"
+    full_prompt = f"{system_prompt}\n\n{_build_context(data, user_data, goal_path, goal_text=goal_text)}"
 
     for model_name in MODEL_FALLBACKS:
         try:

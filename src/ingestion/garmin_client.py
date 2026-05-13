@@ -471,7 +471,8 @@ def get_garmin_activities(
     if progress:
         types = ", ".join(TARGET_ACTIVITY_TYPES.values())
         since_text = f"; since_date>={since_date.isoformat()}" if since_date else ""
-        print(f"🔐 Garmin login starting; target activities={n or 999}; types={types}{since_text}", flush=True)
+        target_count = 999 if n is None else max(n, 0)
+        print(f"🔐 Garmin login starting; target activities={target_count}; types={types}{since_text}", flush=True)
     client = Garmin(email, password)
     client.login()
 
@@ -483,8 +484,9 @@ def get_garmin_activities(
     collected_activities = []
     start, page_size = 0, 50
     target_types = TARGET_ACTIVITY_TYPES
+    target_count = 999 if n is None else max(n, 0)
 
-    while len(collected_activities) < (n or 999):
+    while len(collected_activities) < target_count:
         if progress:
             print(
                 f"📄 Fetching Garmin activities page start={start}, collected={len(collected_activities)}",
@@ -495,7 +497,7 @@ def get_garmin_activities(
 
         stop_after_page = False
         for activity in activities:
-            if len(collected_activities) >= (n or 999): break
+            if len(collected_activities) >= target_count: break
 
             activity_date = _parse_activity_date(activity)
             if since_date and activity_date and activity_date < since_date:
@@ -529,7 +531,7 @@ def get_garmin_activities(
                 if progress:
                     print(
                         f"  ↳ Fetching {act_type} activity={act_id} date={activity.get('startTimeLocal', '')[:10]} "
-                        f"({len(collected_activities) + 1}/{n or 999})",
+                        f"({len(collected_activities) + 1}/{target_count})",
                         flush=True,
                     )
                 collected_activities.append({

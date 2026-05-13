@@ -1,6 +1,6 @@
 garminconnect
 google-genai
-pandas
+pandas>=2.3,<3
 python-dotenv
 requests
 sqlalchemy
