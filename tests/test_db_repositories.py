@@ -181,6 +181,64 @@ def test_get_recent_max_heart_rate_only_uses_recent_half_year_activities(db_sess
     assert result == 192.0
 
 
+def test_get_recent_max_heart_rate_falls_back_to_splits_when_activity_max_is_missing(db_session):
+    user = get_or_create_default_user(db_session)
+    activity = upsert_activity(
+        db_session,
+        user.id,
+        {
+            **_activity_payload(activity_id=301),
+            "date": "2026-05-10",
+        },
+    )
+    upsert_activity_splits(
+        db_session,
+        activity.id,
+        [
+            {
+                "split_index": 1,
+                "distance": 1.0,
+                "duration": 5.0,
+                "pace": 5.0,
+                "max_heart_rate": 186,
+            },
+            {
+                "split_index": 2,
+                "distance": 1.0,
+                "duration": 5.0,
+                "pace": 5.0,
+                "max_heart_rate": 194,
+            },
+        ],
+    )
+
+    result = get_recent_max_heart_rate(
+        db_session,
+        user.id,
+        as_of_date=datetime(2026, 5, 13, tzinfo=timezone.utc).date(),
+    )
+
+    assert result == 194.0
+
+
+def test_upsert_activity_derives_max_heart_rate_from_splits(db_session):
+    user = get_or_create_default_user(db_session)
+
+    activity = upsert_activity(
+        db_session,
+        user.id,
+        {
+            **_activity_payload(activity_id=302),
+            "splits": [
+                {"split_index": 1, "distance": 1.0, "duration": 5.0, "pace": 5.0, "max_heart_rate": 181},
+                {"split_index": 2, "distance": 1.0, "duration": 5.0, "pace": 5.0, "max_heart_rate": 193},
+            ],
+        },
+    )
+
+    assert float(activity.max_heart_rate) == 193.0
+
+
 def test_activity_features_allow_multiple_versions(db_session):
     user = get_or_create_default_user(db_session)
     activity = upsert_activity(db_session, user.id, _activity_payload())

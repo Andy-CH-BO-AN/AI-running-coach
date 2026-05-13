@@ -64,6 +64,15 @@ def _speed_kmh(distance_km: Any, duration_min: Any) -> float | None:
     return round(distance / (duration / 60), 3)
 
 
+def _max_split_heart_rate(splits: list[dict[str, Any]] | None) -> float | None:
+    max_value: float | None = None
+    for split in splits or []:
+        split_max = _num(split.get("max_heart_rate"))
+        if split_max is not None and (max_value is None or split_max > max_value):
+            max_value = split_max
+    return max_value
+
+
 def _aware_datetime(value: Any) -> datetime:
     if isinstance(value, datetime):
         parsed = value
@@ -194,14 +203,23 @@ def get_recent_max_heart_rate(
 ) -> float | None:
     reference_date = as_of_date or datetime.now(timezone.utc).date()
     cutoff_date = reference_date - timedelta(days=lookback_days)
-    value = session.scalar(
+    activity_value = session.scalar(
         select(func.max(Activity.max_heart_rate)).where(
             Activity.user_id == user_id,
             Activity.activity_date >= cutoff_date,
             Activity.activity_date <= reference_date,
         )
     )
-    return _num(value)
+    split_value = session.scalar(
+        select(func.max(ActivitySplit.max_heart_rate))
+        .join(Activity, Activity.id == ActivitySplit.activity_id)
+        .where(
+            Activity.user_id == user_id,
+            Activity.activity_date >= cutoff_date,
+            Activity.activity_date <= reference_date,
+        )
+    )
+    return _num(max(_num(activity_value) or 0, _num(split_value) or 0)) or None
 
 
 def upsert_activity(
@@ -211,6 +229,7 @@ def upsert_activity(
     source_file: str | None = None,
 ) -> Activity:
     raw_metrics = activity_data.get("raw_data") or activity_data.get("raw_metrics") or {}
+    split_max_heart_rate = _max_split_heart_rate(activity_data.get("splits"))
     started_at = _activity_started_at(activity_data)
     duration_min = _num(_first_present(activity_data.get("duration"), activity_data.get("duration_min")))
     activity_type = activity_data.get("type") or activity_data.get("activity_type") or "unknown"
@@ -240,7 +259,14 @@ def upsert_activity(
         else _num(_first_present(activity_data.get("average_pace"), activity_data.get("average_pace_min_per_km"))),
         "average_speed_kmh": average_speed_kmh,
         "average_heart_rate": _num(_first_present(activity_data.get("average_heart_rate"), activity_data.get("avg_hr"))),
-        "max_heart_rate": _num(_first_present(activity_data.get("max_heart_rate"), raw_metrics.get("max_heart_rate"))),
+        "max_heart_rate": _num(
+            _first_present(
+                activity_data.get("max_heart_rate"),
+                raw_metrics.get("max_heart_rate"),
+                raw_metrics.get("maxHR"),
+                split_max_heart_rate,
+            )
+        ),
         "average_power": _num(_first_present(activity_data.get("average_power"), raw_metrics.get("power_avg"))),
         "max_power": _num(_first_present(activity_data.get("max_power"), raw_metrics.get("power_max"))),
         "average_cadence": _num(_first_present(activity_data.get("average_cadence"), raw_metrics.get("cadence"))),
