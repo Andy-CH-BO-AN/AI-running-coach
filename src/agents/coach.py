@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,6 +15,8 @@ PROMPT_PATH = Path("prompts/coach.md")
 DEFAULT_GOAL_PATH = Path("prompts/goal.md")
 OUTPUT_DIR = Path("output")
 MODEL_FALLBACKS = ("gemini-pro-latest", "gemini-flash-latest")
+MAX_RETRIES_PER_MODEL = 3
+RETRY_BACKOFF_SECONDS = 1
 
 client = genai.Client(api_key=os.getenv("GEMINI_KEY"))
 
@@ -50,6 +53,35 @@ def _build_context(
     return "\n\n".join(sections)
 
 
+def _is_retryable_model_error(exc: Exception) -> bool:
+    error_message = str(exc).lower()
+    return (
+        "503" in error_message
+        or ("unavailable" in error_message and "high demand" in error_message)
+        or "high demand" in error_message
+        or "try again later" in error_message
+    )
+
+
+def _generate_content_with_retries(model_name: str, full_prompt: str) -> str:
+    for attempt in range(1, MAX_RETRIES_PER_MODEL + 1):
+        try:
+            print(f"正在嘗試使用模型: {model_name} (第 {attempt}/{MAX_RETRIES_PER_MODEL} 次)...")
+            response = client.models.generate_content(model=model_name, contents=full_prompt)
+            return response.text
+        except Exception as exc:
+            should_retry = _is_retryable_model_error(exc) and attempt < MAX_RETRIES_PER_MODEL
+            if should_retry:
+                wait_seconds = RETRY_BACKOFF_SECONDS * attempt
+                print(
+                    f"模型 {model_name} 暫時高負載，第 {attempt} 次失敗，"
+                    f"{wait_seconds} 秒後重試..."
+                )
+                time.sleep(wait_seconds)
+                continue
+            raise
+
+
 def coach(
     data: List[Dict[str, Any]],
     user_data: Optional[Dict[str, Any]] = None,
@@ -61,14 +93,12 @@ def coach(
 
     for model_name in MODEL_FALLBACKS:
         try:
-            print(f"正在嘗試使用模型: {model_name}...")
-            response = client.models.generate_content(model=model_name, contents=full_prompt)
-            return response.text
+            return _generate_content_with_retries(model_name, full_prompt)
         except Exception as exc:
             if model_name == MODEL_FALLBACKS[-1]:
                 print(f"所有模型皆調用失敗: {exc}")
                 return "AI 服務暫時無法連線。建議根據近期體感調整訓練量。"
-            print(f"模型 {model_name} 暫時無法使用，準備切換備援模型...")
+            print(f"模型 {model_name} 暫時無法使用: {exc}，準備切換備援模型...")
 
     return "AI 服務暫時無法連線。建議根據近期體感調整訓練量。"
 
