@@ -5,7 +5,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -83,6 +83,75 @@ class CoachTests(unittest.TestCase):
             self.assertEqual(len(reports), 1)
             report_body = reports[0].read_text(encoding="utf-8")
             self.assertIn("# report", report_body)
+
+    def test_coach_retries_retryable_error_three_times_then_succeeds(self):
+        retryable_error = Exception(
+            "503 UNAVAILABLE. This model is currently experiencing high demand. Please try again later."
+        )
+        generate_content = Mock(
+            side_effect=[
+                retryable_error,
+                retryable_error,
+                types.SimpleNamespace(text="recovered report"),
+            ]
+        )
+        fake_client = types.SimpleNamespace(models=types.SimpleNamespace(generate_content=generate_content))
+
+        with patch.object(coach, "client", fake_client), patch.object(
+            coach, "MODEL_FALLBACKS", ("model-a",)
+        ), patch.object(coach.time, "sleep") as sleep_mock:
+            report = coach.coach(data=[{"activity_id": 1}])
+
+        self.assertEqual(report, "recovered report")
+        self.assertEqual(generate_content.call_count, 3)
+        self.assertEqual(sleep_mock.call_args_list, [call(1), call(2)])
+
+    def test_coach_falls_back_after_retryable_error_exhausts_retries(self):
+        call_counts = {"model-a": 0, "model-b": 0}
+
+        def fake_generate_content(*, model, contents):
+            call_counts[model] += 1
+            if model == "model-a":
+                raise Exception(
+                    "503 UNAVAILABLE. This model is currently experiencing high demand. Please try again later."
+                )
+            return types.SimpleNamespace(text="fallback report")
+
+        fake_client = types.SimpleNamespace(
+            models=types.SimpleNamespace(generate_content=fake_generate_content)
+        )
+
+        with patch.object(coach, "client", fake_client), patch.object(
+            coach, "MODEL_FALLBACKS", ("model-a", "model-b")
+        ), patch.object(coach.time, "sleep"):
+            report = coach.coach(data=[{"activity_id": 1}])
+
+        self.assertEqual(report, "fallback report")
+        self.assertEqual(call_counts["model-a"], 3)
+        self.assertEqual(call_counts["model-b"], 1)
+
+    def test_coach_does_not_retry_non_retryable_error(self):
+        call_counts = {"model-a": 0, "model-b": 0}
+
+        def fake_generate_content(*, model, contents):
+            call_counts[model] += 1
+            if model == "model-a":
+                raise ValueError("400 INVALID_ARGUMENT")
+            return types.SimpleNamespace(text="fallback report")
+
+        fake_client = types.SimpleNamespace(
+            models=types.SimpleNamespace(generate_content=fake_generate_content)
+        )
+
+        with patch.object(coach, "client", fake_client), patch.object(
+            coach, "MODEL_FALLBACKS", ("model-a", "model-b")
+        ), patch.object(coach.time, "sleep") as sleep_mock:
+            report = coach.coach(data=[{"activity_id": 1}])
+
+        self.assertEqual(report, "fallback report")
+        self.assertEqual(call_counts["model-a"], 1)
+        self.assertEqual(call_counts["model-b"], 1)
+        sleep_mock.assert_not_called()
 
 
 if __name__ == "__main__":
