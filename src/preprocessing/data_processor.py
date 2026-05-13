@@ -130,6 +130,17 @@ def _build_zone_data(raw_data: Dict[str, Any], zone_base: str) -> Dict[str, Any]
     return {f"{zone_base}_zone_{index}": raw_data.get(f"{zone_base}_zone_{index}") for index in ZONE_RANGE}
 
 
+def _format_splits_for_output(splits: List[Dict[str, Any]], activity_type: str) -> List[Dict[str, Any]]:
+    formatted_splits: List[Dict[str, Any]] = []
+    for split in splits:
+        formatted_split = dict(split)
+        pace = formatted_split.get("pace")
+        if activity_type != "cycling" and isinstance(pace, (int, float)):
+            formatted_split["pace"] = format_pace(float(pace), activity_type)
+        formatted_splits.append(formatted_split)
+    return formatted_splits
+
+
 def _build_base_activity(item: Dict[str, Any]) -> Dict[str, Any]:
     activity_type = item.get("type", "running")
     distance_km = item.get("distance", 0)
@@ -149,7 +160,7 @@ def _build_base_activity(item: Dict[str, Any]) -> Dict[str, Any]:
         "performance_formatted": format_pace(performance_value, activity_type),
         "avg_hr": item.get("average_heart_rate"),
         "max_hr": item.get("max_heart_rate"),
-        "splits": item.get("splits", []),
+        "splits": _format_splits_for_output(item.get("splits") or [], activity_type),
     }
 
 
