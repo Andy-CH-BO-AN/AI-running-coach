@@ -29,6 +29,11 @@ instructions: |
   only when the user explicitly asks for a product-manager style review
   of `README.md`.
 
+  Frontend dashboard guidance: use
+  [`ai/shared/frontend-dashboard.agent.md`](../ai/shared/frontend-dashboard.agent.md)
+  when designing or implementing the AI running coach dashboard,
+  visualization adapters, weekly derived metrics, or evidence-link UI.
+
   Keep this adapter thin so the shared docs stay the single source of
   truth.
 ---
