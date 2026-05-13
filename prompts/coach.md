@@ -29,6 +29,51 @@
 
 【分析範圍】
 優先分析最近 4 週數據，所有評估須貼合當前體能與近期氣溫。
+重要建議必須能追溯到實際數據。請在 `evidence_links` 中為關鍵洞察、風險提醒與訓練建議提供可視化可用的依據資料，讓使用者能比對 AI 建議與 Garmin 數據。不要傾倒完整 raw data；只挑選最能支持該建議的指標、活動與欄位路徑。
+
+【資料一致性硬性規則】
+
+1. 日期一致性：
+   - `meta.today` 必須使用輸入的「今日日期」。
+   - 如果輸入沒有明確今日日期，`meta.today` 必須使用 `generated_at` 在 Asia/Taipei 時區的日期。
+   - 不得把最新活動日期當成 `meta.today`，除非最新活動日期剛好等於今日日期。
+   - 所有 `week_start` 與 `day_of_week` 必須由日期推導，不得憑直覺猜測星期。
+   - 星期格式固定使用英文三字縮寫：`Mon | Tue | Wed | Thu | Fri | Sat | Sun`。
+
+2. 近 4 週分析：
+   - `weekly_analysis` 必須固定輸出 4 個 week bucket，依時間由新到舊排序。
+   - 第 1 個 bucket 的 `week_start` 必須是 `meta.today` 所在週的 Monday，而不是 `meta.today` 本身，除非 `meta.today` 剛好是 Monday。
+   - 第 2-4 個 bucket 的 `week_start` 必須分別是第 1 個 bucket 往前推 7、14、21 天。
+   - 每個 bucket 的日期範圍固定為 `week_start` 到 `week_start + 6 days`，並在 `week_label` 標示相同範圍。
+   - 每個 bucket 的 `week_start` 必須是 Monday。如果計算後不是 Monday，必須重新計算，不可輸出 Tuesday/Wednesday 等其他日期。
+   - 沒有活動的週仍要輸出該 week bucket，`sessions` 為空陣列，並在 `weekly_assessment` 說明該週資料不足或無訓練紀錄。
+   - 不要輸出週級總量欄位，例如 `total_distance_km`、`total_duration_min`、`training_load`。週總量、週總時間與週訓練負荷由前端或程式端根據 `sessions[]` 自行加總。
+   - `sessions` 必須列出輸入資料中屬於該週的所有活動，用於前端加總與 evidence 追蹤；不要只挑代表性活動，也不要刪減已提供的活動清單。
+   - `sessions[].date` 必須落在該 bucket 的 `week_start` 到 `week_start + 6 days` 範圍內，不得放入其他週的活動。
+   - 每個 week bucket 必須根據該週資料輸出 `key_observation`、`weekly_assessment`、`weekly_recommendation` 與 `risk_flags`，讓使用者能分別理解四週的訓練狀況與調整建議。
+
+3. 下週課表：
+   - `next_week_plan.week_start` 必須是 `weekly_analysis[0].week_start + 7 days`，也就是下一週 Monday。
+   - `next_week_plan.days` 必須固定輸出 7 天，從 `next_week_plan.week_start` 開始連續 7 個日期。
+   - `next_week_plan.week_start` 必須是 Monday。如果計算後不是 Monday，必須重新計算。
+   - `next_week_plan.days[].day_of_week` 必須由 `date` 推導，且固定使用 `Mon | Tue | Wed | Thu | Fri | Sat | Sun`；不得出現 `date` 是 Tuesday 但 `day_of_week` 寫 Monday 的情況。
+   - 沒安排訓練的日期也必須輸出，`intensity` 為 `rest`，`distance_km` 與 `duration_min` 為 0，`key_workout` 為 false。
+   - `next_week_plan.total_distance_km` 必須等於 `days[].distance_km` 加總後四捨五入到小數 2 位。
+
+4. 視覺化必要陣列：
+   - `physio_metrics.pace_zones` 必須固定輸出 zones 1-5，依 zone 遞增排序。
+   - `hr_zone_distribution.zones` 必須固定輸出 zones 1-5，依 zone 遞增排序。
+   - `hr_zone_distribution.zones[].percentage` 加總必須接近 100，允許四捨五入誤差 ±1。
+   - `coaching_summary.top_3_insights` 必須剛好 3 筆。
+   - `coaching_summary.top_3_actions` 必須剛好 3 筆。
+
+5. Evidence links：
+   - `evidence_links` 至少輸出 2 筆，且必須覆蓋最重要的風險、洞察或行動建議。
+   - `source_path` 必須是可機器解析的 JSON path，例如 `weekly_analysis[0].sessions[1]` 或 `athlete_status.fatigue_level.score`。
+   - 不得把 `activity_id` 塞在 `source_path` 裡；如果依據來自特定活動，請放在獨立的 `activity_id` 欄位。
+   - 如果 evidence 引用的是最近 4 週內的活動，該活動必須也出現在 `weekly_analysis[].sessions[]` 中。
+
+在輸出 JSON 前，請自行檢查以上一致性規則；若數字無法確認，使用 0、null 或空陣列，但不得產生彼此矛盾的總量與明細。
 
 【輸出 JSON Schema】
 
@@ -97,16 +142,19 @@
   "weekly_analysis": [
     {
       "week_label": "string",   // 例：「第1週 (6/2-6/8)」
-      "week_start": "YYYY-MM-DD",
-      "total_distance_km": number,
-      "total_duration_min": number,
-      "training_load": number,
+      "week_start": "YYYY-MM-DD",    // 必須是 meta.today 所在週的 Monday 或往前推 7 天的 Monday
+      "key_observation": "string",    // 該週最重要的訓練觀察
+      "weekly_assessment": "string",  // 該週整體解讀；沒有活動時說明資料不足或恢復狀態
+      "weekly_recommendation": "string", // 針對該週狀況給出的調整建議
+      "risk_flags": ["string"],       // 例："heat_stress", "fatigue", "low_volume"
       "sessions": [
         {
+          "activity_id": "string | number | null",
           "date": "YYYY-MM-DD",
           "type": "easy | tempo | interval | long | race | swim | bike | rest",
           "distance_km": number,
           "duration_min": number,
+          "training_load": number,
           "avg_hr": number,
           "avg_pace": "MM:SS",
           "training_effect_aerobic": number,
@@ -218,13 +266,13 @@
   },
 
   "next_week_plan": {
-    "week_start": "YYYY-MM-DD",
+    "week_start": "YYYY-MM-DD",     // 必須是 weekly_analysis[0].week_start + 7 days，且必須是 Monday
     "theme": "string",            // 例：「恢復週」「閾值強化週」
-    "total_distance_km": number,
+    "total_distance_km": number,    // 必須等於 days[].distance_km 加總
     "days": [
       {
         "date": "YYYY-MM-DD",
-        "day_of_week": "string",
+        "day_of_week": "Mon | Tue | Wed | Thu | Fri | Sat | Sun",
         "session_type": "string",
         "title": "string",
         "description": "string",
@@ -241,7 +289,46 @@
     "headline": "string",         // 一句話總結當前狀態
     "top_3_insights": ["string"], // 最重要的三個發現
     "top_3_actions": ["string"]   // 本週最優先的三個行動
-  }
+  },
+
+  "evidence_links": [
+    {
+      "insight_id": "string",      // 穩定 id，例："fatigue_warning"、"race_readiness_gap"
+      "claim": "string",           // 被此證據支持的 AI 判斷或建議
+      "source_sections": [
+        "athlete_status",
+        "weekly_analysis",
+        "hr_zone_distribution"
+      ],
+      "supporting_metrics": [
+        {
+          "label": "string",       // 例：「疲勞分數」「最近一週訓練負荷」
+          "value": number | "string" | null,
+          "unit": "string | null",
+          "source_path": "string", // 例："athlete_status.fatigue_level.score"
+          "activity_id": "string | number | null",
+          "interpretation": "string"
+        }
+      ],
+      "supporting_sessions": [
+        {
+          "date": "YYYY-MM-DD",
+          "type": "easy | tempo | interval | long | race | swim | bike | rest",
+          "distance_km": number | null,
+          "duration_min": number | null,
+          "avg_hr": number | null,
+          "avg_pace": "MM:SS | null",
+          "training_effect_aerobic": number | null,
+          "training_effect_anaerobic": number | null,
+          "source_path": "string", // 例："weekly_analysis[0].sessions[1]"
+          "activity_id": "string | number | null",
+          "reason": "string"       // 為什麼這次活動支持該 claim
+        }
+      ],
+      "confidence": 0-100,
+      "visualization_hint": "metric_card | session_list | chart_annotation | calendar_badge | table_row"
+    }
+  ]
 }
 ```
 
@@ -253,10 +340,12 @@
 |---|---|
 | 狀態儀表板 | `athlete_status.*` |
 | 心率區間圓餅/長條圖 | `hr_zone_distribution.zones` |
-| 週訓練量折線圖 | `weekly_analysis[].total_distance_km` |
+| 週訓練量折線圖 | 由前端根據 `weekly_analysis[].sessions[].distance_km` 加總 |
+| 每週 AI 觀察與建議 | `weekly_analysis[].key_observation`, `weekly_analysis[].weekly_assessment`, `weekly_analysis[].weekly_recommendation`, `weekly_analysis[].risk_flags` |
 | 配速區間表格 | `physio_metrics.pace_zones` |
 | 下週課表日曆 | `next_week_plan.days` |
 | 賽事信心度量表 | `race_readiness.confidence_score` |
 | 訓練負荷狀態 | `load_assessment.status` |
 | 跑步動作雷達圖 | `running_mechanics.*_score` |
 | 週期化甘特圖 | `periodization.phases` |
+| AI 建議依據/展開詳情 | `evidence_links[].supporting_metrics`, `evidence_links[].supporting_sessions` |

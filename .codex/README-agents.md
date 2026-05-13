@@ -9,6 +9,7 @@ behavior.
 - [`ai/shared/reviewer.agent.md`](../ai/shared/reviewer.agent.md)
 - [`ai/shared/qa.agent.md`](../ai/shared/qa.agent.md)
 - [`ai/shared/security.agent.md`](../ai/shared/security.agent.md)
+- [`ai/shared/frontend-dashboard.agent.md`](../ai/shared/frontend-dashboard.agent.md)
 - [`ai/skills/python-review-qa-loop/SKILL.md`](../ai/skills/python-review-qa-loop/SKILL.md)
 - [`ai/skills/python-review-qa-loop/agents/openai.yaml`](../ai/skills/python-review-qa-loop/agents/openai.yaml)
 - [`ai/skills/readme-pm-review/SKILL.md`](../ai/skills/readme-pm-review/SKILL.md)
@@ -20,6 +21,7 @@ behavior.
 - [`agents/reviewer.agent.md`](agents/reviewer.agent.md)
 - [`agents/qa.agent.md`](agents/qa.agent.md)
 - [`agents/security.agent.md`](agents/security.agent.md)
+- [`agents/frontend-dashboard.agent.md`](agents/frontend-dashboard.agent.md)
 - [`.codex/skills/python-review-qa-loop/SKILL.md`](skills/python-review-qa-loop/SKILL.md)
 - [`.codex/skills/python-review-qa-loop/agents/openai.yaml`](skills/python-review-qa-loop/agents/openai.yaml)
 - [`.codex/skills/readme-pm-review/SKILL.md`](skills/readme-pm-review/SKILL.md)
@@ -31,5 +33,7 @@ Keep the adapters thin so the shared docs stay authoritative.
 
 - Use [`ai/skills/readme-pm-review/SKILL.md`](../ai/skills/readme-pm-review/SKILL.md)
   only when explicitly asking for a product-manager style README review.
+- Use [`ai/shared/frontend-dashboard.agent.md`](../ai/shared/frontend-dashboard.agent.md)
+  when designing or implementing the AI running coach dashboard.
 - These repo-local skills are intended for this project only:
   `python-review-qa-loop` and `readme-pm-review`.
