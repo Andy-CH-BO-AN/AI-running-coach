@@ -168,6 +168,118 @@ def test_hr_zone_seconds_are_exposed_as_minutes():
     assert zones[0]["percentage"] == 100
 
 
+def test_running_mechanics_use_active_segments_for_cadence_and_stride():
+    processed_data = [
+        {
+            "activity_id": 203,
+            "type": "running",
+            "date": "2026-05-12",
+            "distance_km": 3,
+            "advanced_metrics": {
+                "avg_cadence": 120,
+                "stride_length": 75,
+                "ground_contact_time": 300,
+                "vertical_oscillation": 10,
+                "training_load": 30,
+                "hr_zones": {
+                    "hr_zone_1": 600,
+                    "hr_zone_2": 0,
+                    "hr_zone_3": 0,
+                    "hr_zone_4": 0,
+                    "hr_zone_5": 0,
+                },
+            },
+            "splits": [
+                {
+                    "split_index": 1,
+                    "duration": 5,
+                    "avg_cadence": 176,
+                    "stride_length": 110,
+                    "ground_contact_time": 240,
+                    "vertical_oscillation": 8,
+                },
+                {
+                    "split_index": 2,
+                    "duration": 2,
+                    "avg_cadence": 35,
+                    "stride_length": 55,
+                    "ground_contact_time": 390,
+                    "vertical_oscillation": 13,
+                },
+                {
+                    "split_index": 3,
+                    "duration": 5,
+                    "avg_cadence": 180,
+                    "stride_length": 120,
+                    "ground_contact_time": 230,
+                    "vertical_oscillation": 7,
+                },
+            ],
+        }
+    ]
+
+    context = build_deterministic_coach_context(
+        processed_data=processed_data,
+        user_data=_sample_user_data(),
+        raw_activities=[{"activity_id": 203, "duration": 12}],
+        today="2026-05-14",
+    )
+
+    mechanics = context["running_mechanics"]
+    assert mechanics["cadence_avg"]["value"] == 178
+    assert mechanics["stride_length_m"]["value"] == 1.15
+    assert mechanics["ground_contact_ms"]["value"] == 235
+    assert mechanics["vertical_oscillation_cm"]["value"] == 7.5
+
+
+def test_enforce_updates_stale_mechanics_assessments_when_values_change():
+    processed_data = [
+        {
+            "activity_id": 204,
+            "type": "running",
+            "date": "2026-05-12",
+            "distance_km": 3,
+            "advanced_metrics": {"training_load": 30},
+            "splits": [
+                {
+                    "duration": 5,
+                    "avg_cadence": 176,
+                    "stride_length": 110,
+                    "ground_contact_time": 240,
+                    "vertical_oscillation": 8,
+                }
+            ],
+        }
+    ]
+    context = build_deterministic_coach_context(
+        processed_data=processed_data,
+        user_data=_sample_user_data(),
+        raw_activities=[{"activity_id": 204, "duration": 5}],
+        today="2026-05-14",
+    )
+    ai_report = {
+        "meta": {"today": "2026-05-14"},
+        "weekly_analysis": [],
+        "running_mechanics": {
+            "cadence_avg": {"value": 90, "unit": "spm", "assessment": "極低"},
+            "stride_length_m": {"value": 0.4, "unit": "m", "assessment": "偏短"},
+            "running_economy_score": 10,
+            "improvement_tips": ["把步頻提升到 170+ spm"],
+        },
+    }
+
+    report = enforce_deterministic_report_fields(ai_report, context)
+    mechanics = report["running_mechanics"]
+
+    assert mechanics["cadence_avg"]["value"] == 176
+    assert mechanics["cadence_avg"]["assessment"] == "有效跑步段步頻落在合理範圍，休息段已排除。"
+    assert mechanics["stride_length_m"]["value"] == 1.1
+    assert mechanics["stride_length_m"]["assessment"] == "有效跑步段步幅合理，可隨速度課逐步提升推進效率。"
+    assert mechanics["improvement_tips"] == [
+        "維持目前有效跑步段步頻與步幅，優先把品質穩定複製到節奏跑與間歇主課表。"
+    ]
+
+
 def test_physio_seed_preserves_runner_pace_format_and_open_ended_z5():
     context = build_deterministic_coach_context(
         processed_data=[],

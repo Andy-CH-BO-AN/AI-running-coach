@@ -155,7 +155,9 @@ pipeline 會先從 raw/user/processed 資料建立
 - 4 週心率 Z1-Z5 minutes/percentage，以及是否偏極化的 seed。
 - VO2max、最大/靜息心率、乳酸閾值心率/配速與 pace zone seed。
 - 跑姿平均值：cadence、ground contact、vertical oscillation、
-  stride length 與 running economy score seed。
+  stride length 與 running economy score seed。若有分圈資料，會
+  優先使用有效跑步分圈並排除間歇休息/走動段，避免步頻與步幅被
+  低強度恢復段拉低。
 - swimming/cycling 交叉訓練摘要、目前 weekly TSS load seed、下
   週 7 天日期與可訓練日/長跑偏好。
 - 可被 Gemini 寫入 `evidence_links` 的 deterministic facts，例

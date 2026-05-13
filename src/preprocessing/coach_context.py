@@ -24,6 +24,7 @@ WEEKDAY_ALIASES = {
     "SUN": "Sun",
 }
 ZONE_RANGE = range(1, 6)
+ACTIVE_RUNNING_CADENCE_MIN = 120
 ZONE_NAMES = {
     1: "Z1 恢復",
     2: "Z2 有氧",
@@ -217,6 +218,23 @@ def _average(values: Iterable[Any], digits: int = 1) -> Optional[float]:
     if not numbers:
         return None
     return _round_or_none(sum(numbers) / len(numbers), digits)
+
+
+def _weighted_average(values: Iterable[tuple[Any, Any]], digits: int = 1) -> Optional[float]:
+    weighted_sum = 0.0
+    weight_sum = 0.0
+    for value, weight in values:
+        number = _safe_float(value)
+        numeric_weight = _safe_float(weight)
+        if number is None:
+            continue
+        if numeric_weight is None or numeric_weight <= 0:
+            numeric_weight = 1.0
+        weighted_sum += number * numeric_weight
+        weight_sum += numeric_weight
+    if weight_sum == 0:
+        return None
+    return _round_or_none(weighted_sum / weight_sum, digits)
 
 
 def _sum_numbers(values: Iterable[Any], digits: int = 1) -> float:
@@ -492,18 +510,130 @@ def _build_physio_metrics(user_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _is_active_running_segment(split: Dict[str, Any]) -> bool:
+    cadence = _safe_float(split.get("avg_cadence"))
+    return cadence is not None and cadence >= ACTIVE_RUNNING_CADENCE_MIN
+
+
+def _active_running_segments(records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    segments: List[Dict[str, Any]] = []
+    for record in records:
+        splits = record.get("splits")
+        if not isinstance(splits, list):
+            continue
+        segments.extend(
+            split
+            for split in splits
+            if isinstance(split, dict) and _is_active_running_segment(split)
+        )
+    return segments
+
+
+def _metric_from_active_segments(
+    segments: Sequence[Dict[str, Any]],
+    metric: str,
+    digits: int = 1,
+) -> Optional[float]:
+    return _weighted_average(
+        (
+            (split.get(metric), split.get("duration"))
+            for split in segments
+            if _safe_float(split.get(metric)) is not None
+        ),
+        digits=digits,
+    )
+
+
+def _stride_length_to_meters(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    return value / 100 if value > 10 else value
+
+
+def _stride_from_active_segments(segments: Sequence[Dict[str, Any]]) -> Optional[float]:
+    return _weighted_average(
+        (
+            (_stride_length_to_meters(_safe_float(split.get("stride_length"))), split.get("duration"))
+            for split in segments
+            if _safe_float(split.get("stride_length")) is not None
+        ),
+        digits=2,
+    )
+
+
+def _mechanics_assessment(key: str, value: Any) -> Optional[str]:
+    number = _safe_float(value)
+    if number is None:
+        return "資料不足，暫不解讀。"
+    if key == "cadence_avg":
+        if number >= 170:
+            return "有效跑步段步頻落在合理範圍，休息段已排除。"
+        if number >= 160:
+            return "有效跑步段步頻略低，可用 strides 與短坡衝刺提升節奏。"
+        return "有效跑步段步頻偏低，建議先檢查是否受疲勞或慢跑配速影響。"
+    if key == "ground_contact_ms":
+        if number <= 250:
+            return "觸地時間良好，顯示支撐期控制穩定。"
+        if number <= 280:
+            return "觸地時間尚可，可透過短衝與彈跳訓練再縮短。"
+        return "觸地時間偏長，可能代表推蹬效率或疲勞狀態需要留意。"
+    if key == "vertical_oscillation_cm":
+        if number <= 8.5:
+            return "垂直振幅良好，跑動能量沒有明顯向上浪費。"
+        if number <= 10:
+            return "垂直振幅尚可，需留意速度提升時是否過度彈跳。"
+        return "垂直振幅偏高，建議用節奏跑與核心穩定降低上下起伏。"
+    if key == "stride_length_m":
+        if number >= 1.2:
+            return "有效跑步段步幅充足，速度段已有明顯推進。"
+        if number >= 0.9:
+            return "有效跑步段步幅合理，可隨速度課逐步提升推進效率。"
+        return "有效跑步段步幅偏短，建議搭配加速跑與臀腿力量訓練。"
+    return None
+
+
+def _mechanics_tips(mechanics: Dict[str, Any]) -> List[str]:
+    tips: List[str] = []
+    cadence = _safe_float((mechanics.get("cadence_avg") or {}).get("value"))
+    ground_contact = _safe_float((mechanics.get("ground_contact_ms") or {}).get("value"))
+    stride = _safe_float((mechanics.get("stride_length_m") or {}).get("value"))
+
+    if cadence is not None and cadence < 170:
+        tips.append("在輕鬆跑後加入 4-6 組 strides，讓有效跑步段步頻自然接近 170+ spm。")
+    if ground_contact is not None and ground_contact > 260:
+        tips.append("加入短坡衝刺、跳繩或快速觸地 drills，改善支撐期反應。")
+    if stride is not None and stride < 0.9:
+        tips.append("用加速跑與臀腿力量訓練提升有效步幅，不要用跨大步硬拉配速。")
+
+    if not tips:
+        tips.append("維持目前有效跑步段步頻與步幅，優先把品質穩定複製到節奏跑與間歇主課表。")
+    return tips[:3]
+
+
 def _build_running_mechanics(sessions: Sequence[Dict[str, Any]], processed_by_id: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     running_records = [
         processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
         for session in sessions
         if session.get("source_activity_type") == "running"
     ]
+    active_segments = _active_running_segments(running_records)
 
-    cadence = _average((_get_any(record, "advanced_metrics.avg_cadence") for record in running_records), 1)
-    ground_contact = _average((_get_any(record, "advanced_metrics.ground_contact_time") for record in running_records), 1)
-    vertical_oscillation = _average((_get_any(record, "advanced_metrics.vertical_oscillation") for record in running_records), 1)
-    stride_length_cm = _average((_get_any(record, "advanced_metrics.stride_length") for record in running_records), 1)
-    stride_length_m = _round_or_none(stride_length_cm / 100, 2) if stride_length_cm is not None and stride_length_cm > 10 else stride_length_cm
+    cadence = _metric_from_active_segments(active_segments, "avg_cadence", 1) or _average(
+        (_get_any(record, "advanced_metrics.avg_cadence") for record in running_records),
+        1,
+    )
+    ground_contact = _metric_from_active_segments(active_segments, "ground_contact_time", 1) or _average(
+        (_get_any(record, "advanced_metrics.ground_contact_time") for record in running_records),
+        1,
+    )
+    vertical_oscillation = _metric_from_active_segments(active_segments, "vertical_oscillation", 1) or _average(
+        (_get_any(record, "advanced_metrics.vertical_oscillation") for record in running_records),
+        1,
+    )
+    stride_length_m = _stride_from_active_segments(active_segments)
+    if stride_length_m is None:
+        stride_length_cm = _average((_get_any(record, "advanced_metrics.stride_length") for record in running_records), 1)
+        stride_length_m = _round_or_none(_stride_length_to_meters(stride_length_cm), 2)
 
     score_inputs = [value for value in (cadence, ground_contact, vertical_oscillation, stride_length_m) if value is not None]
     economy_score = None
@@ -524,6 +654,29 @@ def _build_running_mechanics(sessions: Sequence[Dict[str, Any]], processed_by_id
         "stride_length_m": {"value": stride_length_m, "unit": "m"},
         "running_economy_score": economy_score,
     }
+
+
+def _enforce_running_mechanics(
+    result: Dict[str, Any],
+    deterministic_context: Dict[str, Any],
+) -> None:
+    context_mechanics = deterministic_context.get("running_mechanics") or {}
+    if not context_mechanics:
+        return
+
+    ai_mechanics = result.get("running_mechanics") or {}
+    mechanics = _overlay_deterministic(ai_mechanics, context_mechanics)
+    for key in (
+        "cadence_avg",
+        "ground_contact_ms",
+        "vertical_oscillation_cm",
+        "stride_length_m",
+    ):
+        if isinstance(mechanics.get(key), dict):
+            mechanics[key]["assessment"] = _mechanics_assessment(key, mechanics[key].get("value"))
+    mechanics["improvement_tips"] = _mechanics_tips(mechanics)
+
+    result["running_mechanics"] = mechanics
 
 
 def _build_cross_training(sessions: Sequence[Dict[str, Any]], processed_by_id: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
@@ -896,11 +1049,7 @@ def enforce_deterministic_report_fields(
             deterministic_context["physio_metrics"],
         )
 
-    if deterministic_context.get("running_mechanics"):
-        result["running_mechanics"] = _overlay_deterministic(
-            result.get("running_mechanics") or {},
-            deterministic_context["running_mechanics"],
-        )
+    _enforce_running_mechanics(result, deterministic_context)
 
     if deterministic_context.get("cross_training"):
         result["cross_training"] = _overlay_deterministic(
