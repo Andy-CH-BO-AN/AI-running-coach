@@ -26,6 +26,25 @@ If the task touches any of the following, also read
 - Garmin account handling, Garmin password flow, or any workflow that
   could expose Garmin credentials
 
+## How to apply reviewer, QA, and security guidance
+
+Do not assume the platform will automatically spawn separate reviewer,
+QA, or security agents just because this skill is active.
+
+Instead, apply the repo's review loop explicitly:
+
+1. Read the relevant shared guidance files.
+2. Perform one reviewer pass using `ai/shared/reviewer.agent.md`.
+3. Perform one QA pass using `ai/shared/qa.agent.md`.
+4. If the task touches DB, secrets, `.env`, credentials, or Garmin
+   password/account flows, perform one security pass using
+   `ai/shared/security.agent.md`.
+
+If the runtime supports explicit delegation and the user asked for it,
+you may delegate those passes to separate reviewer / QA / security
+agents. Otherwise, execute the passes in a single Codex run and report
+them clearly as separate stages.
+
 ## Workflow
 
 1. Read the shared workflow docs listed above.
@@ -34,11 +53,13 @@ If the task touches any of the following, also read
    commands before broader suites.
 4. Capture failures, stack traces, and reproduction steps when tests do
    not pass.
-5. Review the patch using the reviewer guidance.
-6. Validate with the QA guidance and save durable artifacts in
+5. Run a reviewer pass using `ai/shared/reviewer.agent.md`.
+6. Run a QA pass using `ai/shared/qa.agent.md` and save durable artifacts in
    `tests/reports/` or `tests/scripts/` when helpful.
-7. If security review was triggered, report those checks explicitly.
-8. Summarize what changed, what was tested, and any remaining risk.
+7. If security review was triggered, run a separate security pass and
+   report those checks explicitly.
+8. Summarize what changed, what was tested, and any remaining risk from
+   reviewer, QA, and security checks.
 
 ## Output expectations
 
@@ -47,3 +68,5 @@ If the task touches any of the following, also read
 - Call out exact test commands used.
 - State clearly when tests were not run or when Garmin API calls were
   intentionally avoided.
+- When you do reviewer / QA / security passes in one run, label them
+  clearly so the user can see each stage happened.

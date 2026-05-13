@@ -20,3 +20,5 @@ discovery.
    in this adapter.
 3. If this adapter and the canonical skill ever diverge, treat the
    `ai/skills/...` version as the source of truth.
+4. Do not assume `.codex/agents/*` will auto-spawn. Use the canonical
+   skill's explicit reviewer / QA / security pass instructions instead.
