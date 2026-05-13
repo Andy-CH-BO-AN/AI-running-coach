@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import math
 import uuid
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import Select, desc, select
+from sqlalchemy import Select, desc, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
@@ -183,6 +183,25 @@ def get_profile_history(session: Session, user_id: uuid.UUID) -> list[UserProfil
             .order_by(UserProfileSnapshot.captured_at)
         )
     )
+
+
+def get_recent_max_heart_rate(
+    session: Session,
+    user_id: uuid.UUID,
+    *,
+    lookback_days: int = 183,
+    as_of_date: date | None = None,
+) -> float | None:
+    reference_date = as_of_date or datetime.now(timezone.utc).date()
+    cutoff_date = reference_date - timedelta(days=lookback_days)
+    value = session.scalar(
+        select(func.max(Activity.max_heart_rate)).where(
+            Activity.user_id == user_id,
+            Activity.activity_date >= cutoff_date,
+            Activity.activity_date <= reference_date,
+        )
+    )
+    return _num(value)
 
 
 def upsert_activity(

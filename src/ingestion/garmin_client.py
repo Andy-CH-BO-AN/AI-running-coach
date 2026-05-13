@@ -462,6 +462,7 @@ def get_garmin_activities(
     n: Optional[int] = 30,
     progress: bool = False,
     since_date: Optional[date_cls] = None,
+    fallback_max_heart_rate: Optional[float] = None,
 ) -> Dict[str, Any]:
     email, password = os.getenv('GARMIN_ACCOUNT'), os.getenv('GARMIN_PASSWORD')
     if not email or not password:
@@ -480,6 +481,10 @@ def get_garmin_activities(
         print("✅ Garmin login completed; fetching user profile/biometrics", flush=True)
     # 抓取生理數據
     user_data = get_user_biometric_data(client)
+    user_data['max_heart_rate'] = max(
+        user_data.get('max_heart_rate') or 0,
+        fallback_max_heart_rate or 0,
+    ) or None
 
     collected_activities = []
     start, page_size = 0, 50

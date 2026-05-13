@@ -68,12 +68,17 @@ class RunnerTests(unittest.TestCase):
             "get_garmin_activities",
             return_value={"activities": [], "user_data": {}},
         ) as fetch:
-            runner._fetch_garmin_updates(latest_date=date(2026, 5, 10), fetch_limit=999)
+            runner._fetch_garmin_updates(
+                latest_date=date(2026, 5, 10),
+                fetch_limit=999,
+                fallback_max_heart_rate=191,
+            )
 
         fetch.assert_called_once_with(
             999,
             progress=True,
             since_date=date(2026, 5, 10),
+            fallback_max_heart_rate=191,
         )
 
     def test_sync_garmin_to_db_imports_already_fetched_payload(self):
@@ -125,6 +130,8 @@ class RunnerTests(unittest.TestCase):
         with patch.object(runner, "SessionLocal", return_value=FakeSessionContext()), patch.object(
             runner, "get_or_create_default_user", return_value=types.SimpleNamespace(id="user-1")
         ), patch.object(runner, "_get_latest_activity_date", return_value=date(2026, 5, 10)), patch.object(
+            runner, "get_recent_max_heart_rate", return_value=191
+        ), patch.object(
             runner, "_fetch_garmin_updates", return_value=garmin_payload
         ), patch.object(
             runner, "_sync_garmin_to_db", side_effect=SQLAlchemyError("bind params hidden by runner")
@@ -159,6 +166,8 @@ class RunnerTests(unittest.TestCase):
         with patch.object(runner, "SessionLocal", return_value=FakeSessionContext()), patch.object(
             runner, "get_or_create_default_user", return_value=types.SimpleNamespace(id="user-1")
         ), patch.object(runner, "_get_latest_activity_date", return_value=date(2026, 5, 10)), patch.object(
+            runner, "get_recent_max_heart_rate", return_value=191
+        ), patch.object(
             runner, "_fetch_garmin_updates", return_value=garmin_payload
         ), patch.object(
             runner, "_sync_garmin_to_db", side_effect=SQLAlchemyError("bind params hidden by runner")
