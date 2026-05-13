@@ -71,6 +71,58 @@ TEST_DATABASE_URL=postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@localhost:5
 python run_pipeline.py
 ```
 
+如果想先確認可用參數：
+
+```bash
+python run_pipeline.py --help
+```
+
+### 自訂賽事目標與訓練偏好
+
+`prompts/goal.md` 是預設目標與訓練限制。直接執行
+`python run_pipeline.py` 時會使用這份預設內容；如果執行時傳入
+參數，只有被指定的區塊會被暫時覆蓋，原本的 `prompts/goal.md`
+不會被改寫。
+
+常用參數：
+
+- `--activity-limit`: AI coach 最後要分析幾筆近期活動，預設 75。
+- `--fetch-limit`: 同步 Garmin 時最多往前抓幾筆活動。預設跟
+  `--activity-limit` 相同；如果要補大量歷史資料，可以明確傳
+  `--fetch-limit 999` 或使用 raw-only fetch。
+- `--core-goal`: 你的賽事距離、比賽日期、目標成績，以及目前訓
+  練重點。會覆蓋 `prompts/goal.md` 的「核心目標」區塊。
+- `--core-goal-file`: 從 markdown/text 檔讀取核心目標；內容較長
+  時比在命令列直接輸入更方便。
+- `--training-preferences`: 你一週練幾次、休息幾天、是否有其他
+  運動、傷痛史、不能安排強度課的日期等。會覆蓋
+  `prompts/goal.md` 的「訓練偏好與限制」區塊。
+- `--training-preferences-file`: 從 markdown/text 檔讀取訓練偏
+  好與限制；適合多人或多目標輪流分析。
+
+範例：只改賽事目標，訓練偏好沿用 `prompts/goal.md`。
+
+```bash
+python run_pipeline.py \
+  --core-goal "賽事名稱：城市路跑；賽事距離：10K；賽事日期：2026-11-08；目標成績：45:00"
+```
+
+範例：同時覆蓋目標與訓練偏好。
+
+```bash
+python run_pipeline.py \
+  --core-goal "半馬，2026-12-13，目標 1:45，現在重點是穩定有氧與長跑" \
+  --training-preferences "每週跑 4 天、休息 2 天、週三游泳、週五重訓，避免重訓隔天排跑步強度"
+```
+
+範例：內容較長時，先寫成檔案再傳入。
+
+```bash
+python run_pipeline.py \
+  --core-goal-file prompts/examples/half_marathon_goal.md \
+  --training-preferences-file prompts/examples/weekly_constraints.md
+```
+
 ## 執行後會得到什麼
 
 正常情況下，主流程會在本機產生：
