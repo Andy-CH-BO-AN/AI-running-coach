@@ -280,6 +280,79 @@ def test_enforce_updates_stale_mechanics_assessments_when_values_change():
     ]
 
 
+def test_enforce_repoints_evidence_source_paths_by_activity_id():
+    processed_data = [
+        {
+            "activity_id": 205,
+            "type": "running",
+            "date": "2026-05-12",
+            "distance_km": 5,
+            "performance_formatted": "06:00 /km",
+            "avg_hr": 150,
+            "advanced_metrics": {"training_load": 30},
+            "splits": [{"duration": 6, "distance": 1, "avg_cadence": 172}],
+        },
+        {
+            "activity_id": 206,
+            "type": "running",
+            "date": "2026-05-12",
+            "distance_km": 0.4,
+            "performance_formatted": "03:20 /km",
+            "avg_hr": 145,
+            "advanced_metrics": {"training_load": 10},
+            "splits": [{"duration": 0.5, "distance": 0.1, "avg_cadence": 150}],
+        },
+    ]
+    context = build_deterministic_coach_context(
+        processed_data=processed_data,
+        user_data=_sample_user_data(),
+        raw_activities=[
+            {"activity_id": 205, "duration": 30},
+            {"activity_id": 206, "duration": 3},
+        ],
+        today="2026-05-14",
+    )
+    ai_report = {
+        "meta": {"today": "2026-05-14"},
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {"activity_id": 206, "date": "2026-05-12", "type": "interval"},
+                    {"activity_id": 205, "date": "2026-05-12", "type": "easy"},
+                ],
+            }
+        ],
+        "evidence_links": [
+            {
+                "supporting_sessions": [
+                    {
+                        "activity_id": 205,
+                        "date": "2026-05-12",
+                        "type": "easy",
+                        "distance_km": 5,
+                        "duration_min": 30,
+                        "avg_hr": 150,
+                        "avg_pace": "06:00",
+                        "source_path": "weekly_analysis[0].sessions[1]",
+                        "reason": "保留原因",
+                    }
+                ]
+            }
+        ],
+    }
+
+    report = enforce_deterministic_report_fields(ai_report, context)
+    supporting_session = report["evidence_links"][0]["supporting_sessions"][0]
+
+    assert [session["activity_id"] for session in report["weekly_analysis"][0]["sessions"]] == [205, 206]
+    assert supporting_session["activity_id"] == 205
+    assert supporting_session["source_path"] == "weekly_analysis[0].sessions[0]"
+    assert supporting_session["distance_km"] == 5
+    assert supporting_session["avg_pace"] == "06:00"
+    assert supporting_session["reason"] == "保留原因"
+
+
 def test_physio_seed_preserves_runner_pace_format_and_open_ended_z5():
     context = build_deterministic_coach_context(
         processed_data=[],

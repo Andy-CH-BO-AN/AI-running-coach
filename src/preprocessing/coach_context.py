@@ -1020,6 +1020,66 @@ def _enforce_next_week_plan(
     return ai_plan
 
 
+def _session_identity(session: Dict[str, Any]) -> tuple[Any, Any, Any, Any]:
+    return (
+        session.get("date"),
+        session.get("type"),
+        _round_or_none(session.get("distance_km"), 2),
+        _round_or_none(session.get("duration_min"), 1),
+    )
+
+
+def _weekly_session_references(report: Dict[str, Any]) -> tuple[Dict[str, tuple[str, Dict[str, Any]]], Dict[tuple[Any, Any, Any, Any], tuple[str, Dict[str, Any]]]]:
+    by_activity_id: Dict[str, tuple[str, Dict[str, Any]]] = {}
+    by_identity: Dict[tuple[Any, Any, Any, Any], tuple[str, Dict[str, Any]]] = {}
+    for week_index, week in enumerate(report.get("weekly_analysis") or []):
+        if not isinstance(week, dict):
+            continue
+        for session_index, session in enumerate(week.get("sessions") or []):
+            if not isinstance(session, dict):
+                continue
+            source_path = f"weekly_analysis[{week_index}].sessions[{session_index}]"
+            activity_id = session.get("activity_id")
+            if activity_id is not None:
+                by_activity_id[_normalize_activity_id(activity_id)] = (source_path, session)
+            by_identity[_session_identity(session)] = (source_path, session)
+    return by_activity_id, by_identity
+
+
+def _enforce_evidence_source_paths(report: Dict[str, Any]) -> None:
+    by_activity_id, by_identity = _weekly_session_references(report)
+    for evidence in report.get("evidence_links") or []:
+        if not isinstance(evidence, dict):
+            continue
+        for session in evidence.get("supporting_sessions") or []:
+            if not isinstance(session, dict):
+                continue
+
+            reference = None
+            activity_id = session.get("activity_id")
+            if activity_id is not None:
+                reference = by_activity_id.get(_normalize_activity_id(activity_id))
+            if reference is None:
+                reference = by_identity.get(_session_identity(session))
+            if reference is None:
+                continue
+
+            source_path, source_session = reference
+            session["source_path"] = source_path
+            for key in (
+                "date",
+                "type",
+                "distance_km",
+                "duration_min",
+                "avg_hr",
+                "avg_pace",
+                "training_effect_aerobic",
+                "training_effect_anaerobic",
+                "activity_id",
+            ):
+                session[key] = deepcopy(source_session.get(key))
+
+
 def enforce_deterministic_report_fields(
     report: Dict[str, Any],
     deterministic_context: Dict[str, Any],
@@ -1066,6 +1126,7 @@ def enforce_deterministic_report_fields(
         result["load_assessment"] = load_assessment
 
     result["next_week_plan"] = _enforce_next_week_plan(result, deterministic_context)
+    _enforce_evidence_source_paths(result)
     return result
 
 

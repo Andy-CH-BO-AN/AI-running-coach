@@ -67,6 +67,9 @@
    - `sessions` 必須沿用 `deterministic_context.weekly_analysis[].sessions[]` 中屬於該週的所有活動，用於前端加總與 evidence 追蹤；不要只挑代表性活動，也不要刪減已提供的活動清單。
    - `sessions[].date` 必須落在該 bucket 的 `week_start` 到 `week_start + 6 days` 範圍內，不得放入其他週的活動。
    - 每個 week bucket 必須根據該週資料輸出 `key_observation`、`weekly_assessment`、`weekly_recommendation` 與 `risk_flags`，讓使用者能分別理解四週的訓練狀況與調整建議。
+   - 對 `sessions[].type = "interval"` 的活動必須優先分析。不要只看整段平均配速、平均心率或平均步頻；請檢查 `segments[]` 中的快段與恢復段，分別判斷主課表品質、恢復是否過長、速度維持能力、步頻/步幅是否只在快段成立。
+   - 當 interval 活動進入 `evidence_links.supporting_sessions`，必須在 `reason` 說明至少一個與分段相關的觀察，例如快段配速、休息段配速/步頻、快慢段落差、或分段心率反應。
+   - 如果 claim 是關於輕鬆跑、高溫壓力、長跑或恢復跑，不要引用 interval 活動的分段作為 source_path；請讓 `activity_id`、`source_path` 與文字描述指向同一筆活動。
 
 3. 下週課表：
    - `next_week_plan.week_start` 必須沿用 `deterministic_context.next_week_plan_seed.week_start`；若 deterministic_context 缺漏，才使用 `weekly_analysis[0].week_start + 7 days`，也就是下一週 Monday。
