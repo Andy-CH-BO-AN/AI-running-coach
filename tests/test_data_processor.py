@@ -105,6 +105,59 @@ class DataProcessorTests(unittest.TestCase):
         self.assertEqual(format_pace(31.2, "cycling"), "31.2 km/h")
         self.assertEqual(format_pace(None, "running"), "N/A")
 
+    def test_preprocess_formats_running_split_paces_for_output(self):
+        raw_activities = [
+            {
+                "activity_id": 5,
+                "type": "running",
+                "date": "2026-05-10",
+                "distance": 1.0,
+                "duration": 5.0,
+                "splits": [{"split_index": 1, "distance": 1.0, "duration": 4.59, "pace": 4.59}],
+                "raw_data": {},
+            }
+        ]
+
+        processed = preprocess_data(raw_activities)
+
+        self.assertEqual(processed[0]["splits"][0]["pace"], "4:35 /km")
+        self.assertEqual(raw_activities[0]["splits"][0]["pace"], 4.59)
+
+    def test_preprocess_formats_swimming_split_paces_per_100m(self):
+        raw_activities = [
+            {
+                "activity_id": 6,
+                "type": "swimming",
+                "date": "2026-05-10",
+                "distance": 0.1,
+                "duration": 2.74,
+                "splits": [{"split_index": 1, "distance": 0.1, "duration": 2.74, "pace": 2.74}],
+                "raw_data": {},
+            }
+        ]
+
+        processed = preprocess_data(raw_activities)
+
+        self.assertEqual(processed[0]["splits"][0]["pace"], "2:44 /100m")
+
+    def test_preprocess_leaves_cycling_split_speed_numeric(self):
+        raw_activities = [
+            {
+                "activity_id": 7,
+                "type": "cycling",
+                "date": "2026-05-10",
+                "distance": 10.0,
+                "duration": 30.0,
+                "splits": [{"split_index": 1, "distance": 10.0, "duration": 30.0, "pace": None, "speed_kmh": 20.0}],
+                "raw_data": {},
+            }
+        ]
+
+        processed = preprocess_data(raw_activities)
+
+        self.assertIsNone(processed[0]["splits"][0]["pace"])
+        self.assertEqual(processed[0]["splits"][0]["speed_kmh"], 20.0)
+
     def test_efficiency_validators_reject_invalid_input(self):
         self.assertIsNone(calculate_cycling_efficiency(0, 300))
         self.assertIsNone(calculate_swimming_efficiency(250))
