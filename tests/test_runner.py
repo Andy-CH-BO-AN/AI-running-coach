@@ -238,7 +238,7 @@ class RunnerTests(unittest.TestCase):
             timestamp="20260510",
         )
 
-    def test_run_pipeline_writes_processed_csv_and_markdown_report(self):
+    def test_run_pipeline_writes_processed_csv_and_json_report(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             base = Path(temp_dir)
             processed_dir = base / "processed"
@@ -290,13 +290,13 @@ class RunnerTests(unittest.TestCase):
                 "_load_or_fetch_activity_payloads",
                 return_value=(raw_activities, {"max_heart_rate": 190}),
             ), patch.object(runner, "preprocess_data", return_value=processed_data), patch.object(
-                runner, "_persist_pipeline_artifacts", return_value=Path("output/report.md")
+                runner, "_persist_pipeline_artifacts", return_value=Path("output/report.json")
             ), patch.object(
                 runner, "coach", return_value={"headline": "report"}
             ) as coach_mock:
                 report = runner.run_pipeline(goal_overrides=overrides)
 
-        self.assertEqual(report, "output/report.md")
+        self.assertEqual(report, "output/report.json")
         _, kwargs = coach_mock.call_args
         self.assertIn("* 目標成績：5K 20:00", kwargs["goal_text"])
         self.assertIn("* default preference", kwargs["goal_text"])

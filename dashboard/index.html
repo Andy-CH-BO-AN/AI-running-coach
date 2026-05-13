@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI 跑步教練 Dashboard</title>
+    <link rel="stylesheet" href="/dashboard/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <p class="eyebrow">AI Running Coach</p>
+          <h1>訓練狀態 Dashboard</h1>
+        </div>
+        <div class="report-tools">
+          <label class="select-label" for="reportSelect">報告</label>
+          <select id="reportSelect" class="report-select"></select>
+          <button id="reloadButton" class="icon-button" type="button" aria-label="重新整理報告" title="重新整理報告">
+            ↻
+          </button>
+        </div>
+      </header>
+
+      <main>
+        <div id="appStatus" class="app-status" role="status">正在載入報告...</div>
+
+        <section class="status-grid" aria-label="頂部狀態列" id="statusGrid"></section>
+
+        <section class="section-grid two-col">
+          <article class="panel decision-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Daily decision</p>
+                <h2>教練摘要</h2>
+              </div>
+            </div>
+            <div id="coachSummary"></div>
+          </article>
+
+          <article class="panel load-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Load state</p>
+                <h2>目前負荷</h2>
+              </div>
+            </div>
+            <div id="loadAssessment"></div>
+          </article>
+        </section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">4-week trend</p>
+              <h2>訓練負荷與跑量趨勢</h2>
+            </div>
+            <div class="legend">
+              <span><i class="legend-line distance"></i>跑量</span>
+              <span><i class="legend-bar load"></i>訓練負荷</span>
+            </div>
+          </div>
+          <div class="training-layout">
+            <div id="weeklyChart" class="chart-box"></div>
+            <div id="weeklyNarratives" class="week-stack"></div>
+          </div>
+        </section>
+
+        <section class="section-grid two-col">
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Heart rate</p>
+                <h2>心率區間分佈</h2>
+              </div>
+            </div>
+            <div id="hrZones"></div>
+          </article>
+
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Race readiness</p>
+                <h2>賽事準備度</h2>
+              </div>
+            </div>
+            <div id="raceReadiness"></div>
+          </article>
+        </section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Next week</p>
+              <h2>下週課表日曆</h2>
+            </div>
+            <p id="planTheme" class="subtle"></p>
+          </div>
+          <div id="weeklyCalendar" class="calendar-grid"></div>
+        </section>
+
+        <section class="section-grid two-col">
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Physiology</p>
+                <h2>配速與生理能力</h2>
+              </div>
+            </div>
+            <div id="physioMetrics"></div>
+          </article>
+
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Mechanics</p>
+                <h2>跑姿與經濟性</h2>
+              </div>
+            </div>
+            <div id="runningMechanics"></div>
+          </article>
+        </section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Traceability</p>
+              <h2>AI 建議依據</h2>
+            </div>
+          </div>
+          <div id="evidenceLayer"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/dashboard/reportAdapter.js"></script>
+    <script src="/dashboard/app.js"></script>
+  </body>
+</html>
