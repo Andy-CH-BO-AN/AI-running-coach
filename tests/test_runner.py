@@ -245,6 +245,7 @@ class RunnerTests(unittest.TestCase):
             output_dir = base / "output"
             raw_activities = [{"activity_id": 1, "type": "running", "distance": 10.0, "duration": 50.0}]
             processed_data = [{"activity_id": 1, "performance_formatted": "5:00 /km"}]
+            report_payload = {"headline": "report"}
 
             with patch.object(runner, "PROCESSED_DATA_DIR", processed_dir
             ), patch.object(runner, "OUTPUT_DIR", output_dir), patch.object(
@@ -254,13 +255,17 @@ class RunnerTests(unittest.TestCase):
                 "_load_or_fetch_activity_payloads",
                 return_value=(raw_activities, {"max_heart_rate": 190}),
             ), patch.object(runner, "preprocess_data", return_value=processed_data), patch.object(
-                runner, "coach", return_value="# report"
+                runner, "coach", return_value=report_payload
             ):
                 report = runner.run_pipeline()
 
-            self.assertEqual(report, str(output_dir / "ai_report_20260510.md"))
+            self.assertEqual(report, str(output_dir / "ai_report_20260510.json"))
             self.assertTrue((processed_dir / "processed_20260510.csv").exists())
-            self.assertTrue((output_dir / "ai_report_20260510.md").exists())
+            self.assertTrue((output_dir / "ai_report_20260510.json").exists())
+            self.assertEqual(
+                json.loads((output_dir / "ai_report_20260510.json").read_text(encoding="utf-8")),
+                report_payload,
+            )
 
     def test_run_pipeline_passes_rendered_goal_overrides_to_coach(self):
         raw_activities = [{"activity_id": 1, "type": "running", "distance": 10.0, "duration": 50.0}]
@@ -287,7 +292,7 @@ class RunnerTests(unittest.TestCase):
             ), patch.object(runner, "preprocess_data", return_value=processed_data), patch.object(
                 runner, "_persist_pipeline_artifacts", return_value=Path("output/report.md")
             ), patch.object(
-                runner, "coach", return_value="# report"
+                runner, "coach", return_value={"headline": "report"}
             ) as coach_mock:
                 report = runner.run_pipeline(goal_overrides=overrides)
 

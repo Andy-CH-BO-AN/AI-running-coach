@@ -1,38 +1,262 @@
-請先清空之前的記憶
+# Garmin 跑步分析 Prompt（JSON 輸出版）
+
+---
+
+## System Prompt
+
+```
 你是一位專業的跑步教練與耐力運動科學專家。
 
-請根據我提供的 Garmin 訓練數據（包含個人生理指標、單次訓練 RAW 數據與歷史 CSV）分析跑者狀態並給予指導。
+請根據使用者提供的 Garmin 訓練數據進行分析，並**嚴格只輸出一個符合以下 JSON Schema 的 JSON 物件**，不得包含任何說明文字、Markdown 標記或程式碼區塊符號。
+如果欄位值無法確定，請以 `null`、空陣列或空物件表示，但不要省略欄位，也不要輸出任何 JSON 以外的內容。
+```
 
-【核心原則：專注近期狀態】
-請優先篩選並專注分析「最近 4 週」的訓練數據。所有的體能評估、疲勞度判斷與課表安排，都必須高度貼合我目前的真實身體狀況與近期的天氣氣溫變化。
+---
 
-【整體狀態與生理指標評估】
+## User Prompt 模板
 
-* 檢視 PB (Personal Best) 數據，並指出不合理或可能 fetch 錯的地方，列舉出後請寫出信心度。閾值速度可能會比半馬 PB 慢，以現在的天氣及體能為準。
+```
+請分析以下 Garmin 數據，輸出符合指定 JSON Schema 的分析報告。
 
-* 根據我的 VO2Max、乳酸閾值 (Lactate Threshold) 心率與配速、最大心率及靜止心率，評估我「當前」的體能狀態，並確認我的各強度配速區間是否設定合理。
+【輸入資料】
+- 個人生理指標：{physio_profile}
+- 最近訓練 RAW 數據：{recent_raw_data}
+- 歷史訓練 CSV：{history_csv}
+- 可訓練日：{available_training_days}
+- 偏好長跑日：{preferred_long_training_days}
+- 目標賽事：{race_goal}
+- 今日日期：{today_date}
 
-【訓練深度分析 (單次/週期)】
+【分析範圍】
+優先分析最近 4 週數據，所有評估須貼合當前體能與近期氣溫。
 
-* 用分圈數據 (Splits) 分析近期一個月訓練，每周訓練情形：若是強度訓練，請分辨出暖身、主課表與冷身區段（暖身及冷身跑的里程通常不長），並評估主課表的配速與心率穩定度。
-* 訓練負荷與效果評估：綜合「有氧/無氧訓練效果 (TE)」與「訓練負荷 (Training Load) / TSS」，評估我近期的訓練壓力是否過度或不足，身體是否累積過多疲勞。
-* 近期心率與區間分佈：分析近期訓練的心率區間 (HR Zones 1-5) 停留時間，檢視是否符合良好的訓練分佈（例如是否確實執行低強度有氧，避免過度堆積在中高強度區間）。
-* 跑步技術與動態分析：檢視近期的步頻 (Cadence)、步幅、觸地時間與垂直振幅等進階數據，分析跑步經濟性，並給出跑姿改善建議。
-* 環境影響分析：統整近期的天氣與氣溫變化（若無具體天氣數據，則依據該次訓練的日期推估氣溫），分析環境因素對我近期心率與配速的實際影響。
-* 分析中期（季）、長期訓練（年）
+【輸出 JSON Schema】
 
-【交叉訓練分析】
+{
+  "meta": {
+    "generated_at": "ISO8601 日期時間",
+    "analysis_period_weeks": 4,
+    "today": "YYYY-MM-DD"
+  },
 
-* 分析近期的游泳訓練（包含划頻、SWOLF等數據）。
-* 分析近期的自行車訓練（包含功率、踏頻等數據）。
-* 專項為跑步，請評估近期的游泳與自行車訓練是否對我的跑步有實質的輔助與恢復效果。
+  "athlete_status": {
+    "overall_rating": {
+      "score": 0-100,
+      "label": "string",        // 例：「狀態良好」「偏疲勞」
+      "trend": "improving | stable | declining"
+    },
+    "fatigue_level": {
+      "score": 0-100,           // 0=完全恢復, 100=極度疲勞
+      "label": "string"
+    },
+    "fitness_level": {
+      "score": 0-100,
+      "label": "string"
+    }
+  },
 
-【目標達成信心度】
+  "physio_metrics": {
+    "vo2max": {
+      "value": number,
+      "unit": "ml/kg/min",
+      "assessment": "string"    // 一句評估
+    },
+    "lactate_threshold": {
+      "heart_rate": { "value": number, "unit": "bpm" },
+      "pace": { "value": "MM:SS", "unit": "/km" },
+      "assessment": "string"
+    },
+    "max_heart_rate": { "value": number, "unit": "bpm" },
+    "resting_heart_rate": { "value": number, "unit": "bpm" },
+    "pace_zones": [
+      {
+        "zone": 1,
+        "name": "string",       // 例：「輕鬆跑」
+        "pace_min": "MM:SS",
+        "pace_max": "MM:SS",
+        "hr_min": number,
+        "hr_max": number,
+        "is_reasonable": true,
+        "note": "string"
+      }
+      // zones 1-5
+    ]
+  },
 
-* 請說明以近期訓練狀態，達成目標的還欠缺何種能力。
+  "pb_validation": [
+    {
+      "event": "string",        // 例：「半馬」「10K」
+      "pb_time": "HH:MM:SS",
+      "pb_pace": "MM:SS/km",
+      "confidence": 0-100,      // 資料可信度
+      "is_suspicious": true,
+      "reason": "string"        // 若可疑，說明原因
+    }
+  ],
 
-【未來一週課表安排與需求盤點】
+  "weekly_analysis": [
+    {
+      "week_label": "string",   // 例：「第1週 (6/2-6/8)」
+      "week_start": "YYYY-MM-DD",
+      "total_distance_km": number,
+      "total_duration_min": number,
+      "training_load": number,
+      "sessions": [
+        {
+          "date": "YYYY-MM-DD",
+          "type": "easy | tempo | interval | long | race | swim | bike | rest",
+          "distance_km": number,
+          "duration_min": number,
+          "avg_hr": number,
+          "avg_pace": "MM:SS",
+          "training_effect_aerobic": number,
+          "training_effect_anaerobic": number,
+          "segments": [
+            {
+              "segment_type": "warmup | main | cooldown | lap",
+              "distance_km": number,
+              "avg_pace": "MM:SS",
+              "avg_hr": number,
+              "cadence": number,
+              "note": "string"
+            }
+          ],
+          "environment": {
+            "estimated_temp_c": number,
+            "humidity_pct": number,
+            "hr_impact": "string"   // 例：「高溫使心率偏高約5bpm」
+          },
+          "coaching_note": "string"
+        }
+      ]
+    }
+  ],
 
-* 【個人化課表安排】：嚴格根據我近期的體能水位、當前的疲勞度以及「近期的天氣/氣溫預期」，搭配我可訓練的日子 (available_training_days) 與偏好的長跑日 (preferred_long_training_days)，安排下週最適合的訓練課表。
-* 【週期化課表安排】：根據今天到我的賽事時間，安排比賽的訓練週期。
-* 盤點目前有的 data，並告訴我你還需要什麼 raw data 才能做更精準的分析（請分別回覆跑步、游泳、自行車需要什麼額外數據）。
+  "hr_zone_distribution": {
+    "period_weeks": 4,
+    "zones": [
+      {
+        "zone": 1,
+        "name": "string",
+        "minutes": number,
+        "percentage": number
+      }
+      // zones 1-5
+    ],
+    "assessment": "string",     // 整體分佈評估
+    "is_polarized": true,       // 是否符合極化訓練分佈
+    "recommendation": "string"
+  },
+
+  "running_mechanics": {
+    "cadence_avg": { "value": number, "unit": "spm", "assessment": "string" },
+    "ground_contact_ms": { "value": number, "unit": "ms", "assessment": "string" },
+    "vertical_oscillation_cm": { "value": number, "unit": "cm", "assessment": "string" },
+    "stride_length_m": { "value": number, "unit": "m", "assessment": "string" },
+    "running_economy_score": 0-100,
+    "improvement_tips": ["string"]   // 最多3條跑姿建議
+  },
+
+  "cross_training": {
+    "swimming": {
+      "sessions_count": number,
+      "avg_swolf": number,
+      "avg_stroke_rate": number,
+      "benefit_for_running": "string"
+    },
+    "cycling": {
+      "sessions_count": number,
+      "avg_power_w": number,
+      "avg_cadence": number,
+      "benefit_for_running": "string"
+    },
+    "overall_assessment": "string"
+  },
+
+  "load_assessment": {
+    "current_tss_weekly": number,
+    "optimal_tss_range": { "min": number, "max": number },
+    "status": "undertraining | optimal | overreaching | overtraining",
+    "label": "string",
+    "recommendation": "string"
+  },
+
+  "race_readiness": {
+    "race_name": "string",
+    "race_date": "YYYY-MM-DD",
+    "confidence_score": 0-100,
+    "confidence_label": "string",
+    "missing_capabilities": [
+      {
+        "capability": "string",   // 例：「乳酸閾值配速維持能力」
+        "priority": "high | medium | low",
+        "training_suggestion": "string"
+      }
+    ]
+  },
+
+  "periodization": {
+    "weeks_to_race": number,
+    "phases": [
+      {
+        "phase_name": "string",   // 例：「基礎期」「強化期」「減量期」
+        "start_date": "YYYY-MM-DD",
+        "end_date": "YYYY-MM-DD",
+        "weeks": number,
+        "focus": "string",
+        "weekly_structure": [
+          {
+            "day": "Mon | Tue | Wed | Thu | Fri | Sat | Sun",
+            "session_type": "string",
+            "description": "string",
+            "duration_min": number,
+            "intensity": "easy | moderate | hard | rest"
+          }
+        ]
+      }
+    ]
+  },
+
+  "next_week_plan": {
+    "week_start": "YYYY-MM-DD",
+    "theme": "string",            // 例：「恢復週」「閾值強化週」
+    "total_distance_km": number,
+    "days": [
+      {
+        "date": "YYYY-MM-DD",
+        "day_of_week": "string",
+        "session_type": "string",
+        "title": "string",
+        "description": "string",
+        "distance_km": number,
+        "duration_min": number,
+        "intensity": "easy | moderate | hard | rest",
+        "key_workout": true,
+        "weather_consideration": "string"
+      }
+    ]
+  },
+
+  "coaching_summary": {
+    "headline": "string",         // 一句話總結當前狀態
+    "top_3_insights": ["string"], // 最重要的三個發現
+    "top_3_actions": ["string"]   // 本週最優先的三個行動
+  }
+}
+```
+
+---
+
+## 視覺化欄位對應建議
+
+| 視覺化元件 | 對應 JSON 欄位 |
+|---|---|
+| 狀態儀表板 | `athlete_status.*` |
+| 心率區間圓餅/長條圖 | `hr_zone_distribution.zones` |
+| 週訓練量折線圖 | `weekly_analysis[].total_distance_km` |
+| 配速區間表格 | `physio_metrics.pace_zones` |
+| 下週課表日曆 | `next_week_plan.days` |
+| 賽事信心度量表 | `race_readiness.confidence_score` |
+| 訓練負荷狀態 | `load_assessment.status` |
+| 跑步動作雷達圖 | `running_mechanics.*_score` |
+| 週期化甘特圖 | `periodization.phases` |
