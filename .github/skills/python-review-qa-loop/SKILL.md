@@ -12,3 +12,6 @@ Canonical skill source:
 
 This `.github` file is only a thin reference adapter so GitHub-side
 repo docs point to the same canonical skill content in `ai/`.
+
+Do not assume `.github/agents/*` will auto-spawn. Follow the canonical
+skill's explicit reviewer / QA / security pass instructions instead.
