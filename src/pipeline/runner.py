@@ -14,6 +14,7 @@ from src.db.repositories import get_recent_max_heart_rate
 from src.db.session import SessionLocal
 from src.ingestion.garmin_client import get_garmin_activities
 from src.pipeline.goal_prompt import GoalPromptOverrides, render_goal_prompt
+from src.preprocessing.coach_context import build_deterministic_coach_context
 from src.preprocessing.data_processor import preprocess_data
 from src.services.db_importer import import_garmin_raw_file, import_garmin_user_file
 
@@ -48,9 +49,11 @@ def _write_json_report(path: Path, response: Dict[str, Any]) -> None:
 def _persist_pipeline_artifacts(
     timestamp: str,
     processed_data: List[Dict[str, Any]],
+    deterministic_context: Dict[str, Any],
     response: Dict[str, Any],
 ) -> Path:
     _write_processed_csv(PROCESSED_DATA_DIR / f"processed_{timestamp}.csv", processed_data)
+    _write_json(PROCESSED_DATA_DIR / f"coach_context_{timestamp}.json", deterministic_context)
 
     report_path = OUTPUT_DIR / f"ai_report_{timestamp}.json"
     _write_json_report(report_path, response)
@@ -226,11 +229,20 @@ def run_pipeline(
         print("⚠️ No data left after preprocessing.")
         return None
 
+    print("🧮 Building deterministic coach context...")
+    deterministic_context = build_deterministic_coach_context(
+        processed_data=processed_data,
+        user_data=user_data,
+        raw_activities=raw_activities,
+        today=timestamp,
+    )
+
     print("🤖 Analyzing data with AI Coach...")
     goal_text = render_goal_prompt(GOAL_PROMPT_PATH, goal_overrides)
     response = coach(
         data=processed_data,
         user_data=user_data,
+        deterministic_context=deterministic_context,
         goal_path=str(GOAL_PROMPT_PATH),
         goal_text=goal_text,
     )
@@ -239,6 +251,7 @@ def run_pipeline(
     report_path = _persist_pipeline_artifacts(
         timestamp=timestamp,
         processed_data=processed_data,
+        deterministic_context=deterministic_context,
         response=response,
     )
 

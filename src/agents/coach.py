@@ -35,6 +35,7 @@ def _build_context(
     user_data: Optional[Dict[str, Any]],
     goal_path: Optional[str],
     goal_text: Optional[str] = None,
+    deterministic_context: Optional[Dict[str, Any]] = None,
 ) -> str:
     sections = []
 
@@ -51,8 +52,15 @@ def _build_context(
         user_context = "- No biometric data available"
     sections.append(f"### User Biometric Data & PRs:\n{user_context}")
 
+    if deterministic_context:
+        context_json = json.dumps(deterministic_context, ensure_ascii=False, indent=2)
+        sections.append(
+            "### Deterministic Coach Context (code-calculated source of truth):\n"
+            f"{context_json}"
+        )
+
     data_context = json.dumps(data, ensure_ascii=False, indent=2)
-    sections.append(f"### Activity Data to Analyze:\n{data_context}")
+    sections.append(f"### Processed Activity Data Reference:\n{data_context}")
 
     return "\n\n".join(sections)
 
@@ -147,11 +155,12 @@ def _generate_content_with_retries(model_name: str, full_prompt: str) -> Dict[st
 def coach(
     data: List[Dict[str, Any]],
     user_data: Optional[Dict[str, Any]] = None,
+    deterministic_context: Optional[Dict[str, Any]] = None,
     goal_path: str = "",
     goal_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     system_prompt = _read_text_file(PROMPT_PATH)
-    full_prompt = f"{system_prompt}\n\n{_build_context(data, user_data, goal_path, goal_text=goal_text)}"
+    full_prompt = f"{system_prompt}\n\n{_build_context(data, user_data, goal_path, goal_text=goal_text, deterministic_context=deterministic_context)}"
 
     for model_name in MODEL_FALLBACKS:
         try:

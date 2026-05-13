@@ -20,6 +20,7 @@
 
 【輸入資料】
 - 個人生理指標：{physio_profile}
+- 程式端已計算資料：{deterministic_context}
 - 最近訓練 RAW 數據：{recent_raw_data}
 - 歷史訓練 CSV：{history_csv}
 - 可訓練日：{available_training_days}
@@ -31,7 +32,21 @@
 優先分析最近 4 週數據，所有評估須貼合當前體能與近期氣溫。
 重要建議必須能追溯到實際數據。請在 `evidence_links` 中為關鍵洞察、風險提醒與訓練建議提供可視化可用的依據資料，讓使用者能比對 AI 建議與 Garmin 數據。不要傾倒完整 raw data；只挑選最能支持該建議的指標、活動與欄位路徑。
 
+【角色分工】
+
+- 程式端已計算資料 `deterministic_context` 是日期、週 bucket、活動 sessions、週總量、心率區間、跑姿平均、生理 profile seed、負荷 seed、下週日期 seed 的 source of truth。
+- 你是分析器與教練，不是加總器。不得重新計算或覆寫 deterministic_context 已提供的 deterministic numbers；你的工作是根據這些事實補上評估、風險解讀、訓練建議、賽事準備度、週期化與 evidence claims。
+- 如果 deterministic_context 與 raw/CSV reference 有衝突，除非 deterministic_context 明確標示 `data_quality.status = "partial"` 或欄位為 null，否則以 deterministic_context 為準。
+- `processed activity data` 與 raw reference 只用來補充解釋、檢查異常與撰寫 evidence，不要用它們另行推翻 deterministic_context 的週級加總、百分比或日期。
+- deterministic_context 中 `weekly_analysis[].derived_total_distance_km`、`derived_total_duration_min`、`derived_training_load` 只供你判讀與 evidence 使用；最終輸出的 `weekly_analysis[]` 仍不要包含這三個週級總量欄位，讓前端 adapter 繼續由 `sessions[]` deterministic 加總。
+
 【資料一致性硬性規則】
+
+0. Deterministic context 一致性：
+   - `meta.today` 必須等於 `deterministic_context.meta.today`。
+   - `weekly_analysis[].week_start`、`weekly_analysis[].sessions[]`、`hr_zone_distribution.zones[]`、`physio_metrics.pace_zones[]`、`running_mechanics`、`load_assessment.current_tss_weekly` 與 `next_week_plan_seed.week_start/days[].date` 優先沿用 deterministic_context。
+   - 你可以新增自然語言評估，例如 `assessment`、`recommendation`、`label`、`coaching_note`，但不得把已計算數值改成另一組數字。
+   - 如果 deterministic_context 的某週 `data_quality.message` 為「部分資料不足」，最終報告也必須在該週 assessment 或 evidence 中說明資料限制。
 
 1. 日期一致性：
    - `meta.today` 必須使用輸入的「今日日期」。
@@ -42,27 +57,28 @@
 
 2. 近 4 週分析：
    - `weekly_analysis` 必須固定輸出 4 個 week bucket，依時間由新到舊排序。
-   - 第 1 個 bucket 的 `week_start` 必須是 `meta.today` 所在週的 Monday，而不是 `meta.today` 本身，除非 `meta.today` 剛好是 Monday。
+   - 第 1 個 bucket 的 `week_start` 必須沿用 `deterministic_context.weekly_analysis[0].week_start`；若 deterministic_context 缺漏，才自行用 `meta.today` 所在週的 Monday。
    - 第 2-4 個 bucket 的 `week_start` 必須分別是第 1 個 bucket 往前推 7、14、21 天。
    - 每個 bucket 的日期範圍固定為 `week_start` 到 `week_start + 6 days`，並在 `week_label` 標示相同範圍。
    - 每個 bucket 的 `week_start` 必須是 Monday。如果計算後不是 Monday，必須重新計算，不可輸出 Tuesday/Wednesday 等其他日期。
    - 沒有活動的週仍要輸出該 week bucket，`sessions` 為空陣列，並在 `weekly_assessment` 說明該週資料不足或無訓練紀錄。
    - 不要輸出週級總量欄位，例如 `total_distance_km`、`total_duration_min`、`training_load`。週總量、週總時間與週訓練負荷由前端或程式端根據 `sessions[]` 自行加總。
-   - `sessions` 必須列出輸入資料中屬於該週的所有活動，用於前端加總與 evidence 追蹤；不要只挑代表性活動，也不要刪減已提供的活動清單。
+   - `sessions` 必須沿用 `deterministic_context.weekly_analysis[].sessions[]` 中屬於該週的所有活動，用於前端加總與 evidence 追蹤；不要只挑代表性活動，也不要刪減已提供的活動清單。
    - `sessions[].date` 必須落在該 bucket 的 `week_start` 到 `week_start + 6 days` 範圍內，不得放入其他週的活動。
    - 每個 week bucket 必須根據該週資料輸出 `key_observation`、`weekly_assessment`、`weekly_recommendation` 與 `risk_flags`，讓使用者能分別理解四週的訓練狀況與調整建議。
 
 3. 下週課表：
-   - `next_week_plan.week_start` 必須是 `weekly_analysis[0].week_start + 7 days`，也就是下一週 Monday。
+   - `next_week_plan.week_start` 必須沿用 `deterministic_context.next_week_plan_seed.week_start`；若 deterministic_context 缺漏，才使用 `weekly_analysis[0].week_start + 7 days`，也就是下一週 Monday。
    - `next_week_plan.days` 必須固定輸出 7 天，從 `next_week_plan.week_start` 開始連續 7 個日期。
+   - `next_week_plan.days[].date` 與 `day_of_week` 必須優先沿用 `deterministic_context.next_week_plan_seed.days[]` 的日期與星期，再由你補上課表內容、強度、距離與訓練描述。
    - `next_week_plan.week_start` 必須是 Monday。如果計算後不是 Monday，必須重新計算。
    - `next_week_plan.days[].day_of_week` 必須由 `date` 推導，且固定使用 `Mon | Tue | Wed | Thu | Fri | Sat | Sun`；不得出現 `date` 是 Tuesday 但 `day_of_week` 寫 Monday 的情況。
    - 沒安排訓練的日期也必須輸出，`intensity` 為 `rest`，`distance_km` 與 `duration_min` 為 0，`key_workout` 為 false。
    - `next_week_plan.total_distance_km` 必須等於 `days[].distance_km` 加總後四捨五入到小數 2 位。
 
 4. 視覺化必要陣列：
-   - `physio_metrics.pace_zones` 必須固定輸出 zones 1-5，依 zone 遞增排序。
-   - `hr_zone_distribution.zones` 必須固定輸出 zones 1-5，依 zone 遞增排序。
+   - `physio_metrics.pace_zones` 必須優先沿用 `deterministic_context.physio_metrics.pace_zones`，固定輸出 zones 1-5，依 zone 遞增排序。
+   - `hr_zone_distribution.zones` 必須優先沿用 `deterministic_context.hr_zone_distribution.zones`，固定輸出 zones 1-5，依 zone 遞增排序。
    - `hr_zone_distribution.zones[].percentage` 加總必須接近 100，允許四捨五入誤差 ±1。
    - `coaching_summary.top_3_insights` 必須剛好 3 筆。
    - `coaching_summary.top_3_actions` 必須剛好 3 筆。
@@ -122,7 +138,7 @@
         "hr_min": number,
         "hr_max": number,
         "is_reasonable": true,
-        "note": "string"
+        "note": "string"        // 若 Z5 是開放端，沿用 deterministic_context 的 note，避免在文字上暗示跑者要跑到 00:00 配速。
       }
       // zones 1-5
     ]

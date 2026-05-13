@@ -60,10 +60,13 @@ class CoachTests(unittest.TestCase):
                 data=[{"activity_id": 1}],
                 user_data={"max_heart_rate": 190},
                 goal_path=str(goal_path),
+                deterministic_context={"meta": {"today": "2026-05-10"}},
             )
 
         self.assertIn("sub-20 5k", context)
         self.assertIn('"max_heart_rate": 190', context)
+        self.assertIn("Deterministic Coach Context", context)
+        self.assertIn('"today": "2026-05-10"', context)
         self.assertIn('"activity_id": 1', context)
 
     def test_coach_normalizes_json_wrapped_in_markdown_fences(self):
@@ -78,6 +81,22 @@ class CoachTests(unittest.TestCase):
             report = coach.coach(data=[{"activity_id": 1}])
 
         self.assertEqual(report, {"headline": "wrapped report"})
+
+    def test_coach_passes_deterministic_context_into_prompt(self):
+        generate_content = Mock(return_value=types.SimpleNamespace(text='{"headline": "report"}'))
+        fake_client = types.SimpleNamespace(models=types.SimpleNamespace(generate_content=generate_content))
+
+        with patch.object(coach, "client", fake_client), patch.object(
+            coach, "MODEL_FALLBACKS", ("model-a",)
+        ):
+            coach.coach(
+                data=[{"activity_id": 1}],
+                deterministic_context={"meta": {"today": "2026-05-10"}},
+            )
+
+        prompt = generate_content.call_args.kwargs["contents"]
+        self.assertIn("Deterministic Coach Context", prompt)
+        self.assertIn('"today": "2026-05-10"', prompt)
 
     def test_run_local_analysis_reads_user_json_and_writes_report(self):
         with tempfile.TemporaryDirectory() as temp_dir:

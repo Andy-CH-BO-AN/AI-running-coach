@@ -133,10 +133,37 @@ python run_pipeline.py \
 - `data/raw/garmin_raw_YYYYMMDD.json`
 - `data/raw/garmin_user_YYYYMMDD.json`
 - `data/processed/processed_YYYYMMDD.csv`
+- `data/processed/coach_context_YYYYMMDD.json`
 - `output/ai_report_YYYYMMDD.json`
 
-其中 JSON 報告是 dashboard 的資料來源；CSV 則是處理後資料備
-份，方便除錯、QA、以及後續分析。
+其中 JSON 報告是 dashboard 的資料來源；CSV 則是處理後活動資
+料備份。`coach_context_YYYYMMDD.json` 是送給 Gemini 前由本機
+程式端 deterministic 計算好的教練上下文，方便除錯、QA、以及
+後續分析。
+
+### 程式端先算好的資料
+
+pipeline 會先從 raw/user/processed 資料建立
+`data/processed/coach_context_YYYYMMDD.json`，再把它交給 Gemini。
+這些欄位不依賴 Gemini 判斷：
+
+- 近 4 週 Monday-based week bucket、每週 sessions 清單、週總距
+  離、週總時間、週訓練負荷與資料品質狀態。
+- 每次活動的距離、時間、training load、平均心率、平均配速、
+  aerobic/anaerobic training effect、分圈 segments 與高溫環境
+  seed。
+- 4 週心率 Z1-Z5 minutes/percentage，以及是否偏極化的 seed。
+- VO2max、最大/靜息心率、乳酸閾值心率/配速與 pace zone seed。
+- 跑姿平均值：cadence、ground contact、vertical oscillation、
+  stride length 與 running economy score seed。
+- swimming/cycling 交叉訓練摘要、目前 weekly TSS load seed、下
+  週 7 天日期與可訓練日/長跑偏好。
+- 可被 Gemini 寫入 `evidence_links` 的 deterministic facts，例
+  如本週負荷、Z4-Z5 佔比與風險 flag。
+
+Gemini 主要負責把這些事實轉成教練判讀：狀態標籤、風險解釋、
+賽事準備度、下週訓練安排、週期化與可追溯 evidence 文案。日期、
+加總與百分比這類 deterministic numbers 由本機程式端負責。
 
 ### 開啟本機 Dashboard
 
@@ -276,6 +303,8 @@ src/ingestion/garmin_client.py
     ↓
 src/preprocessing/data_processor.py
     ↓
+src/preprocessing/coach_context.py
+    ↓
 src/agents/coach.py
     ↓
 output/ai_report_YYYYMMDD.json
@@ -292,6 +321,9 @@ output/ai_report_YYYYMMDD.json
   間與功率區間。
 - `src/preprocessing/data_processor.py`: 計算配速/速度、格式化指
   標、整理進階活動資料，並產生效率摘要。
+- `src/preprocessing/coach_context.py`: 從 processed/raw/user 資
+  料建立 deterministic coach context，包含週級 derived metrics、
+  心率區間、跑姿、生理 profile seed 與下週日期 seed。
 - `src/agents/coach.py`: 組合 Gemini prompt context，並支援本
   機分析報告輸出。
 - `src/dashboard/server.py`: 服務本機 dashboard 與
@@ -334,6 +366,7 @@ python3 -m pytest -q \
   tests/test_garmin_client_details.py \
   tests/test_runner.py \
   tests/test_coach.py \
+  tests/test_coach_context.py \
   tests/test_dashboard_adapter.py \
   tests/test_dashboard_server.py
 ```
@@ -351,6 +384,9 @@ python3 -m pytest -q \
   JSON report 的輸出流程。
 - `tests/test_coach.py`: 測試教練 prompt context 組裝，以及本機
   分析模式會讀取 user JSON 並寫出 JSON report。
+- `tests/test_coach_context.py`: 測試 deterministic coach context
+  的週一 bucket、derived weekly metrics、缺資料標示、心率區間
+  百分比、Z5 開放端配速 seed，以及下週日期/可訓練日 seed。
 - `tests/test_dashboard_adapter.py`: 測試 dashboard adapter 的週級
   derived metrics、課表日期修正、依據連結、中文標籤、風險標籤、
   interval 分段展開，以及開放端配速顯示。
