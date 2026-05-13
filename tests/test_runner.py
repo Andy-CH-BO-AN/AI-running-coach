@@ -244,7 +244,7 @@ class RunnerTests(unittest.TestCase):
             processed_dir = base / "processed"
             output_dir = base / "output"
             raw_activities = [{"activity_id": 1, "type": "running", "distance": 10.0, "duration": 50.0}]
-            processed_data = [{"activity_id": 1, "performance_formatted": "5:00 /km"}]
+            processed_data = [{"activity_id": 1, "type": "running", "date": "2026-05-10", "distance_km": 10, "performance_formatted": "5:00 /km"}]
             report_payload = {"headline": "report"}
 
             with patch.object(runner, "PROCESSED_DATA_DIR", processed_dir
@@ -256,12 +256,19 @@ class RunnerTests(unittest.TestCase):
                 return_value=(raw_activities, {"max_heart_rate": 190}),
             ), patch.object(runner, "preprocess_data", return_value=processed_data), patch.object(
                 runner, "coach", return_value=report_payload
-            ):
+            ) as coach_mock:
                 report = runner.run_pipeline()
 
             self.assertEqual(report, str(output_dir / "ai_report_20260510.json"))
             self.assertTrue((processed_dir / "processed_20260510.csv").exists())
+            self.assertTrue((processed_dir / "coach_context_20260510.json").exists())
             self.assertTrue((output_dir / "ai_report_20260510.json").exists())
+            _, coach_kwargs = coach_mock.call_args
+            self.assertEqual(coach_kwargs["deterministic_context"]["meta"]["today"], "2026-05-10")
+            self.assertEqual(
+                coach_kwargs["deterministic_context"]["weekly_analysis"][0]["week_start"],
+                "2026-05-04",
+            )
             self.assertEqual(
                 json.loads((output_dir / "ai_report_20260510.json").read_text(encoding="utf-8")),
                 report_payload,
@@ -301,6 +308,7 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("* 目標成績：5K 20:00", kwargs["goal_text"])
         self.assertIn("* default preference", kwargs["goal_text"])
         self.assertEqual(kwargs["goal_path"], str(goal_path))
+        self.assertIn("deterministic_context", kwargs)
 
     def test_fetch_without_db_persists_raw_artifacts(self):
         with tempfile.TemporaryDirectory() as temp_dir:

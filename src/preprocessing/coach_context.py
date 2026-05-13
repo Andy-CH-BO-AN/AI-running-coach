@@ -1,0 +1,791 @@
+from __future__ import annotations
+
+import math
+from datetime import date, datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Any, Dict, Iterable, List, Optional, Sequence
+
+WEEKDAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+WEEKDAY_ALIASES = {
+    "MONDAY": "Mon",
+    "TUESDAY": "Tue",
+    "WEDNESDAY": "Wed",
+    "THURSDAY": "Thu",
+    "FRIDAY": "Fri",
+    "SATURDAY": "Sat",
+    "SUNDAY": "Sun",
+    "MON": "Mon",
+    "TUE": "Tue",
+    "WED": "Wed",
+    "THU": "Thu",
+    "FRI": "Fri",
+    "SAT": "Sat",
+    "SUN": "Sun",
+}
+ZONE_RANGE = range(1, 6)
+ZONE_NAMES = {
+    1: "Z1 恢復",
+    2: "Z2 有氧",
+    3: "Z3 節奏",
+    4: "Z4 閾值",
+    5: "Z5 高強度",
+}
+PACE_ZONE_NAMES = {
+    1: "恢復跑",
+    2: "輕鬆有氧",
+    3: "穩態/馬拉松配速",
+    4: "乳酸閾值",
+    5: "間歇/速度",
+}
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(number) or math.isinf(number):
+        return None
+    return number
+
+
+def _round_or_none(value: Any, digits: int = 1) -> Optional[float]:
+    number = _safe_float(value)
+    if number is None:
+        return None
+    quantizer = Decimal("1") if digits == 0 else Decimal(f"1e-{digits}")
+    rounded = Decimal(str(number)).quantize(quantizer, rounding=ROUND_HALF_UP)
+    return int(rounded) if digits == 0 else float(rounded)
+
+
+def _nested_get(payload: Dict[str, Any], path: Sequence[str]) -> Any:
+    current: Any = payload
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _get_any(payload: Dict[str, Any], *paths: str) -> Any:
+    for path in paths:
+        if path in payload:
+            return payload[path]
+        value = _nested_get(payload, path.split("."))
+        if value is not None:
+            return value
+    return None
+
+
+def _parse_date(value: Any) -> Optional[date]:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if not isinstance(value, str) or not value:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(value[:10] if fmt == "%Y-%m-%d" else value, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _resolve_today(today: Any, activities: Sequence[Dict[str, Any]]) -> date:
+    parsed_today = _parse_date(today)
+    if parsed_today:
+        return parsed_today
+
+    activity_dates = [
+        parsed_date
+        for parsed_date in (_parse_date(activity.get("date")) for activity in activities)
+        if parsed_date is not None
+    ]
+    if activity_dates:
+        return max(activity_dates)
+    return date.today()
+
+
+def _week_start_for(day: date) -> date:
+    return day - timedelta(days=day.weekday())
+
+
+def _format_week_label(week_start: date) -> str:
+    week_end = week_start + timedelta(days=6)
+    return f"{week_start.strftime('%m/%d')}-{week_end.strftime('%m/%d')}"
+
+
+def _normalize_activity_id(value: Any) -> str:
+    return "" if value is None else str(value)
+
+
+def _build_raw_lookup(raw_activities: Optional[Sequence[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+    lookup: Dict[str, Dict[str, Any]] = {}
+    for activity in raw_activities or []:
+        lookup[_normalize_activity_id(activity.get("activity_id"))] = activity
+    return lookup
+
+
+def _format_pace_minutes(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped or stripped.upper() == "N/A":
+            return None
+        return stripped.replace(" /km", "").replace("/km", "").replace(" /100m", "").replace("/100m", "")
+
+    pace = _safe_float(value)
+    if pace is None or pace <= 0:
+        return None
+    total_seconds = int(round(pace * 60))
+    minutes, seconds = divmod(total_seconds, 60)
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def _parse_pace_seconds(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        pace = _safe_float(value)
+        return int(round(pace * 60)) if pace and pace > 0 else None
+
+    text = str(value).strip().replace(" /km", "").replace("/km", "")
+    if not text:
+        return None
+    pieces = text.split(":")
+    try:
+        if len(pieces) == 2:
+            return int(pieces[0]) * 60 + int(round(float(pieces[1])))
+        if len(pieces) == 3:
+            return int(pieces[0]) * 3600 + int(pieces[1]) * 60 + int(round(float(pieces[2])))
+    except ValueError:
+        return None
+    return None
+
+
+def _format_pace_seconds(seconds: Optional[int]) -> Optional[str]:
+    if seconds is None or seconds <= 0:
+        return None
+    minutes, remaining_seconds = divmod(int(round(seconds)), 60)
+    return f"{minutes:02d}:{remaining_seconds:02d}"
+
+
+def _normalize_weekday(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    return WEEKDAY_ALIASES.get(value.strip().upper())
+
+
+def _average(values: Iterable[Any], digits: int = 1) -> Optional[float]:
+    numbers = [number for number in (_safe_float(value) for value in values) if number is not None]
+    if not numbers:
+        return None
+    return _round_or_none(sum(numbers) / len(numbers), digits)
+
+
+def _sum_numbers(values: Iterable[Any], digits: int = 1) -> float:
+    total = sum(number for number in (_safe_float(value) for value in values) if number is not None)
+    return _round_or_none(total, digits) or 0.0
+
+
+def _activity_type(processed: Dict[str, Any], raw: Dict[str, Any]) -> str:
+    return str(processed.get("type") or raw.get("type") or "").lower()
+
+
+def _session_type(processed: Dict[str, Any], raw: Dict[str, Any], max_hr: Optional[float]) -> str:
+    activity_type = _activity_type(processed, raw)
+    if activity_type in {"swimming", "lap_swimming"}:
+        return "swim"
+    if activity_type == "cycling":
+        return "bike"
+    if activity_type != "running":
+        return "easy"
+
+    distance_km = _safe_float(processed.get("distance_km")) or _safe_float(raw.get("distance")) or 0.0
+    duration_min = _safe_float(raw.get("duration")) or _duration_from_splits(processed.get("splits")) or 0.0
+    avg_hr = _safe_float(processed.get("avg_hr")) or _safe_float(raw.get("average_heart_rate"))
+    avg_pace = _safe_float(processed.get("performance_value")) or _safe_float(raw.get("average_pace"))
+
+    if distance_km >= 12 or duration_min >= 75:
+        return "long"
+    if max_hr and avg_hr and avg_hr >= max_hr * 0.88:
+        return "interval" if duration_min <= 25 or distance_km <= 5 else "tempo"
+    if avg_pace and duration_min <= 20 and (distance_km <= 1.5 or (max_hr and avg_hr and avg_hr >= max_hr * 0.82)):
+        return "interval"
+    return "easy"
+
+
+def _duration_from_splits(splits: Any) -> Optional[float]:
+    if not isinstance(splits, list):
+        return None
+    duration = _sum_numbers((split.get("duration") for split in splits if isinstance(split, dict)), digits=2)
+    return duration if duration > 0 else None
+
+
+def _training_load(processed: Dict[str, Any], raw: Dict[str, Any]) -> Optional[float]:
+    return _round_or_none(
+        _get_any(
+            processed,
+            "advanced_metrics.training_load",
+            "advanced_metrics.training_stress_score",
+            "training_load",
+        )
+        or _get_any(raw.get("raw_data") or {}, "training_stress_score"),
+        1,
+    )
+
+
+def _training_effect(processed: Dict[str, Any], metric: str) -> Optional[float]:
+    return _round_or_none(
+        _get_any(
+            processed,
+            f"advanced_metrics.training_effect.{metric}",
+            f"advanced_metrics.training_effect.{metric}",
+        ),
+        1,
+    )
+
+
+def _segment_from_split(split: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "segment_type": "lap",
+        "split_index": split.get("split_index"),
+        "distance_km": _round_or_none(split.get("distance"), 3),
+        "duration_min": _round_or_none(split.get("duration"), 2),
+        "avg_pace": _format_pace_minutes(split.get("pace")),
+        "avg_hr": _round_or_none(split.get("average_heart_rate"), 0),
+        "cadence": _round_or_none(split.get("avg_cadence"), 1),
+        "temperature_c": _round_or_none(split.get("temperature"), 1),
+        "note": None,
+    }
+
+
+def _build_segments(processed: Dict[str, Any]) -> List[Dict[str, Any]]:
+    splits = processed.get("splits")
+    if not isinstance(splits, list):
+        return []
+    return [_segment_from_split(split) for split in splits if isinstance(split, dict)]
+
+
+def _temperature_values(processed: Dict[str, Any], raw: Dict[str, Any]) -> List[float]:
+    values: List[float] = []
+    raw_temp = _safe_float((raw.get("raw_data") or {}).get("temperature"))
+    if raw_temp is not None:
+        values.append(raw_temp)
+    splits = processed.get("splits")
+    if isinstance(splits, list):
+        values.extend(
+            temp
+            for temp in (_safe_float(split.get("temperature")) for split in splits if isinstance(split, dict))
+            if temp is not None
+        )
+    return values
+
+
+def _build_environment(processed: Dict[str, Any], raw: Dict[str, Any]) -> Dict[str, Any]:
+    temp = _average(_temperature_values(processed, raw), digits=1)
+    humidity = _round_or_none((raw.get("raw_data") or {}).get("humidity"), 0)
+    hr_impact = None
+    if temp is not None and temp >= 27:
+        hr_impact = f"{temp:g}°C 高溫環境，心率可能較涼爽條件偏高。"
+    return {
+        "estimated_temp_c": temp,
+        "humidity_pct": humidity,
+        "hr_impact": hr_impact,
+    }
+
+
+def _build_session(
+    processed: Dict[str, Any],
+    raw_lookup: Dict[str, Dict[str, Any]],
+    max_hr: Optional[float],
+) -> Dict[str, Any]:
+    activity_id = processed.get("activity_id")
+    raw = raw_lookup.get(_normalize_activity_id(activity_id), {})
+
+    distance = _round_or_none(processed.get("distance_km") if "distance_km" in processed else raw.get("distance"), 2)
+    duration = _round_or_none(raw.get("duration") or _duration_from_splits(processed.get("splits")), 1)
+    load = _training_load(processed, raw)
+    avg_hr = _round_or_none(processed.get("avg_hr") or raw.get("average_heart_rate"), 0)
+    avg_pace = _format_pace_minutes(processed.get("performance_formatted") or processed.get("performance_value") or raw.get("average_pace"))
+    missing_fields = [
+        field_name
+        for field_name, value in (
+            ("distance_km", distance),
+            ("duration_min", duration),
+            ("training_load", load),
+        )
+        if value is None
+    ]
+
+    session_type = _session_type(processed, raw, max_hr)
+    segments = _build_segments(processed)
+
+    return {
+        "activity_id": activity_id,
+        "date": processed.get("date") or raw.get("date"),
+        "type": session_type,
+        "source_activity_type": _activity_type(processed, raw) or None,
+        "distance_km": distance if distance is not None else 0,
+        "duration_min": duration if duration is not None else 0,
+        "training_load": load if load is not None else 0,
+        "avg_hr": avg_hr,
+        "avg_pace": avg_pace,
+        "training_effect_aerobic": _training_effect(processed, "aerobic"),
+        "training_effect_anaerobic": _training_effect(processed, "anaerobic"),
+        "segments": segments,
+        "environment": _build_environment(processed, raw),
+        "coaching_note": None,
+        "data_quality": {
+            "status": "partial" if missing_fields else "complete",
+            "missing_fields": missing_fields,
+        },
+    }
+
+
+def _build_hr_zone_distribution(sessions: Sequence[Dict[str, Any]], processed_by_id: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    minutes_by_zone: Dict[int, float] = {zone: 0.0 for zone in ZONE_RANGE}
+    for session in sessions:
+        processed = processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
+        for zone in ZONE_RANGE:
+            zone_seconds = _safe_float(
+                _get_any(
+                    processed,
+                    f"advanced_metrics.hr_zones.hr_zone_{zone}",
+                    f"advanced_metrics.hr_zones.hr_zone_{zone}",
+                )
+            )
+            minutes_by_zone[zone] += (zone_seconds or 0.0) / 60
+
+    total_minutes = sum(minutes_by_zone.values())
+    percentages = {
+        zone: _round_or_none(minutes / total_minutes * 100, 1) if total_minutes > 0 else 0.0
+        for zone, minutes in minutes_by_zone.items()
+    }
+    if total_minutes > 0:
+        rounding_delta = _round_or_none(100.0 - sum(percentages.values()), 1)
+        if rounding_delta:
+            largest_zone = max(minutes_by_zone, key=minutes_by_zone.get)
+            percentages[largest_zone] = _round_or_none(percentages[largest_zone] + rounding_delta, 1) or 0.0
+
+    easy_pct = percentages[1] + percentages[2]
+    hard_pct = percentages[4] + percentages[5]
+    return {
+        "period_weeks": 4,
+        "zones": [
+            {
+                "zone": zone,
+                "name": ZONE_NAMES[zone],
+                "minutes": _round_or_none(minutes_by_zone[zone], 1) or 0.0,
+                "percentage": percentages[zone],
+            }
+            for zone in ZONE_RANGE
+        ],
+        "total_minutes": _round_or_none(total_minutes, 1) or 0.0,
+        "is_polarized": easy_pct >= 75 and hard_pct <= 20 if total_minutes > 0 else False,
+    }
+
+
+def _build_pace_zones(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    threshold_seconds = _parse_pace_seconds(user_data.get("lactate_threshold_pace"))
+    max_hr = _safe_float(user_data.get("max_heart_rate"))
+    resting_hr = _safe_float(user_data.get("resting_heart_rate"))
+    hrr = max_hr - resting_hr if max_hr and resting_hr and max_hr > resting_hr else None
+
+    pace_offsets = {
+        1: (135, 90),
+        2: (90, 45),
+        3: (45, 10),
+        4: (10, -20),
+        5: (-20, None),
+    }
+    hrr_ranges = {
+        1: (0.60, 0.70),
+        2: (0.70, 0.80),
+        3: (0.80, 0.87),
+        4: (0.87, 0.94),
+        5: (0.94, 1.00),
+    }
+
+    zones: List[Dict[str, Any]] = []
+    for zone in ZONE_RANGE:
+        slow_offset, fast_offset = pace_offsets[zone]
+        pace_min = _format_pace_seconds(threshold_seconds + slow_offset) if threshold_seconds else None
+        pace_max = _format_pace_seconds(threshold_seconds + fast_offset) if threshold_seconds and fast_offset is not None else None
+        hr_min = hr_max = None
+        if hrr is not None and resting_hr is not None:
+            hr_min = _round_or_none(resting_hr + hrr * hrr_ranges[zone][0], 0)
+            hr_max = _round_or_none(resting_hr + hrr * hrr_ranges[zone][1], 0)
+        zones.append(
+            {
+                "zone": zone,
+                "name": PACE_ZONE_NAMES[zone],
+                "pace_min": pace_min,
+                "pace_max": pace_max,
+                "hr_min": hr_min,
+                "hr_max": hr_max,
+                "is_reasonable": threshold_seconds is not None,
+                "note": "快端無上限，畫面應以「快於」呈現。" if zone == 5 else None,
+            }
+        )
+    return zones
+
+
+def _build_physio_metrics(user_data: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "vo2max": {
+            "value": _round_or_none(user_data.get("vo2max_running") or user_data.get("vo2max"), 1),
+            "unit": "ml/kg/min",
+        },
+        "lactate_threshold": {
+            "heart_rate": {
+                "value": _round_or_none(user_data.get("lactate_threshold_heart_rate"), 0),
+                "unit": "bpm",
+            },
+            "pace": {
+                "value": _format_pace_minutes(user_data.get("lactate_threshold_pace")),
+                "unit": "/km",
+            },
+        },
+        "max_heart_rate": {"value": _round_or_none(user_data.get("max_heart_rate"), 0), "unit": "bpm"},
+        "resting_heart_rate": {
+            "value": _round_or_none(user_data.get("resting_heart_rate"), 0),
+            "unit": "bpm",
+        },
+        "pace_zones": _build_pace_zones(user_data),
+    }
+
+
+def _build_running_mechanics(sessions: Sequence[Dict[str, Any]], processed_by_id: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    running_records = [
+        processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
+        for session in sessions
+        if session.get("source_activity_type") == "running"
+    ]
+
+    cadence = _average((_get_any(record, "advanced_metrics.avg_cadence") for record in running_records), 1)
+    ground_contact = _average((_get_any(record, "advanced_metrics.ground_contact_time") for record in running_records), 1)
+    vertical_oscillation = _average((_get_any(record, "advanced_metrics.vertical_oscillation") for record in running_records), 1)
+    stride_length_cm = _average((_get_any(record, "advanced_metrics.stride_length") for record in running_records), 1)
+    stride_length_m = _round_or_none(stride_length_cm / 100, 2) if stride_length_cm is not None and stride_length_cm > 10 else stride_length_cm
+
+    score_inputs = [value for value in (cadence, ground_contact, vertical_oscillation, stride_length_m) if value is not None]
+    economy_score = None
+    if score_inputs:
+        score = 75
+        if cadence is not None:
+            score += 8 if 170 <= cadence <= 185 else -6
+        if ground_contact is not None:
+            score += 7 if ground_contact <= 260 else -6
+        if vertical_oscillation is not None:
+            score += 5 if vertical_oscillation <= 8.5 else -4
+        economy_score = max(0, min(100, _round_or_none(score, 0) or 0))
+
+    return {
+        "cadence_avg": {"value": cadence, "unit": "spm"},
+        "ground_contact_ms": {"value": ground_contact, "unit": "ms"},
+        "vertical_oscillation_cm": {"value": vertical_oscillation, "unit": "cm"},
+        "stride_length_m": {"value": stride_length_m, "unit": "m"},
+        "running_economy_score": economy_score,
+    }
+
+
+def _build_cross_training(sessions: Sequence[Dict[str, Any]], processed_by_id: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    swim_records = [
+        processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
+        for session in sessions
+        if session.get("type") == "swim"
+    ]
+    bike_records = [
+        processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
+        for session in sessions
+        if session.get("type") == "bike"
+    ]
+    return {
+        "swimming": {
+            "sessions_count": len(swim_records),
+            "avg_swolf": _average((_get_any(record, "advanced_metrics.avg_swolf") for record in swim_records), 1),
+            "avg_stroke_rate": _average((_get_any(record, "advanced_metrics.avg_stroke_cadence") for record in swim_records), 1),
+        },
+        "cycling": {
+            "sessions_count": len(bike_records),
+            "avg_power_w": _average((_get_any(record, "advanced_metrics.power_avg") for record in bike_records), 0),
+            "avg_cadence": _average((_get_any(record, "advanced_metrics.avg_cadence") for record in bike_records), 1),
+        },
+    }
+
+
+def _risk_flags_for_week(week: Dict[str, Any], max_hr: Optional[float], baseline_load: Optional[float]) -> List[str]:
+    flags = set()
+    sessions = week["sessions"]
+    running_distance = sum(session["distance_km"] for session in sessions if session.get("source_activity_type") == "running")
+    if running_distance < 8 and sessions:
+        flags.add("low_running_volume")
+
+    for session in sessions:
+        temp = _safe_float((session.get("environment") or {}).get("estimated_temp_c"))
+        if temp is not None and temp >= 27:
+            flags.add("heat_stress")
+        avg_hr = _safe_float(session.get("avg_hr"))
+        if session.get("type") == "long" and max_hr and avg_hr and avg_hr >= max_hr * 0.86:
+            flags.add("high_intensity_long_run")
+
+    load = _safe_float(week.get("derived_training_load")) or 0.0
+    if baseline_load and load > baseline_load * 1.35 and load >= 80:
+        flags.add("overreaching_risk")
+    if "high_intensity_long_run" in flags or "overreaching_risk" in flags:
+        flags.add("fatigue_risk")
+    return sorted(flags)
+
+
+def _build_weekly_analysis(
+    sessions: Sequence[Dict[str, Any]],
+    today: date,
+    max_hr: Optional[float],
+) -> List[Dict[str, Any]]:
+    current_week_start = _week_start_for(today)
+    buckets: List[Dict[str, Any]] = []
+    for offset in range(4):
+        week_start = current_week_start - timedelta(days=offset * 7)
+        week_end = week_start + timedelta(days=6)
+        week_sessions = [
+            session
+            for session in sessions
+            if (session_date := _parse_date(session.get("date"))) is not None
+            and week_start <= session_date <= week_end
+        ]
+        week_sessions.sort(key=lambda session: (session.get("date") or "", str(session.get("activity_id") or "")))
+        missing_fields = sorted(
+            {
+                field
+                for session in week_sessions
+                for field in (session.get("data_quality") or {}).get("missing_fields", [])
+            }
+        )
+        derived = {
+            "derived_total_distance_km": _round_or_none(sum(session["distance_km"] for session in week_sessions), 2) or 0.0,
+            "derived_total_duration_min": _round_or_none(sum(session["duration_min"] for session in week_sessions), 1) or 0.0,
+            "derived_training_load": _round_or_none(sum(session["training_load"] for session in week_sessions), 1) or 0.0,
+        }
+        buckets.append(
+            {
+                "week_label": _format_week_label(week_start),
+                "week_start": week_start.isoformat(),
+                "week_end": week_end.isoformat(),
+                **derived,
+                "sessions": week_sessions,
+                "data_quality": {
+                    "status": "empty" if not week_sessions else "partial" if missing_fields else "complete",
+                    "message": "無訓練紀錄"
+                    if not week_sessions
+                    else "部分資料不足"
+                    if missing_fields
+                    else "完整",
+                    "missing_fields": missing_fields,
+                },
+                "risk_flags": [],
+            }
+        )
+
+    nonzero_loads = [week["derived_training_load"] for week in buckets[1:] if week["derived_training_load"] > 0]
+    baseline_load = sum(nonzero_loads) / len(nonzero_loads) if nonzero_loads else None
+    for week in buckets:
+        week["risk_flags"] = _risk_flags_for_week(week, max_hr=max_hr, baseline_load=baseline_load)
+    return buckets
+
+
+def _build_load_assessment(weekly_analysis: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    current_load = weekly_analysis[0]["derived_training_load"] if weekly_analysis else 0.0
+    previous_loads = [week["derived_training_load"] for week in weekly_analysis[1:] if week["derived_training_load"] > 0]
+    average_previous = sum(previous_loads) / len(previous_loads) if previous_loads else current_load
+    lower = _round_or_none(average_previous * 0.8, 1) if average_previous else 0.0
+    upper = _round_or_none(average_previous * 1.3, 1) if average_previous else 0.0
+
+    if current_load == 0:
+        status = "undertraining"
+    elif upper and current_load > upper * 1.2:
+        status = "overtraining"
+    elif upper and current_load > upper:
+        status = "overreaching"
+    elif lower and current_load < lower:
+        status = "undertraining"
+    else:
+        status = "optimal"
+
+    return {
+        "current_tss_weekly": _round_or_none(current_load, 1) or 0.0,
+        "optimal_tss_range": {"min": lower, "max": upper},
+        "status": status,
+        "baseline_previous_3_weeks": _round_or_none(average_previous, 1) if average_previous else 0.0,
+    }
+
+
+def _build_next_week_seed(today: date, user_data: Dict[str, Any]) -> Dict[str, Any]:
+    next_week_start = _week_start_for(today) + timedelta(days=7)
+    available_days = {
+        normalized
+        for normalized in (_normalize_weekday(day) for day in user_data.get("available_training_days") or [])
+        if normalized
+    }
+    long_days = {
+        normalized
+        for normalized in (_normalize_weekday(day) for day in user_data.get("preferred_long_training_days") or [])
+        if normalized
+    }
+    days: List[Dict[str, Any]] = []
+    for offset, weekday in enumerate(WEEKDAY_LABELS):
+        day = next_week_start + timedelta(days=offset)
+        days.append(
+            {
+                "date": day.isoformat(),
+                "day_of_week": weekday,
+                "available_for_training": not available_days or weekday in available_days,
+                "preferred_long_run_day": weekday in long_days,
+            }
+        )
+    return {"week_start": next_week_start.isoformat(), "days": days}
+
+
+def _build_pb_validation_seed(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    personal_records = user_data.get("pr_running") or {}
+    if not isinstance(personal_records, dict):
+        return []
+    return [
+        {
+            "event": event,
+            "raw_value": value,
+            "source_path": f"user_data.pr_running.{event}",
+        }
+        for event, value in personal_records.items()
+    ]
+
+
+def _build_evidence_facts(
+    weekly_analysis: Sequence[Dict[str, Any]],
+    hr_zone_distribution: Dict[str, Any],
+    load_assessment: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    facts: List[Dict[str, Any]] = []
+    current_week = weekly_analysis[0] if weekly_analysis else None
+    if current_week:
+        facts.append(
+            {
+                "fact_id": "current_week_load",
+                "label": "本週訓練負荷",
+                "value": current_week["derived_training_load"],
+                "unit": "TSS",
+                "source_path": "deterministic_context.weekly_analysis[0].derived_training_load",
+            }
+        )
+        for flag in current_week.get("risk_flags", []):
+            facts.append(
+                {
+                    "fact_id": flag,
+                    "label": flag,
+                    "value": True,
+                    "unit": None,
+                    "source_path": "deterministic_context.weekly_analysis[0].risk_flags",
+                }
+            )
+
+    zones = hr_zone_distribution.get("zones") or []
+    high_intensity_pct = sum(
+        _safe_float(zone.get("percentage")) or 0
+        for zone in zones
+        if zone.get("zone") in (4, 5)
+    )
+    facts.append(
+        {
+            "fact_id": "high_intensity_percentage",
+            "label": "Z4-Z5 心率時間佔比",
+            "value": _round_or_none(high_intensity_pct, 1) or 0.0,
+            "unit": "%",
+            "source_path": "deterministic_context.hr_zone_distribution.zones",
+        }
+    )
+    facts.append(
+        {
+            "fact_id": "load_status_seed",
+            "label": "訓練負荷狀態 seed",
+            "value": load_assessment.get("status"),
+            "unit": None,
+            "source_path": "deterministic_context.load_assessment.status",
+        }
+    )
+    return facts
+
+
+def build_deterministic_coach_context(
+    processed_data: List[Dict[str, Any]],
+    user_data: Optional[Dict[str, Any]] = None,
+    raw_activities: Optional[List[Dict[str, Any]]] = None,
+    today: Any = None,
+) -> Dict[str, Any]:
+    """Build deterministic coach context from local data before Gemini analysis."""
+
+    user_data = user_data or {}
+    raw_lookup = _build_raw_lookup(raw_activities)
+    resolved_today = _resolve_today(today, processed_data)
+    max_hr = _safe_float(user_data.get("max_heart_rate"))
+
+    sessions = [
+        _build_session(processed, raw_lookup=raw_lookup, max_hr=max_hr)
+        for processed in processed_data
+    ]
+    processed_by_id = {
+        _normalize_activity_id(processed.get("activity_id")): processed
+        for processed in processed_data
+    }
+    weekly_analysis = _build_weekly_analysis(sessions, today=resolved_today, max_hr=max_hr)
+    four_week_sessions = [
+        session
+        for week in weekly_analysis
+        for session in week["sessions"]
+    ]
+    hr_zone_distribution = _build_hr_zone_distribution(four_week_sessions, processed_by_id)
+    load_assessment = _build_load_assessment(weekly_analysis)
+
+    return {
+        "meta": {
+            "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "today": resolved_today.isoformat(),
+            "analysis_period_weeks": 4,
+            "source": "deterministic_coach_context:v1",
+        },
+        "deterministic_fields": [
+            "weekly_analysis[].week_start/week_end",
+            "weekly_analysis[].sessions[]",
+            "weekly_analysis[].derived_total_distance_km",
+            "weekly_analysis[].derived_total_duration_min",
+            "weekly_analysis[].derived_training_load",
+            "hr_zone_distribution.zones[].minutes",
+            "hr_zone_distribution.zones[].percentage",
+            "physio_metrics.pace_zones",
+            "running_mechanics",
+            "load_assessment.current_tss_weekly",
+            "next_week_plan_seed.week_start/days[].date",
+        ],
+        "athlete_profile": {
+            "weight_kg": _round_or_none(user_data.get("weight_kg"), 1),
+            "height_cm": _round_or_none(user_data.get("height_cm"), 1),
+            "available_training_days": user_data.get("available_training_days") or [],
+            "preferred_long_training_days": user_data.get("preferred_long_training_days") or [],
+        },
+        "physio_metrics": _build_physio_metrics(user_data),
+        "pb_validation_seed": _build_pb_validation_seed(user_data),
+        "weekly_analysis": weekly_analysis,
+        "hr_zone_distribution": hr_zone_distribution,
+        "running_mechanics": _build_running_mechanics(four_week_sessions, processed_by_id),
+        "cross_training": _build_cross_training(four_week_sessions, processed_by_id),
+        "load_assessment": load_assessment,
+        "next_week_plan_seed": _build_next_week_seed(resolved_today, user_data),
+        "evidence_facts": _build_evidence_facts(
+            weekly_analysis=weekly_analysis,
+            hr_zone_distribution=hr_zone_distribution,
+            load_assessment=load_assessment,
+        ),
+    }
