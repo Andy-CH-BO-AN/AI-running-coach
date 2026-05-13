@@ -14,7 +14,10 @@ from src.db.repositories import get_recent_max_heart_rate
 from src.db.session import SessionLocal
 from src.ingestion.garmin_client import get_garmin_activities
 from src.pipeline.goal_prompt import GoalPromptOverrides, render_goal_prompt
-from src.preprocessing.coach_context import build_deterministic_coach_context
+from src.preprocessing.coach_context import (
+    build_deterministic_coach_context,
+    enforce_deterministic_report_fields,
+)
 from src.preprocessing.data_processor import preprocess_data
 from src.services.db_importer import import_garmin_raw_file, import_garmin_user_file
 
@@ -246,6 +249,7 @@ def run_pipeline(
         goal_path=str(GOAL_PROMPT_PATH),
         goal_text=goal_text,
     )
+    response = enforce_deterministic_report_fields(response, deterministic_context)
 
     print("💾 Generating structured JSON report...")
     report_path = _persist_pipeline_artifacts(

@@ -269,10 +269,11 @@ class RunnerTests(unittest.TestCase):
                 coach_kwargs["deterministic_context"]["weekly_analysis"][0]["week_start"],
                 "2026-05-04",
             )
-            self.assertEqual(
-                json.loads((output_dir / "ai_report_20260510.json").read_text(encoding="utf-8")),
-                report_payload,
-            )
+            report_body = json.loads((output_dir / "ai_report_20260510.json").read_text(encoding="utf-8"))
+            self.assertEqual(report_body["headline"], "report")
+            self.assertEqual(report_body["meta"]["today"], "2026-05-10")
+            self.assertEqual(report_body["weekly_analysis"][0]["week_start"], "2026-05-04")
+            self.assertEqual(report_body["weekly_analysis"][0]["sessions"][0]["activity_id"], 1)
 
     def test_run_pipeline_passes_rendered_goal_overrides_to_coach(self):
         raw_activities = [{"activity_id": 1, "type": "running", "distance": 10.0, "duration": 50.0}]

@@ -3,7 +3,10 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.preprocessing.coach_context import build_deterministic_coach_context
+from src.preprocessing.coach_context import (
+    build_deterministic_coach_context,
+    enforce_deterministic_report_fields,
+)
 
 
 def _sample_user_data():
@@ -165,6 +168,191 @@ def test_hr_zone_seconds_are_exposed_as_minutes():
     assert zones[0]["percentage"] == 100
 
 
+def test_running_mechanics_use_active_segments_for_cadence_and_stride():
+    processed_data = [
+        {
+            "activity_id": 203,
+            "type": "running",
+            "date": "2026-05-12",
+            "distance_km": 3,
+            "advanced_metrics": {
+                "avg_cadence": 120,
+                "stride_length": 75,
+                "ground_contact_time": 300,
+                "vertical_oscillation": 10,
+                "training_load": 30,
+                "hr_zones": {
+                    "hr_zone_1": 600,
+                    "hr_zone_2": 0,
+                    "hr_zone_3": 0,
+                    "hr_zone_4": 0,
+                    "hr_zone_5": 0,
+                },
+            },
+            "splits": [
+                {
+                    "split_index": 1,
+                    "duration": 5,
+                    "avg_cadence": 176,
+                    "stride_length": 110,
+                    "ground_contact_time": 240,
+                    "vertical_oscillation": 8,
+                },
+                {
+                    "split_index": 2,
+                    "duration": 2,
+                    "avg_cadence": 35,
+                    "stride_length": 55,
+                    "ground_contact_time": 390,
+                    "vertical_oscillation": 13,
+                },
+                {
+                    "split_index": 3,
+                    "duration": 5,
+                    "avg_cadence": 180,
+                    "stride_length": 120,
+                    "ground_contact_time": 230,
+                    "vertical_oscillation": 7,
+                },
+            ],
+        }
+    ]
+
+    context = build_deterministic_coach_context(
+        processed_data=processed_data,
+        user_data=_sample_user_data(),
+        raw_activities=[{"activity_id": 203, "duration": 12}],
+        today="2026-05-14",
+    )
+
+    mechanics = context["running_mechanics"]
+    assert mechanics["cadence_avg"]["value"] == 178
+    assert mechanics["stride_length_m"]["value"] == 1.15
+    assert mechanics["ground_contact_ms"]["value"] == 235
+    assert mechanics["vertical_oscillation_cm"]["value"] == 7.5
+
+
+def test_enforce_updates_stale_mechanics_assessments_when_values_change():
+    processed_data = [
+        {
+            "activity_id": 204,
+            "type": "running",
+            "date": "2026-05-12",
+            "distance_km": 3,
+            "advanced_metrics": {"training_load": 30},
+            "splits": [
+                {
+                    "duration": 5,
+                    "avg_cadence": 176,
+                    "stride_length": 110,
+                    "ground_contact_time": 240,
+                    "vertical_oscillation": 8,
+                }
+            ],
+        }
+    ]
+    context = build_deterministic_coach_context(
+        processed_data=processed_data,
+        user_data=_sample_user_data(),
+        raw_activities=[{"activity_id": 204, "duration": 5}],
+        today="2026-05-14",
+    )
+    ai_report = {
+        "meta": {"today": "2026-05-14"},
+        "weekly_analysis": [],
+        "running_mechanics": {
+            "cadence_avg": {"value": 90, "unit": "spm", "assessment": "極低"},
+            "stride_length_m": {"value": 0.4, "unit": "m", "assessment": "偏短"},
+            "running_economy_score": 10,
+            "improvement_tips": ["把步頻提升到 170+ spm"],
+        },
+    }
+
+    report = enforce_deterministic_report_fields(ai_report, context)
+    mechanics = report["running_mechanics"]
+
+    assert mechanics["cadence_avg"]["value"] == 176
+    assert mechanics["cadence_avg"]["assessment"] == "有效跑步段步頻落在合理範圍，休息段已排除。"
+    assert mechanics["stride_length_m"]["value"] == 1.1
+    assert mechanics["stride_length_m"]["assessment"] == "有效跑步段步幅合理，可隨速度課逐步提升推進效率。"
+    assert mechanics["improvement_tips"] == [
+        "維持目前有效跑步段步頻與步幅，優先把品質穩定複製到節奏跑與間歇主課表。"
+    ]
+
+
+def test_enforce_repoints_evidence_source_paths_by_activity_id():
+    processed_data = [
+        {
+            "activity_id": 205,
+            "type": "running",
+            "date": "2026-05-12",
+            "distance_km": 5,
+            "performance_formatted": "06:00 /km",
+            "avg_hr": 150,
+            "advanced_metrics": {"training_load": 30},
+            "splits": [{"duration": 6, "distance": 1, "avg_cadence": 172}],
+        },
+        {
+            "activity_id": 206,
+            "type": "running",
+            "date": "2026-05-12",
+            "distance_km": 0.4,
+            "performance_formatted": "03:20 /km",
+            "avg_hr": 145,
+            "advanced_metrics": {"training_load": 10},
+            "splits": [{"duration": 0.5, "distance": 0.1, "avg_cadence": 150}],
+        },
+    ]
+    context = build_deterministic_coach_context(
+        processed_data=processed_data,
+        user_data=_sample_user_data(),
+        raw_activities=[
+            {"activity_id": 205, "duration": 30},
+            {"activity_id": 206, "duration": 3},
+        ],
+        today="2026-05-14",
+    )
+    ai_report = {
+        "meta": {"today": "2026-05-14"},
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {"activity_id": 206, "date": "2026-05-12", "type": "interval"},
+                    {"activity_id": 205, "date": "2026-05-12", "type": "easy"},
+                ],
+            }
+        ],
+        "evidence_links": [
+            {
+                "supporting_sessions": [
+                    {
+                        "activity_id": 205,
+                        "date": "2026-05-12",
+                        "type": "easy",
+                        "distance_km": 5,
+                        "duration_min": 30,
+                        "avg_hr": 150,
+                        "avg_pace": "06:00",
+                        "source_path": "weekly_analysis[0].sessions[1]",
+                        "reason": "保留原因",
+                    }
+                ]
+            }
+        ],
+    }
+
+    report = enforce_deterministic_report_fields(ai_report, context)
+    supporting_session = report["evidence_links"][0]["supporting_sessions"][0]
+
+    assert [session["activity_id"] for session in report["weekly_analysis"][0]["sessions"]] == [205, 206]
+    assert supporting_session["activity_id"] == 205
+    assert supporting_session["source_path"] == "weekly_analysis[0].sessions[0]"
+    assert supporting_session["distance_km"] == 5
+    assert supporting_session["avg_pace"] == "06:00"
+    assert supporting_session["reason"] == "保留原因"
+
+
 def test_physio_seed_preserves_runner_pace_format_and_open_ended_z5():
     context = build_deterministic_coach_context(
         processed_data=[],
@@ -197,3 +385,119 @@ def test_next_week_seed_uses_training_preferences_without_ai():
         "preferred_long_run_day": False,
     }
     assert next_week["days"][6]["preferred_long_run_day"] is True
+
+
+def test_enforce_deterministic_report_fields_restores_pruned_sessions_and_metrics():
+    processed_data = [
+        {
+            "activity_id": 301,
+            "type": "running",
+            "date": "2026-05-05",
+            "distance_km": 5,
+            "performance_formatted": "05:00 /km",
+            "advanced_metrics": {
+                "training_load": 30,
+                "hr_zones": {
+                    "hr_zone_1": 600,
+                    "hr_zone_2": 0,
+                    "hr_zone_3": 0,
+                    "hr_zone_4": 0,
+                    "hr_zone_5": 0,
+                },
+            },
+        },
+        {
+            "activity_id": 302,
+            "type": "running",
+            "date": "2026-05-06",
+            "distance_km": 7,
+            "performance_formatted": "05:20 /km",
+            "advanced_metrics": {
+                "training_load": 40,
+                "hr_zones": {
+                    "hr_zone_1": 0,
+                    "hr_zone_2": 1200,
+                    "hr_zone_3": 0,
+                    "hr_zone_4": 0,
+                    "hr_zone_5": 0,
+                },
+            },
+        },
+    ]
+    context = build_deterministic_coach_context(
+        processed_data=processed_data,
+        user_data=_sample_user_data(),
+        raw_activities=[
+            {"activity_id": 301, "duration": 25},
+            {"activity_id": 302, "duration": 35},
+        ],
+        today="2026-05-14",
+    )
+    ai_report = {
+        "meta": {"today": "2026-05-12", "analysis_period_weeks": 4},
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-04",
+                "week_label": "AI label",
+                "key_observation": "保留 AI 觀察",
+                "weekly_assessment": "保留 AI 解讀",
+                "weekly_recommendation": "保留 AI 建議",
+                "total_distance_km": 5,
+                "sessions": [
+                    {
+                        "activity_id": 302,
+                        "date": "2026-05-06",
+                        "coaching_note": "保留單次活動教練備註",
+                    }
+                ],
+            }
+        ],
+        "hr_zone_distribution": {
+            "zones": [{"zone": 1, "minutes": 999, "percentage": 100}],
+            "assessment": "保留 HR 解讀",
+        },
+        "physio_metrics": {
+            "vo2max": {"value": 1, "unit": "bad", "assessment": "保留 VO2max 解讀"},
+            "pace_zones": [{"zone": 5, "pace_min": "00:00", "pace_max": "00:00"}],
+        },
+        "load_assessment": {
+            "current_tss_weekly": 999,
+            "status": "overtraining",
+            "label": "保留負荷標籤",
+        },
+        "next_week_plan": {
+            "week_start": "2026-05-19",
+            "days": [
+                {
+                    "date": "2026-05-18",
+                    "day_of_week": "Tue",
+                    "session_type": "easy",
+                    "title": "保留課表",
+                    "distance_km": 3,
+                    "duration_min": 20,
+                    "intensity": "easy",
+                    "key_workout": False,
+                }
+            ],
+        },
+    }
+
+    report = enforce_deterministic_report_fields(ai_report, context)
+    restored_week = report["weekly_analysis"][1]
+
+    assert report["meta"]["today"] == "2026-05-14"
+    assert restored_week["week_start"] == "2026-05-04"
+    assert restored_week["key_observation"] == "保留 AI 觀察"
+    assert "total_distance_km" not in restored_week
+    assert [session["activity_id"] for session in restored_week["sessions"]] == [301, 302]
+    assert restored_week["sessions"][1]["coaching_note"] == "保留單次活動教練備註"
+    assert report["hr_zone_distribution"]["assessment"] == "保留 HR 解讀"
+    assert report["hr_zone_distribution"]["zones"] == context["hr_zone_distribution"]["zones"]
+    assert report["physio_metrics"]["vo2max"]["value"] == 53
+    assert report["physio_metrics"]["vo2max"]["assessment"] == "保留 VO2max 解讀"
+    assert report["physio_metrics"]["pace_zones"][4]["pace_max"] is None
+    assert report["load_assessment"]["current_tss_weekly"] == context["load_assessment"]["current_tss_weekly"]
+    assert report["load_assessment"]["label"] == "保留負荷標籤"
+    assert report["next_week_plan"]["week_start"] == "2026-05-18"
+    assert report["next_week_plan"]["days"][0]["day_of_week"] == "Mon"
+    assert report["next_week_plan"]["total_distance_km"] == 3
