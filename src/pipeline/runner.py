@@ -38,26 +38,22 @@ def _write_processed_csv(path: Path, processed_data: List[Dict[str, Any]]) -> No
     pd.json_normalize(processed_data).to_csv(path, index=False, encoding="utf-8-sig")
 
 
-def _write_markdown_report(path: Path, response: str, activity_count: int) -> None:
+def _write_json_report(path: Path, response: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as file_obj:
-        file_obj.write("# 🏃‍♂️ Garmin AI Coach Training Report\n\n")
-        file_obj.write(f"- **分析日期:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        file_obj.write(f"- **分析活動數量:** {activity_count}\n\n")
-        file_obj.write("---\n\n")
-        file_obj.write(response)
-        file_obj.write("\n\n---\n*Happy Running!*")
+        json.dump(response, file_obj, ensure_ascii=False, indent=2)
+        file_obj.write("\n")
 
 
 def _persist_pipeline_artifacts(
     timestamp: str,
     processed_data: List[Dict[str, Any]],
-    response: str,
+    response: Dict[str, Any],
 ) -> Path:
     _write_processed_csv(PROCESSED_DATA_DIR / f"processed_{timestamp}.csv", processed_data)
 
-    report_path = OUTPUT_DIR / f"ai_report_{timestamp}.md"
-    _write_markdown_report(report_path, response, len(processed_data))
+    report_path = OUTPUT_DIR / f"ai_report_{timestamp}.json"
+    _write_json_report(report_path, response)
     return report_path
 
 
@@ -145,7 +141,7 @@ def _sync_garmin_to_db(
 
 
 def _fetch_without_db(activity_limit: int, timestamp: str) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    print("⚠️ DB unavailable; falling back to direct Garmin fetch for Markdown output.")
+    print("⚠️ DB unavailable; falling back to direct Garmin fetch for structured JSON output.")
     garmin_data = get_garmin_activities(activity_limit, progress=True)
     raw_activities = garmin_data.get("activities", [])
     user_data = garmin_data.get("user_data", {})
@@ -201,7 +197,7 @@ def _load_or_fetch_activity_payloads(
                     return raw_activities, user_data
             except SQLAlchemyError as read_exc:
                 print(f"⚠️ Existing DB read failed: {type(read_exc).__name__}")
-            print("⚠️ Using already-fetched Garmin payload for Markdown output; not calling Garmin again.")
+            print("⚠️ Using already-fetched Garmin payload for structured JSON output; not calling Garmin again.")
             return fetched_raw_activities, fetched_user_data
         return _fetch_without_db(activity_limit=activity_limit, timestamp=timestamp)
 
@@ -239,7 +235,7 @@ def run_pipeline(
         goal_text=goal_text,
     )
 
-    print("💾 Generating Markdown report...")
+    print("💾 Generating structured JSON report...")
     report_path = _persist_pipeline_artifacts(
         timestamp=timestamp,
         processed_data=processed_data,
@@ -247,5 +243,5 @@ def run_pipeline(
     )
 
     print("✨ Pipeline completed!")
-    print(f"📄 Markdown Report: {report_path}")
+    print(f"📄 JSON Report: {report_path}")
     return str(report_path)

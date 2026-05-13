@@ -21,6 +21,10 @@ RETRY_BACKOFF_SECONDS = 1
 client = genai.Client(api_key=os.getenv("GEMINI_KEY"))
 
 
+class ReportParseError(ValueError):
+    pass
+
+
 def _read_text_file(path: Path) -> str:
     with path.open("r", encoding="utf-8") as file_obj:
         return file_obj.read()
@@ -63,14 +67,72 @@ def _is_retryable_model_error(exc: Exception) -> bool:
     )
 
 
-def _generate_content_with_retries(model_name: str, full_prompt: str) -> str:
+def _extract_json_document(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+
+    start_index = cleaned.find("{")
+    end_index = cleaned.rfind("}")
+    if start_index == -1 or end_index == -1 or end_index <= start_index:
+        raise ReportParseError("AI 回傳內容不是 JSON 物件")
+
+    return cleaned[start_index : end_index + 1]
+
+
+def _parse_report_json(text: str) -> Dict[str, Any]:
+    json_text = _extract_json_document(text)
+    try:
+        payload = json.loads(json_text)
+    except json.JSONDecodeError as exc:
+        raise ReportParseError("AI 回傳內容不是有效 JSON") from exc
+    if not isinstance(payload, dict):
+        raise ReportParseError("AI 回傳內容必須是 JSON 物件")
+    return payload
+
+
+def _build_failure_report(reason: str) -> Dict[str, Any]:
+    now = datetime.now().astimezone()
+    return {
+        "meta": {
+            "generated_at": now.isoformat(timespec="seconds"),
+            "analysis_period_weeks": 4,
+            "today": now.date().isoformat(),
+        },
+        "error": {
+            "message": reason,
+            "source": "gemini",
+        },
+    }
+
+
+def _generate_content_with_retries(model_name: str, full_prompt: str) -> Dict[str, Any]:
     for attempt in range(1, MAX_RETRIES_PER_MODEL + 1):
         try:
             print(f"正在嘗試使用模型: {model_name} (第 {attempt}/{MAX_RETRIES_PER_MODEL} 次)...")
-            response = client.models.generate_content(model=model_name, contents=full_prompt)
-            return response.text
+            response = client.models.generate_content(
+                model=model_name,
+                contents=full_prompt,
+                config={
+                    "responseMimeType": "application/json",
+                    "temperature": 0,
+                },
+            )
+            response_text = getattr(response, "text", "") or ""
+            return _parse_report_json(response_text)
         except Exception as exc:
-            should_retry = _is_retryable_model_error(exc) and attempt < MAX_RETRIES_PER_MODEL
+            should_retry = (
+                attempt < MAX_RETRIES_PER_MODEL
+                and (
+                    _is_retryable_model_error(exc)
+                    or isinstance(exc, ReportParseError)
+                )
+            )
             if should_retry:
                 wait_seconds = RETRY_BACKOFF_SECONDS * attempt
                 print(
@@ -87,7 +149,7 @@ def coach(
     user_data: Optional[Dict[str, Any]] = None,
     goal_path: str = "",
     goal_text: Optional[str] = None,
-) -> str:
+) -> Dict[str, Any]:
     system_prompt = _read_text_file(PROMPT_PATH)
     full_prompt = f"{system_prompt}\n\n{_build_context(data, user_data, goal_path, goal_text=goal_text)}"
 
@@ -97,10 +159,10 @@ def coach(
         except Exception as exc:
             if model_name == MODEL_FALLBACKS[-1]:
                 print(f"所有模型皆調用失敗: {exc}")
-                return "AI 服務暫時無法連線。建議根據近期體感調整訓練量。"
+                return _build_failure_report(str(exc))
             print(f"模型 {model_name} 暫時無法使用: {exc}，準備切換備援模型...")
 
-    return "AI 服務暫時無法連線。建議根據近期體感調整訓練量。"
+    return _build_failure_report("AI 服務暫時無法連線。建議根據近期體感調整訓練量。")
 
 
 def _load_processed_records(csv_path: str) -> Optional[List[Dict[str, Any]]]:
@@ -125,18 +187,14 @@ def _load_user_biometrics(json_path: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _write_local_report(report: str, source_csv_path: str) -> Path:
+def _write_local_report(report: Dict[str, Any], _source_csv_path: str) -> Path:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d")
-    report_path = OUTPUT_DIR / f"ai_report_{timestamp}.md"
+    report_path = OUTPUT_DIR / f"ai_report_{timestamp}.json"
 
     with report_path.open("w", encoding="utf-8") as file_obj:
-        file_obj.write("# 🏃‍♂️ Garmin AI Coach Analysis Report\n\n")
-        file_obj.write(f"- **生成日期:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        file_obj.write(f"- **數據來源:** `{os.path.basename(source_csv_path)}`\n")
-        file_obj.write("---\n\n")
-        file_obj.write(report)
-        file_obj.write("\n\n---\n*Happy Running!*")
+        json.dump(report, file_obj, ensure_ascii=False, indent=2)
+        file_obj.write("\n")
 
     return report_path
 
