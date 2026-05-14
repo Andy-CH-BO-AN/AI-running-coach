@@ -95,6 +95,11 @@ def test_builds_monday_week_buckets_and_derived_weekly_metrics():
     assert current_week["derived_total_distance_km"] == 6.13
     assert current_week["derived_total_duration_min"] == 36.3
     assert current_week["derived_training_load"] == 42.3
+    assert current_week["session_counts"] == {
+        "total": 2,
+        "by_type": {"easy": 2},
+        "by_source_activity_type": {"running": 2},
+    }
     assert current_week["data_quality"]["status"] == "partial"
     assert current_week["data_quality"]["missing_fields"] == ["training_load"]
     assert "heat_stress" in current_week["risk_flags"]
@@ -351,6 +356,49 @@ def test_enforce_repoints_evidence_source_paths_by_activity_id():
     assert supporting_session["distance_km"] == 5
     assert supporting_session["avg_pace"] == "06:00"
     assert supporting_session["reason"] == "保留原因"
+
+
+def test_weekly_session_counts_include_cross_training_distribution():
+    processed_data = [
+        {
+            "activity_id": 207,
+            "type": "running",
+            "date": "2026-05-12",
+            "distance_km": 5,
+            "performance_formatted": "06:00 /km",
+            "advanced_metrics": {"training_load": 20},
+        },
+        {
+            "activity_id": 208,
+            "type": "cycling",
+            "date": "2026-05-12",
+            "distance_km": 10,
+        },
+        {
+            "activity_id": 209,
+            "type": "swimming",
+            "date": "2026-05-13",
+            "distance_km": 1,
+        },
+    ]
+
+    context = build_deterministic_coach_context(
+        processed_data=processed_data,
+        user_data=_sample_user_data(),
+        raw_activities=[
+            {"activity_id": 207, "duration": 30},
+            {"activity_id": 208, "duration": 25},
+            {"activity_id": 209, "duration": 20},
+        ],
+        today="2026-05-14",
+    )
+
+    counts = context["weekly_analysis"][0]["session_counts"]
+    assert counts == {
+        "total": 3,
+        "by_type": {"bike": 1, "easy": 1, "swim": 1},
+        "by_source_activity_type": {"cycling": 1, "running": 1, "swimming": 1},
+    }
 
 
 def test_physio_seed_preserves_runner_pace_format_and_open_ended_z5():

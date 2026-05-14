@@ -30,6 +30,8 @@
 
 【分析範圍】
 優先分析最近 4 週數據，所有評估須貼合當前體能與近期氣溫。
+若最近 4 週內包含 `interval` 類型活動，請優先分析 interval 課表的主課表品質、恢復段安排、速度維持能力，以及分段心率與步頻/步幅表現。
+解讀步幅時請重視訓練情境。不要把輕鬆跑或恢復跑的平均步幅直接拿去對照目標速度需求；若要評論步幅是否足以支撐目標配速，請優先根據 interval 主課表或其他速度段的步幅表現下結論。
 重要建議必須能追溯到實際數據。請在 `evidence_links` 中為關鍵洞察、風險提醒與訓練建議提供可視化可用的依據資料，讓使用者能比對 AI 建議與 Garmin 數據。不要傾倒完整 raw data；只挑選最能支持該建議的指標、活動與欄位路徑。
 
 【角色分工】
@@ -40,43 +42,39 @@
 - 如果 deterministic_context 與 raw/CSV reference 有衝突，除非 deterministic_context 明確標示 `data_quality.status = "partial"` 或欄位為 null，否則以 deterministic_context 為準。
 - `processed activity data` 與 raw reference 只用來補充解釋、檢查異常與撰寫 evidence，不要用它們另行推翻 deterministic_context 的週級加總、百分比或日期。
 - deterministic_context 中 `weekly_analysis[].derived_total_distance_km`、`derived_total_duration_min`、`derived_training_load` 只供你判讀與 evidence 使用；最終輸出的 `weekly_analysis[]` 仍不要包含這三個週級總量欄位，讓前端 adapter 繼續由 `sessions[]` deterministic 加總。
+- deterministic_context 中 `weekly_analysis[].session_counts` 提供每週總活動數與類型分布；寫週摘要時請優先引用這些 deterministic counts，不要自行估算「這週做了幾次 bike / interval / easy」。
+- 保守原則：所有日期、週順序、week label、下週 7 天結構都由程式端決定。模型只負責分析欄位、建議欄位與敘述欄位，不負責重新推導日期。
 
 【資料一致性硬性規則】
 
 0. Deterministic context 一致性：
    - `meta.today` 必須等於 `deterministic_context.meta.today`。
-   - `weekly_analysis[].week_start`、`weekly_analysis[].sessions[]`、`hr_zone_distribution.zones[]`、`physio_metrics.pace_zones[]`、`running_mechanics`、`load_assessment.current_tss_weekly` 與 `next_week_plan_seed.week_start/days[].date` 優先沿用 deterministic_context。
+   - `weekly_analysis[].week_start`、`weekly_analysis[].week_label`、`weekly_analysis[].session_counts`、`weekly_analysis[].sessions[]`、`hr_zone_distribution.zones[]`、`physio_metrics.pace_zones[]`、`running_mechanics`、`load_assessment.current_tss_weekly` 與 `next_week_plan_seed.week_start/days[].date` 優先沿用 deterministic_context。
    - 你可以新增自然語言評估，例如 `assessment`、`recommendation`、`label`、`coaching_note`，但不得把已計算數值改成另一組數字。
    - 如果 deterministic_context 的某週 `data_quality.message` 為「部分資料不足」，最終報告也必須在該週 assessment 或 evidence 中說明資料限制。
+   - `meta.today`、4 週 bucket、`week_label`、`next_week_plan.week_start`、`next_week_plan.days[].date` 皆視為 deterministic output；請直接沿用，不要重算。
 
 1. 日期一致性：
-   - `meta.today` 必須使用輸入的「今日日期」。
-   - 如果輸入沒有明確今日日期，`meta.today` 必須使用 `generated_at` 在 Asia/Taipei 時區的日期。
-   - 不得把最新活動日期當成 `meta.today`，除非最新活動日期剛好等於今日日期。
-   - 所有 `week_start` 與 `day_of_week` 必須由日期推導，不得憑直覺猜測星期。
-   - 星期格式固定使用英文三字縮寫：`Mon | Tue | Wed | Thu | Fri | Sat | Sun`。
+   - `meta.today` 必須直接複製 `deterministic_context.meta.today`。
+   - 所有 `week_start`、`week_label`、`next_week_plan.week_start`、`next_week_plan.days[].date` 與 `day_of_week` 必須直接沿用 deterministic_context，不得憑直覺猜測或自行換算。
+   - 星期格式固定使用英文三字縮寫：`Mon | Tue | Wed | Thu | Fri | Sat | Sun`，且 `next_week_plan.days` 必須維持 Mon 到 Sun 的固定順序。
 
 2. 近 4 週分析：
-   - `weekly_analysis` 必須固定輸出 4 個 week bucket，依時間由新到舊排序。
-   - 第 1 個 bucket 的 `week_start` 必須沿用 `deterministic_context.weekly_analysis[0].week_start`；若 deterministic_context 缺漏，才自行用 `meta.today` 所在週的 Monday。
-   - 第 2-4 個 bucket 的 `week_start` 必須分別是第 1 個 bucket 往前推 7、14、21 天。
-   - 每個 bucket 的日期範圍固定為 `week_start` 到 `week_start + 6 days`，並在 `week_label` 標示相同範圍。
-   - 每個 bucket 的 `week_start` 必須是 Monday。如果計算後不是 Monday，必須重新計算，不可輸出 Tuesday/Wednesday 等其他日期。
-   - 沒有活動的週仍要輸出該 week bucket，`sessions` 為空陣列，並在 `weekly_assessment` 說明該週資料不足或無訓練紀錄。
-   - 不要輸出週級總量欄位，例如 `total_distance_km`、`total_duration_min`、`training_load`。週總量、週總時間與週訓練負荷由前端或程式端根據 `sessions[]` 自行加總。
-   - `sessions` 必須沿用 `deterministic_context.weekly_analysis[].sessions[]` 中屬於該週的所有活動，用於前端加總與 evidence 追蹤；不要只挑代表性活動，也不要刪減已提供的活動清單。
-   - `sessions[].date` 必須落在該 bucket 的 `week_start` 到 `week_start + 6 days` 範圍內，不得放入其他週的活動。
-   - 每個 week bucket 必須根據該週資料輸出 `key_observation`、`weekly_assessment`、`weekly_recommendation` 與 `risk_flags`，讓使用者能分別理解四週的訓練狀況與調整建議。
+   - `weekly_analysis` 必須固定輸出 4 個 week bucket，依時間由新到舊排序，並直接對應 deterministic_context 已提供的第 1、2、3、4 週。
+   - 每個 bucket 的 `week_start`、`week_label`、`session_counts` 與 `sessions` 必須直接沿用 `deterministic_context.weekly_analysis[]`，不要自行重排、重命名或重新計算日期。
+   - 沒有活動的週仍要保留該 week bucket，`sessions` 為空陣列，並在 `weekly_assessment` 說明該週資料不足或無訓練紀錄。
+   - 不要輸出週級總量欄位，例如 `total_distance_km`、`total_duration_min`、`training_load`。週總量、週總時間與週訓練負荷由前端或程式端根據 `sessions[]` deterministic 加總。
+   - 每個 week bucket 只需要根據已提供的 deterministic 週資料補上 `key_observation`、`weekly_assessment`、`weekly_recommendation` 與 `risk_flags`。
+   - 若要提到「本週做了幾次某種類型訓練」，請直接使用 `session_counts.total`、`session_counts.by_type` 或 `session_counts.by_source_activity_type`，不要自行用文字估算次數。
    - 對 `sessions[].type = "interval"` 的活動必須優先分析。不要只看整段平均配速、平均心率或平均步頻；請檢查 `segments[]` 中的快段與恢復段，分別判斷主課表品質、恢復是否過長、速度維持能力、步頻/步幅是否只在快段成立。
+   - 評論步幅時，不依據主要來自 easy / recovery session；這類結論應優先建立在 interval 跑步段、節奏跑或其他速度段 evidence 上。
    - 當 interval 活動進入 `evidence_links.supporting_sessions`，必須在 `reason` 說明至少一個與分段相關的觀察，例如快段配速、休息段配速/步頻、快慢段落差、或分段心率反應。
    - 如果 claim 是關於輕鬆跑、高溫壓力、長跑或恢復跑，不要引用 interval 活動的分段作為 source_path；請讓 `activity_id`、`source_path` 與文字描述指向同一筆活動。
 
 3. 下週課表：
-   - `next_week_plan.week_start` 必須沿用 `deterministic_context.next_week_plan_seed.week_start`；若 deterministic_context 缺漏，才使用 `weekly_analysis[0].week_start + 7 days`，也就是下一週 Monday。
-   - `next_week_plan.days` 必須固定輸出 7 天，從 `next_week_plan.week_start` 開始連續 7 個日期。
-   - `next_week_plan.days[].date` 與 `day_of_week` 必須優先沿用 `deterministic_context.next_week_plan_seed.days[]` 的日期與星期，再由你補上課表內容、強度、距離與訓練描述。
-   - `next_week_plan.week_start` 必須是 Monday。如果計算後不是 Monday，必須重新計算。
-   - `next_week_plan.days[].day_of_week` 必須由 `date` 推導，且固定使用 `Mon | Tue | Wed | Thu | Fri | Sat | Sun`；不得出現 `date` 是 Tuesday 但 `day_of_week` 寫 Monday 的情況。
+   - `next_week_plan.week_start` 必須沿用 `deterministic_context.next_week_plan_seed.week_start`。
+   - `next_week_plan.days` 必須固定輸出 7 天，且順序固定為 `Mon | Tue | Wed | Thu | Fri | Sat | Sun`。
+   - `next_week_plan.days[].date` 與 `day_of_week` 必須直接沿用 `deterministic_context.next_week_plan_seed.days[]`；模型只補上課表內容、強度、距離與訓練描述。
    - 沒安排訓練的日期也必須輸出，`intensity` 為 `rest`，`distance_km` 與 `duration_min` 為 0，`key_workout` 為 false。
    - `next_week_plan.total_distance_km` 必須等於 `days[].distance_km` 加總後四捨五入到小數 2 位。
 
