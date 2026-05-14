@@ -32,6 +32,14 @@ GARMIN_PR_MAPS = {
     }
 }
 TARGET_ACTIVITY_TYPES = {'running': 'running', 'lap_swimming': 'swimming', 'cycling': 'cycling'}
+RUNNING_PR_DISTANCES_KM = {
+    1: 1.0,
+    2: 1.60934,
+    3: 5.0,
+    4: 10.0,
+    5: 21.0975,
+    6: 42.195,
+}
 
 def safe_api_call(func, *args, **kwargs) -> Any:
     """具備指數退避邏輯的 API 呼叫包裝器"""
@@ -144,32 +152,19 @@ def format_garmin_value(value, typeId):
     2. 自動修正單位：功率 (mW -> W), 距離 (m -> km)
     3. 修正 7, 8 號紀錄的誤植問題
     """
-    # --- 1. 跑步與一般時間類 (1km, 1mile, 5km, 10km, 半馬) ---
-    if typeId in [1, 2, 3, 4, 5]:
+    # --- 1. 跑步與一般時間類 (1km, 1mile, 5km, 10km, 半馬, 全馬) ---
+    if typeId in RUNNING_PR_DISTANCES_KM:
         total_seconds = round(value)
         minutes = total_seconds // 60
         seconds = total_seconds % 60
         formatted_value = f"{minutes}:{seconds:02d}"
-        
-        # 計算配速邏輯
-        if typeId == 1: # 1K
-            pace = f"{formatted_value} /km"
-        elif typeId == 2: # 1mile
-            p_sec = total_seconds / 1.60934
+
+        distance_km = RUNNING_PR_DISTANCES_KM.get(typeId)
+        pace = ""
+        if distance_km:
+            p_sec = total_seconds / distance_km
             pace = f"{int(p_sec // 60)}:{int(p_sec % 60):02d} /km"
-        elif typeId == 3: # 5k
-            p_sec = total_seconds / 5
-            pace = f"{int(p_sec // 60)}:{int(p_sec % 60):02d} /km"
-        elif typeId == 4: # 10k
-            p_sec = total_seconds / 10
-            pace = f"{int(p_sec // 60)}:{int(p_sec % 60):02d} /km"
-        elif typeId == 5: # Half
-            p_sec = total_seconds / 21.0975
-            pace = f"{int(p_sec // 60)}:{int(p_sec % 60):02d} /km"
-        elif typeId == 6: # Marathon
-            p_sec = total_seconds / 42.195
-            pace = f"{int(p_sec // 60)}:{int(p_sec % 60):02d} /km"
-        
+
         return formatted_value, pace
 
     # --- 2. 距離類 (最長跑步, 最長騎乘) ---
