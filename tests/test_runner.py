@@ -311,6 +311,46 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(kwargs["goal_path"], str(goal_path))
         self.assertIn("deterministic_context", kwargs)
 
+    def test_generate_coach_report_renders_goal_and_applies_deterministic_overlay(self):
+        processed_data = [{"activity_id": 1, "performance_formatted": "5:00 /km"}]
+        user_data = {"max_heart_rate": 190}
+        deterministic_context = {"meta": {"today": "2026-05-10"}}
+        overrides = GoalPromptOverrides(core_goal="目標成績：5K 20:00")
+        ai_response = {"headline": "report"}
+        enforced_response = {"headline": "enforced report"}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            goal_path = Path(temp_dir) / "goal.md"
+            goal_path.write_text(
+                "# Training Goal\n\n"
+                "## 🎯 核心目標\n"
+                "* old goal\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(runner, "GOAL_PROMPT_PATH", goal_path), patch.object(
+                runner, "coach", return_value=ai_response
+            ) as coach_mock, patch.object(
+                runner,
+                "enforce_deterministic_report_fields",
+                return_value=enforced_response,
+            ) as enforce_mock:
+                report = runner._generate_coach_report(
+                    processed_data=processed_data,
+                    user_data=user_data,
+                    deterministic_context=deterministic_context,
+                    goal_overrides=overrides,
+                )
+
+        self.assertEqual(report, enforced_response)
+        _, coach_kwargs = coach_mock.call_args
+        self.assertEqual(coach_kwargs["data"], processed_data)
+        self.assertEqual(coach_kwargs["user_data"], user_data)
+        self.assertEqual(coach_kwargs["deterministic_context"], deterministic_context)
+        self.assertEqual(coach_kwargs["goal_path"], str(goal_path))
+        self.assertIn("* 目標成績：5K 20:00", coach_kwargs["goal_text"])
+        enforce_mock.assert_called_once_with(ai_response, deterministic_context)
+
     def test_fetch_without_db_persists_raw_artifacts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             raw_dir = Path(temp_dir) / "raw"
