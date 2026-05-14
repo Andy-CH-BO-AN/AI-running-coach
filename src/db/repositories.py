@@ -144,7 +144,31 @@ def insert_user_profile_snapshot(
     captured_at: datetime,
     source_file: str | None = None,
 ) -> UserProfileSnapshot:
-    values = {
+    values = _user_profile_snapshot_values(
+        user_id=user_id,
+        profile_data=profile_data,
+        captured_at=captured_at,
+        source_file=source_file,
+    )
+    stmt = pg_insert(UserProfileSnapshot).values(**values)
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_user_profile_snapshots_user_captured_at",
+        set_={key: value for key, value in values.items() if key not in {"user_id", "captured_at"}},
+    ).returning(UserProfileSnapshot.id)
+    snapshot_id = session.scalar(stmt)
+    session.flush()
+    snapshot = session.get(UserProfileSnapshot, snapshot_id)
+    session.refresh(snapshot)
+    return snapshot
+
+
+def _user_profile_snapshot_values(
+    user_id: uuid.UUID,
+    profile_data: dict[str, Any],
+    captured_at: datetime,
+    source_file: str | None = None,
+) -> dict[str, Any]:
+    return {
         "user_id": user_id,
         "captured_at": _aware_datetime(captured_at),
         "source_file": source_file,
@@ -163,16 +187,6 @@ def insert_user_profile_snapshot(
         "pr_cycling": _jsonable(profile_data.get("pr_cycling")),
         "raw_profile": _jsonable(profile_data),
     }
-    stmt = pg_insert(UserProfileSnapshot).values(**values)
-    stmt = stmt.on_conflict_do_update(
-        constraint="uq_user_profile_snapshots_user_captured_at",
-        set_={key: value for key, value in values.items() if key not in {"user_id", "captured_at"}},
-    ).returning(UserProfileSnapshot.id)
-    snapshot_id = session.scalar(stmt)
-    session.flush()
-    snapshot = session.get(UserProfileSnapshot, snapshot_id)
-    session.refresh(snapshot)
-    return snapshot
 
 
 def get_latest_user_profile(session: Session, user_id: uuid.UUID) -> UserProfileSnapshot | None:
@@ -228,6 +242,24 @@ def upsert_activity(
     activity_data: dict[str, Any],
     source_file: str | None = None,
 ) -> Activity:
+    values = _activity_values(user_id=user_id, activity_data=activity_data, source_file=source_file)
+    stmt = pg_insert(Activity).values(**values)
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_activities_garmin_activity_id",
+        set_={key: value for key, value in values.items() if key != "garmin_activity_id"},
+    ).returning(Activity.id)
+    activity_id = session.scalar(stmt)
+    session.flush()
+    activity = session.get(Activity, activity_id)
+    session.refresh(activity)
+    return activity
+
+
+def _activity_values(
+    user_id: uuid.UUID,
+    activity_data: dict[str, Any],
+    source_file: str | None = None,
+) -> dict[str, Any]:
     raw_metrics = activity_data.get("raw_data") or activity_data.get("raw_metrics") or {}
     split_max_heart_rate = _max_split_heart_rate(activity_data.get("splits"))
     started_at = _activity_started_at(activity_data)
@@ -244,7 +276,7 @@ def upsert_activity(
                 _speed_kmh(distance_km, duration_min),
             )
         )
-    values = {
+    return {
         "user_id": user_id,
         "garmin_activity_id": int(activity_data["activity_id"]),
         "activity_type": activity_type,
@@ -283,16 +315,6 @@ def upsert_activity(
         "source": activity_data.get("source") or "garmin",
         "updated_at": utc_now(),
     }
-    stmt = pg_insert(Activity).values(**values)
-    stmt = stmt.on_conflict_do_update(
-        constraint="uq_activities_garmin_activity_id",
-        set_={key: value for key, value in values.items() if key != "garmin_activity_id"},
-    ).returning(Activity.id)
-    activity_id = session.scalar(stmt)
-    session.flush()
-    activity = session.get(Activity, activity_id)
-    session.refresh(activity)
-    return activity
 
 
 def _split_values(activity_id: uuid.UUID, split: dict[str, Any], activity_type: str | None = None) -> dict[str, Any]:
