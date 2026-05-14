@@ -32,6 +32,9 @@ touch `src/`, `tests/`, or Python files.
 - Keep patches minimal and incremental so each review cycle stays small.
 - Document test commands used, environment details, and non-obvious
   reproduction steps.
+- Use the canonical Git change naming skill in
+  `ai/skills/git-change-conventions/SKILL.md` whenever creating a
+  branch, naming a PR, or writing commit messages.
 - Avoid automatic merging; leave the final merge or PR action to the
   human maintainer unless instructed otherwise.
 - If tests cannot be run, report why and provide clear reproduction
@@ -43,3 +46,4 @@ touch `src/`, `tests/`, or Python files.
 - `ai/shared/reviewer.agent.md`
 - `ai/shared/qa.agent.md`
 - `ai/shared/security.agent.md`
+- `ai/skills/git-change-conventions/SKILL.md`

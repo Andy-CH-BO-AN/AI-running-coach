@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Change Conventions"
+  short_description: "Apply the repo's branch, PR title, and detailed commit message rules"
+  default_prompt: "Use $git-change-conventions whenever branch naming, PR titles, or commit messages should follow this repo's required conventions."

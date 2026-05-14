@@ -14,6 +14,8 @@ behavior.
 - [`ai/skills/python-review-qa-loop/agents/openai.yaml`](../ai/skills/python-review-qa-loop/agents/openai.yaml)
 - [`ai/skills/readme-pm-review/SKILL.md`](../ai/skills/readme-pm-review/SKILL.md)
 - [`ai/skills/readme-pm-review/agents/openai.yaml`](../ai/skills/readme-pm-review/agents/openai.yaml)
+- [`ai/skills/git-change-conventions/SKILL.md`](../ai/skills/git-change-conventions/SKILL.md)
+- [`ai/skills/git-change-conventions/agents/openai.yaml`](../ai/skills/git-change-conventions/agents/openai.yaml)
 
 ## GitHub Adapters
 
@@ -26,6 +28,8 @@ behavior.
 - [`.github/skills/python-review-qa-loop/agents/openai.yaml`](skills/python-review-qa-loop/agents/openai.yaml)
 - [`.github/skills/readme-pm-review/SKILL.md`](skills/readme-pm-review/SKILL.md)
 - [`.github/skills/readme-pm-review/agents/openai.yaml`](skills/readme-pm-review/agents/openai.yaml)
+- [`.github/skills/git-change-conventions/SKILL.md`](skills/git-change-conventions/SKILL.md)
+- [`.github/skills/git-change-conventions/agents/openai.yaml`](skills/git-change-conventions/agents/openai.yaml)
 
 Keep the adapters thin so the shared docs stay authoritative.
 
@@ -33,7 +37,9 @@ Keep the adapters thin so the shared docs stay authoritative.
 
 - Use [`ai/skills/readme-pm-review/SKILL.md`](../ai/skills/readme-pm-review/SKILL.md)
   only when explicitly asking for a product-manager style README review.
+- Use [`ai/skills/git-change-conventions/SKILL.md`](../ai/skills/git-change-conventions/SKILL.md)
+  when creating a branch, naming a PR, or writing commit messages.
 - Use [`ai/shared/frontend-dashboard.agent.md`](../ai/shared/frontend-dashboard.agent.md)
   when designing or implementing the AI running coach dashboard.
 - These GitHub-side skill adapters only reference the canonical skill
-  definitions in `ai/skills/`.
+  definitions in `ai/skills/`, including `git-change-conventions`.

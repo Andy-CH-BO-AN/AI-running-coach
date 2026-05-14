@@ -29,6 +29,10 @@ instructions: |
   only when the user explicitly asks for a product-manager style review
   of `README.md`.
 
+  Git branch / PR / commit naming guidance: use
+  [`ai/skills/git-change-conventions/SKILL.md`](../ai/skills/git-change-conventions/SKILL.md)
+  whenever creating a branch, naming a PR, or writing commit messages.
+
   Frontend dashboard guidance: use
   [`ai/shared/frontend-dashboard.agent.md`](../ai/shared/frontend-dashboard.agent.md)
   when designing or implementing the AI running coach dashboard,
