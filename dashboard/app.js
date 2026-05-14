@@ -446,7 +446,7 @@
     var tiles = [
       ["VO2max", formatValue(physio.vo2max.value, " " + physio.vo2max.unit), physio.vo2max.assessment],
       ["乳酸閾值心率", ltHr, physio.lactate_threshold.assessment],
-      ["乳酸閾值配速", ltPace, "保留跑者熟悉的配速格式"],
+      ["乳酸閾值配速", ltPace, physio.lactate_threshold.pace.assessment],
       ["靜息 / 最大心率", formatValue(physio.resting_heart_rate.value, "") + " / " + formatValue(physio.max_heart_rate.value, "") + " bpm", ""]
     ];
 
@@ -499,7 +499,7 @@
         node,
         el("p", "metric-title", metric.title),
         el("p", "metric-value", metric.display_value + (metric.has_data ? " " + metric.unit : "")),
-        el("p", "metric-copy", metric.assessment)
+        metric.assessment ? el("p", "metric-copy", metric.assessment) : null
       );
       grid.appendChild(node);
     });

@@ -25,6 +25,7 @@ def run_adapter_case(tmp_path, report):
         + "race: model.race_readiness,"
         + "evidence: model.evidence,"
         + "physio: model.physio_metrics,"
+        + "mechanics: model.running_mechanics,"
         + "summary: model.coaching_summary"
         + "});\n"
     )
@@ -209,8 +210,63 @@ def test_pace_strings_are_preserved(tmp_path):
     payload = run_adapter_case(tmp_path, report)
 
     assert payload["physio"]["lactate_threshold"]["pace"]["value"] == "03:59/km"
+    assert payload["physio"]["lactate_threshold"]["pace"]["assessment"] == ""
     assert [zone["zone"] for zone in payload["physio"]["pace_zones"]] == [1, 2, 5]
     assert payload["physio"]["pace_zones"][2]["pace_range"] == "快於 03:45/km"
+
+
+def test_running_mechanics_only_surface_cadence_assessment_in_metric_cards(tmp_path):
+    report = {
+        "running_mechanics": {
+            "cadence_avg": {"value": 174.2, "unit": "spm", "assessment": "有效跑步段步頻落在合理範圍，休息段已排除。"},
+            "ground_contact_ms": {"value": 249, "unit": "ms", "assessment": "觸地時間良好，顯示支撐期控制穩定。"},
+            "vertical_oscillation_cm": {"value": 8.4, "unit": "cm", "assessment": "垂直振幅良好，跑動能量沒有明顯向上浪費。"},
+            "stride_length_m": {"value": 1.0, "unit": "m", "assessment": "有效跑步段步幅合理，可隨速度課逐步提升推進效率。"},
+            "running_economy_score": 95,
+            "improvement_tips": ["維持目前有效跑步段步頻與步幅。"],
+        },
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    metrics = payload["mechanics"]["metrics"]
+
+    assert [metric["assessment"] for metric in metrics] == [
+        "有效跑步段步頻落在合理範圍，休息段已排除。",
+        "",
+        "",
+        "",
+    ]
+
+
+def test_evidence_humanizes_deterministic_context_running_mechanics_paths(tmp_path):
+    report = {
+        "evidence_links": [
+            {
+                "insight_id": "stride_context",
+                "claim": "步幅解讀需結合速度課情境。",
+                "source_sections": ["deterministic_context", "running_mechanics"],
+                "supporting_metrics": [
+                    {
+                        "label": "平均步幅",
+                        "value": 1.0,
+                        "unit": "m",
+                        "source_path": "deterministic_context.running_mechanics.stride_length_m",
+                    }
+                ],
+                "supporting_sessions": [],
+                "confidence": 82,
+                "visualization_hint": "metric_card",
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    metric = payload["evidence"]["items"][0]["supporting_metrics"][0]
+
+    assert payload["evidence"]["items"][0]["source_section_labels"] == ["程式計算資料", "跑姿指標"]
+    assert metric["source_label"] == "程式計算資料 > 跑姿指標 > 平均步幅"
 
 
 def test_coaching_summary_links_to_semantically_related_evidence(tmp_path):

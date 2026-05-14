@@ -727,6 +727,25 @@ def _risk_flags_for_week(week: Dict[str, Any], max_hr: Optional[float], baseline
     return sorted(flags)
 
 
+def _build_week_session_counts(week_sessions: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    by_type: Dict[str, int] = {}
+    by_source_activity_type: Dict[str, int] = {}
+    for session in week_sessions:
+        session_type = str(session.get("type") or "unknown")
+        by_type[session_type] = by_type.get(session_type, 0) + 1
+
+        source_activity_type = session.get("source_activity_type")
+        if source_activity_type:
+            normalized_source = str(source_activity_type)
+            by_source_activity_type[normalized_source] = by_source_activity_type.get(normalized_source, 0) + 1
+
+    return {
+        "total": len(week_sessions),
+        "by_type": dict(sorted(by_type.items())),
+        "by_source_activity_type": dict(sorted(by_source_activity_type.items())),
+    }
+
+
 def _build_weekly_analysis(
     sessions: Sequence[Dict[str, Any]],
     today: date,
@@ -763,6 +782,7 @@ def _build_weekly_analysis(
                 "week_end": week_end.isoformat(),
                 **derived,
                 "sessions": week_sessions,
+                "session_counts": _build_week_session_counts(week_sessions),
                 "data_quality": {
                     "status": "empty" if not week_sessions else "partial" if missing_fields else "complete",
                     "message": "無訓練紀錄"
@@ -1169,6 +1189,7 @@ def build_deterministic_coach_context(
         },
         "deterministic_fields": [
             "weekly_analysis[].week_start/week_end",
+            "weekly_analysis[].session_counts",
             "weekly_analysis[].sessions[]",
             "weekly_analysis[].derived_total_distance_km",
             "weekly_analysis[].derived_total_duration_min",

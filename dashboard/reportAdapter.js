@@ -60,6 +60,7 @@
   };
   var HR_ZONE_COLORS = ["#2f9e44", "#0ca678", "#f59f00", "#f76707", "#e03131"];
   var SOURCE_SECTION_LABELS = {
+    deterministic_context: "程式計算資料",
     athlete_status: "目前狀態",
     physio_metrics: "生理指標",
     weekly_analysis: "近期訓練",
@@ -96,6 +97,7 @@
     recovery_needed: "需要恢復"
   };
   var PATH_SEGMENT_LABELS = {
+    deterministic_context: "程式計算資料",
     athlete_status: "目前狀態",
     overall_rating: "整體狀態",
     fatigue_level: "疲勞程度",
@@ -113,6 +115,10 @@
     hr_zone_distribution: "強度分佈",
     zones: "心率區間",
     running_mechanics: "跑姿指標",
+    cadence_avg: "平均步頻",
+    ground_contact_ms: "平均觸地時間",
+    vertical_oscillation_cm: "平均垂直振幅",
+    stride_length_m: "平均步幅",
     load_assessment: "負荷評估",
     race_readiness: "目標能力",
     missing_capabilities: "能力缺口",
@@ -129,6 +135,10 @@
     confidence_score: "信心分數",
     training_suggestion: "訓練建議",
     current_tss_weekly: "本週 TSS",
+    session_counts: "活動分布",
+    by_type: "依訓練類型",
+    by_source_activity_type: "依原始活動類型",
+    total: "總活動數",
     recommendation: "建議",
     assessment: "評估",
     running_economy_score: "跑步經濟性分數"
@@ -636,7 +646,8 @@
         },
         pace: {
           value: fallbackText(lactate.pace && lactate.pace.value, "資料不足"),
-          unit: fallbackText(lactate.pace && lactate.pace.unit, "/km")
+          unit: fallbackText(lactate.pace && lactate.pace.unit, "/km"),
+          assessment: ""
         },
         assessment: fallbackText(lactate.assessment, "資料不足")
       },
@@ -754,14 +765,15 @@
     };
   }
 
-  function metricWithFallback(metric, title) {
+  function metricWithFallback(metric, title, options) {
+    var config = options || {};
     var value = metric && isPresentNumber(metric.value) ? metric.value : null;
     return {
       title: title,
       value: value,
       display_value: value === null ? "資料不足" : String(value),
       unit: fallbackText(metric && metric.unit, ""),
-      assessment: fallbackText(metric && metric.assessment, "資料不足"),
+      assessment: config.showAssessment ? fallbackText(metric && metric.assessment, "資料不足") : "",
       has_data: value !== null
     };
   }
@@ -772,7 +784,7 @@
 
     return {
       metrics: [
-        metricWithFallback(mechanics.cadence_avg, "步頻"),
+        metricWithFallback(mechanics.cadence_avg, "步頻", { showAssessment: true }),
         metricWithFallback(mechanics.ground_contact_ms, "觸地時間"),
         metricWithFallback(mechanics.vertical_oscillation_cm, "垂直振幅"),
         metricWithFallback(mechanics.stride_length_m, "步幅")
