@@ -208,6 +208,37 @@ def _load_or_fetch_activity_payloads(
         return _fetch_without_db(activity_limit=activity_limit, timestamp=timestamp)
 
 
+def _build_pipeline_context(
+    processed_data: List[Dict[str, Any]],
+    user_data: Dict[str, Any],
+    raw_activities: List[Dict[str, Any]],
+    timestamp: str,
+) -> Dict[str, Any]:
+    return build_deterministic_coach_context(
+        processed_data=processed_data,
+        user_data=user_data,
+        raw_activities=raw_activities,
+        today=timestamp,
+    )
+
+
+def _generate_coach_report(
+    processed_data: List[Dict[str, Any]],
+    user_data: Dict[str, Any],
+    deterministic_context: Dict[str, Any],
+    goal_overrides: GoalPromptOverrides | None = None,
+) -> Dict[str, Any]:
+    goal_text = render_goal_prompt(GOAL_PROMPT_PATH, goal_overrides)
+    response = coach(
+        data=processed_data,
+        user_data=user_data,
+        deterministic_context=deterministic_context,
+        goal_path=str(GOAL_PROMPT_PATH),
+        goal_text=goal_text,
+    )
+    return enforce_deterministic_report_fields(response, deterministic_context)
+
+
 def run_pipeline(
     activity_limit: int = 75,
     fetch_limit: int | None = None,
@@ -233,23 +264,20 @@ def run_pipeline(
         return None
 
     print("🧮 Building deterministic coach context...")
-    deterministic_context = build_deterministic_coach_context(
+    deterministic_context = _build_pipeline_context(
         processed_data=processed_data,
         user_data=user_data,
         raw_activities=raw_activities,
-        today=timestamp,
+        timestamp=timestamp,
     )
 
     print("🤖 Analyzing data with AI Coach...")
-    goal_text = render_goal_prompt(GOAL_PROMPT_PATH, goal_overrides)
-    response = coach(
-        data=processed_data,
+    response = _generate_coach_report(
+        processed_data=processed_data,
         user_data=user_data,
         deterministic_context=deterministic_context,
-        goal_path=str(GOAL_PROMPT_PATH),
-        goal_text=goal_text,
+        goal_overrides=goal_overrides,
     )
-    response = enforce_deterministic_report_fields(response, deterministic_context)
 
     print("💾 Generating structured JSON report...")
     report_path = _persist_pipeline_artifacts(
