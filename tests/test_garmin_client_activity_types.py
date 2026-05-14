@@ -16,10 +16,32 @@ sys.modules.setdefault("dotenv", dotenv_stub)
 from datetime import date
 from unittest.mock import patch
 
-from ingestion.garmin_client import TARGET_ACTIVITY_TYPES, get_garmin_activities
+from ingestion.garmin_client import TARGET_ACTIVITY_TYPES, format_garmin_value, get_garmin_activities, get_user_biometric_data
 
 
 class GarminClientActivityTypeTests(unittest.TestCase):
+    def test_format_garmin_value_formats_marathon_with_per_km_pace(self):
+        formatted_value, pace = format_garmin_value(3 * 3600 + 30 * 60, 6)
+
+        self.assertEqual(formatted_value, "210:00")
+        self.assertEqual(pace, "4:58 /km")
+
+    def test_get_user_biometric_data_leaves_marathon_pr_absent_when_not_provided(self):
+        class FakeGarminClient:
+            def get_rhr_day(self, _date):
+                return {}
+
+            def get_user_profile(self):
+                return {}
+
+            def get_personal_record(self):
+                return [{"typeId": 3, "value": 1200}]
+
+        biometrics = get_user_biometric_data(FakeGarminClient())
+
+        self.assertEqual(biometrics["pr_running"]["5km"], "20:00 (4:00 /km)")
+        self.assertNotIn("marathon", biometrics["pr_running"])
+
     def test_default_target_types_include_running_swimming_and_cycling(self):
         self.assertEqual(
             TARGET_ACTIVITY_TYPES,

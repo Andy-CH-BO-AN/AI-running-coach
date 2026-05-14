@@ -45,6 +45,14 @@ python -m pip install -r requirements.txt
 
 ### 2. 建立 `.env`
 
+先複製範例設定檔：
+
+```bash
+cp .env.example .env
+```
+
+範例內容可見 [`.env.example`](.env.example)：
+
 ```text
 GARMIN_ACCOUNT=your_garmin_email
 GARMIN_PASSWORD=your_garmin_password
@@ -256,7 +264,13 @@ DB tests 會拒絕 `TEST_DATABASE_URL` 等於 `DATABASE_URL` 或 database
 
 ## 測試
 
-一般 unit tests 不會呼叫真實 Garmin API：
+一般 unit tests 不會呼叫真實 Garmin API。想跑 README 這組核心測試時，可直接用：
+
+```bash
+./scripts/test_core.sh
+```
+
+它實際執行的是：
 
 ```bash
 python3 -m pytest -q \
