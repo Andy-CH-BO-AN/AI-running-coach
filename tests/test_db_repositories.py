@@ -6,10 +6,9 @@ sqlalchemy = pytest.importorskip("sqlalchemy")
 
 from sqlalchemy import func, select
 
+from src.db.mappers import _activity_values, _user_profile_snapshot_values
 from src.db.models import AIReport, Activity, ActivityFeature, ActivitySplit, SwimmingLength
 from src.db.repositories import (
-    _activity_values,
-    _user_profile_snapshot_values,
     get_latest_user_profile,
     get_or_create_default_user,
     get_profile_history,
