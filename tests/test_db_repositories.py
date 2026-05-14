@@ -8,6 +8,8 @@ from sqlalchemy import func, select
 
 from src.db.models import AIReport, Activity, ActivityFeature, ActivitySplit, SwimmingLength
 from src.db.repositories import (
+    _activity_values,
+    _user_profile_snapshot_values,
     get_latest_user_profile,
     get_or_create_default_user,
     get_profile_history,
@@ -43,6 +45,83 @@ def _activity_payload(activity_id=123, average_heart_rate=150):
             "hr_zone_2": 1800,
         },
     }
+
+
+def test_activity_values_maps_running_payload_without_db_roundtrip(db_session):
+    user = get_or_create_default_user(db_session)
+    payload = {
+        **_activity_payload(activity_id=401),
+        "duration_sec": 3001,
+        "max_heart_rate": 181,
+        "average_power": 250,
+        "raw_data": {
+            "training_stress_score": 72.5,
+            "power_avg": 245,
+            "power_max": 420,
+            "cadence": 176,
+            "max_cadence": 188,
+            "temperature": 31,
+        },
+    }
+
+    values = _activity_values(user.id, payload, source_file="raw.json")
+
+    assert values["user_id"] == user.id
+    assert values["garmin_activity_id"] == 401
+    assert values["activity_type"] == "running"
+    assert values["source_file"] == "raw.json"
+    assert values["duration_min"] == 50.0
+    assert values["duration_sec"] == 3001.0
+    assert values["average_pace_min_per_km"] == 5.0
+    assert values["average_speed_kmh"] is None
+    assert values["average_power"] == 250.0
+    assert values["max_power"] == 420.0
+    assert values["raw_metrics"]["training_stress_score"] == 72.5
+    assert values["raw_json"]["activity_id"] == 401
+
+
+def test_activity_values_keeps_cycling_speed_out_of_pace_columns(db_session):
+    user = get_or_create_default_user(db_session)
+    payload = {
+        "activity_id": 402,
+        "type": "cycling",
+        "date": "2026-05-10",
+        "distance": 20.0,
+        "duration": 60.0,
+        "average_pace": 20.0,
+        "raw_data": {"average_speed_kmh": 20.0},
+    }
+
+    values = _activity_values(user.id, payload)
+
+    assert values["average_pace_min_per_km"] is None
+    assert values["average_speed_kmh"] == 20.0
+
+
+def test_user_profile_snapshot_values_preserves_raw_profile_and_capture_time(db_session):
+    user = get_or_create_default_user(db_session)
+    captured_at = datetime(2026, 5, 14, 8, 0, tzinfo=timezone.utc)
+    profile = {
+        "max_heart_rate": "200",
+        "resting_heart_rate": 48,
+        "vo2max_running": 53,
+        "available_training_days": ["MONDAY", "WEDNESDAY"],
+        "pr_running": {"5km": "19:57 (3:59 /km)"},
+    }
+
+    values = _user_profile_snapshot_values(
+        user_id=user.id,
+        profile_data=profile,
+        captured_at=captured_at,
+        source_file="garmin_user.json",
+    )
+
+    assert values["user_id"] == user.id
+    assert values["captured_at"] == captured_at
+    assert values["source_file"] == "garmin_user.json"
+    assert values["max_heart_rate"] == 200.0
+    assert values["available_training_days"] == ["MONDAY", "WEDNESDAY"]
+    assert values["raw_profile"] == profile
 
 
 def test_upsert_activity_updates_by_garmin_activity_id(db_session):
