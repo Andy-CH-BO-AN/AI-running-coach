@@ -4,6 +4,18 @@ from copy import deepcopy
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence
 
+from src.preprocessing.coach_context_types import (
+    CoachEnvironment,
+    CoachSegment,
+    CoachSession,
+    CoachSessionCounts,
+    CoachWeek,
+    DeterministicCoachContext,
+    EvidenceFact,
+    HrZoneDistribution,
+    NextWeekDaySeed,
+    NextWeekPlanSeed,
+)
 from src.preprocessing.coach_context_utils import (
     WEEKDAY_LABELS,
     _average,
@@ -154,7 +166,7 @@ def _training_effect(processed: Dict[str, Any], metric: str) -> Optional[float]:
     )
 
 
-def _segment_from_split(split: Dict[str, Any]) -> Dict[str, Any]:
+def _segment_from_split(split: Dict[str, Any]) -> CoachSegment:
     return {
         "segment_type": "lap",
         "split_index": split.get("split_index"),
@@ -168,7 +180,7 @@ def _segment_from_split(split: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _build_segments(processed: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _build_segments(processed: Dict[str, Any]) -> List[CoachSegment]:
     splits = processed.get("splits")
     if not isinstance(splits, list):
         return []
@@ -190,7 +202,7 @@ def _temperature_values(processed: Dict[str, Any], raw: Dict[str, Any]) -> List[
     return values
 
 
-def _build_environment(processed: Dict[str, Any], raw: Dict[str, Any]) -> Dict[str, Any]:
+def _build_environment(processed: Dict[str, Any], raw: Dict[str, Any]) -> CoachEnvironment:
     temp = _average(_temperature_values(processed, raw), digits=1)
     humidity = _round_or_none((raw.get("raw_data") or {}).get("humidity"), 0)
     hr_impact = None
@@ -207,7 +219,7 @@ def _build_session(
     processed: Dict[str, Any],
     raw_lookup: Dict[str, Dict[str, Any]],
     max_hr: Optional[float],
-) -> Dict[str, Any]:
+) -> CoachSession:
     activity_id = processed.get("activity_id")
     raw = raw_lookup.get(_normalize_activity_id(activity_id), {})
 
@@ -251,7 +263,10 @@ def _build_session(
     }
 
 
-def _build_hr_zone_distribution(sessions: Sequence[Dict[str, Any]], processed_by_id: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+def _build_hr_zone_distribution(
+    sessions: Sequence[CoachSession],
+    processed_by_id: Dict[str, Dict[str, Any]],
+) -> HrZoneDistribution:
     minutes_by_zone: Dict[int, float] = {zone: 0.0 for zone in ZONE_RANGE}
     for session in sessions:
         processed = processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
@@ -581,7 +596,7 @@ def _risk_flags_for_week(week: Dict[str, Any], max_hr: Optional[float], baseline
     return sorted(flags)
 
 
-def _build_week_session_counts(week_sessions: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+def _build_week_session_counts(week_sessions: Sequence[CoachSession]) -> CoachSessionCounts:
     by_type: Dict[str, int] = {}
     by_source_activity_type: Dict[str, int] = {}
     for session in week_sessions:
@@ -601,12 +616,12 @@ def _build_week_session_counts(week_sessions: Sequence[Dict[str, Any]]) -> Dict[
 
 
 def _build_weekly_analysis(
-    sessions: Sequence[Dict[str, Any]],
+    sessions: Sequence[CoachSession],
     today: date,
     max_hr: Optional[float],
-) -> List[Dict[str, Any]]:
+) -> List[CoachWeek]:
     current_week_start = _week_start_for(today)
-    buckets: List[Dict[str, Any]] = []
+    buckets: List[CoachWeek] = []
     for offset in range(4):
         week_start = current_week_start - timedelta(days=offset * 7)
         week_end = week_start + timedelta(days=6)
@@ -683,7 +698,7 @@ def _build_load_assessment(weekly_analysis: Sequence[Dict[str, Any]]) -> Dict[st
     }
 
 
-def _build_next_week_seed(today: date, user_data: Dict[str, Any]) -> Dict[str, Any]:
+def _build_next_week_seed(today: date, user_data: Dict[str, Any]) -> NextWeekPlanSeed:
     next_week_start = _week_start_for(today) + timedelta(days=7)
     available_days = {
         normalized
@@ -695,7 +710,7 @@ def _build_next_week_seed(today: date, user_data: Dict[str, Any]) -> Dict[str, A
         for normalized in (_normalize_weekday(day) for day in user_data.get("preferred_long_training_days") or [])
         if normalized
     }
-    days: List[Dict[str, Any]] = []
+    days: List[NextWeekDaySeed] = []
     for offset, weekday in enumerate(WEEKDAY_LABELS):
         day = next_week_start + timedelta(days=offset)
         days.append(
@@ -724,11 +739,11 @@ def _build_pb_validation_seed(user_data: Dict[str, Any]) -> List[Dict[str, Any]]
 
 
 def _build_evidence_facts(
-    weekly_analysis: Sequence[Dict[str, Any]],
-    hr_zone_distribution: Dict[str, Any],
+    weekly_analysis: Sequence[CoachWeek],
+    hr_zone_distribution: HrZoneDistribution,
     load_assessment: Dict[str, Any],
-) -> List[Dict[str, Any]]:
-    facts: List[Dict[str, Any]] = []
+) -> List[EvidenceFact]:
+    facts: List[EvidenceFact] = []
     current_week = weekly_analysis[0] if weekly_analysis else None
     if current_week:
         facts.append(
@@ -1009,7 +1024,7 @@ def build_deterministic_coach_context(
     user_data: Optional[Dict[str, Any]] = None,
     raw_activities: Optional[List[Dict[str, Any]]] = None,
     today: Any = None,
-) -> Dict[str, Any]:
+) -> DeterministicCoachContext:
     """Build deterministic coach context from local data before Gemini analysis."""
 
     user_data = user_data or {}
