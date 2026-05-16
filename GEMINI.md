@@ -2,11 +2,15 @@
 
 ## 核心規則繼承 (Inheritance)
 
+Canonical 設定集中在 [`ai/README.md`](ai/README.md)。各工具僅保留薄適配層
+（`.cursor/`、`.codex/`、`.github/`、`CLAUDE.md`、`.windsurfrules`）。
+
 當你啟動此專案時，必須優先讀取並遵循以下路徑中的規範：
 
-1. **開發工作流：** 參考 `ai/shared/` 下的指令，包含 Coding Workflow, Reviewer, QA 等。
-2. **專案技能：** 參考 `ai/skills/` 下的 README review 指令。
-3. **Prompt 範本：** 核心邏輯位於 `prompts/coach.md` 與 `prompts/goal.md`。
+1. **開發工作流：** `ai/shared/instructions.md`（Reviewer、QA、Security 等同目錄）
+2. **專案技能：** `ai/skills/`（含 `git-change-conventions`、`python-review-qa-loop`、
+   `readme-pm-review`）
+3. **Prompt 範本：** `prompts/coach.md` 與 `prompts/goal.md`
 
 ## 核心架構與職責邊界 (Crucial Design Principles)
 
