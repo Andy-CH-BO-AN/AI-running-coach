@@ -40,8 +40,10 @@ must change.
    - `.codex/skills/<skill-name>/SKILL.md`
    - `.github/skills/<skill-name>/SKILL.md`
 
-Keep adapters minimal: reference `ai/skills/<skill-name>/SKILL.md` (or
-`@ai/skills/<skill-name>/SKILL.md` in Cursor rules/skills where supported).
+Keep adapters minimal: tell the agent to read `ai/skills/<skill-name>/SKILL.md`
+before acting. In Cursor, `@ai/...` includes work in `.cursor/rules/*.mdc` only;
+project skills and subagents need explicit read instructions like the
+`.codex/` and `.github/` adapters.
 
 ## Add a new shared agent
 

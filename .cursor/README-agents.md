@@ -24,9 +24,10 @@ Files under `.cursor/` are thin Cursor adapters only.
 | Project skills | [`.cursor/skills/`](skills/) |
 | Root pointer | [`AGENTS.md`](../AGENTS.md) |
 
-Subagents and skills use `@ai/...` includes so Cursor loads the canonical
-markdown without duplicating it. If an include fails, read the linked `ai/`
-file directly.
+**Rules** (`.mdc`) may use `@ai/...` file references. **Skills** and
+**subagents** do not expand those references when loaded; their adapters
+must instruct the agent to read the canonical `ai/` file explicitly (same
+pattern as `.codex/` and `.github/` skill adapters).
 
 ## On-demand usage
 

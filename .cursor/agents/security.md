@@ -8,4 +8,14 @@ model: inherit
 readonly: true
 ---
 
-@ai/shared/security.agent.md
+# Cursor Subagent Adapter
+
+Canonical instructions: `ai/shared/security.agent.md`
+
+## Adapter rules
+
+1. Read `ai/shared/security.agent.md` before acting.
+2. Follow the canonical security instructions instead of duplicating logic in
+   this adapter.
+3. If this adapter and the canonical file diverge, treat
+   `ai/shared/security.agent.md` as the source of truth.

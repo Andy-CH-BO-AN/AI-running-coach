@@ -8,4 +8,14 @@ model: inherit
 readonly: false
 ---
 
-@ai/shared/qa.agent.md
+# Cursor Subagent Adapter
+
+Canonical instructions: `ai/shared/qa.agent.md`
+
+## Adapter rules
+
+1. Read `ai/shared/qa.agent.md` before acting.
+2. Follow the canonical QA instructions instead of duplicating logic in this
+   adapter.
+3. If this adapter and the canonical file diverge, treat
+   `ai/shared/qa.agent.md` as the source of truth.
