@@ -259,8 +259,9 @@ DB tests 會拒絕 `TEST_DATABASE_URL` 等於 `DATABASE_URL` 或 database
 | `prompts/coach.md` | 主要 AI coach prompt。 |
 | `prompts/goal.md` | 預設賽事目標與訓練限制。 |
 | `docs/dashboard.md` | Dashboard 資訊架構、欄位對應與 adapter 規則。 |
-| `ai/shared/`、`ai/skills/` | AI coding workflow、reviewer、QA、安全與 README review 的 canonical instructions。 |
-| `.github/`、`.codex/` | 指向 canonical AI instructions 的薄 adapter。 |
+| `ai/` | AI coding workflow、reviewer、QA、security、dashboard 與 skills 的 canonical instructions（見 [`ai/README.md`](ai/README.md)）。 |
+| `.cursor/`、`.github/`、`.codex/` | 各編輯器／Copilot 的薄 adapter，指向 `ai/`。 |
+| `AGENTS.md`、`CLAUDE.md`、`.windsurfrules`、`GEMINI.md` | Cursor、Claude Code、Windsurf、Gemini 的根目錄入口，同樣指向 `ai/`。 |
 
 ## 測試
 
@@ -295,19 +296,23 @@ python tests/scripts/garmin_client_smoke.py
 
 ## AI Agent 工作流
 
-這個 repo 使用 shared Markdown 作為 AI coding workflow instructions
-的單一來源。核心文件在：
+這個 repo 以 `ai/` 作為 AI coding instructions 的單一來源；各工具目錄
+只放薄 adapter，**請在 `ai/` 維護規則，不要複製 workflow 正文**。
 
-- `ai/shared/instructions.md`
-- `ai/shared/reviewer.agent.md`
-- `ai/shared/qa.agent.md`
-- `ai/shared/security.agent.md`
-- `ai/skills/python-review-qa-loop/SKILL.md`
-- `ai/skills/readme-pm-review/SKILL.md`
+| 工具 | 入口 |
+| --- | --- |
+| 維護與新增 skill/agent | [`ai/README.md`](ai/README.md) |
+| Cursor | [`.cursor/README-agents.md`](.cursor/README-agents.md)、[`AGENTS.md`](AGENTS.md) |
+| GitHub Copilot | [`.github/README-agents.md`](.github/README-agents.md) |
+| Codex | [`.codex/README-agents.md`](.codex/README-agents.md) |
+| Gemini | [`GEMINI.md`](GEMINI.md) |
+| Claude Code | [`CLAUDE.md`](CLAUDE.md) |
+| Windsurf | [`.windsurfrules`](.windsurfrules) |
 
-`.github/` 與 `.codex/` 內的檔案是薄 adapter，指向 `ai/shared/` 與
-`ai/skills/`。未來如果要加入其他 coding agent，只需要新增 adapter，
-不要複製維護 workflow 規則。
+Canonical 文件：`ai/shared/instructions.md`（workflow）、
+`reviewer` / `qa` / `security` / `frontend-dashboard` agent，以及
+`ai/skills/` 下的 `python-review-qa-loop`、`git-change-conventions`、
+`readme-pm-review`。
 
 ## 注意事項
 

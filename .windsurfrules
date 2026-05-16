@@ -1,0 +1,27 @@
+# Windsurf / Cascade rules
+
+Canonical agent configuration: [`ai/README.md`](ai/README.md).
+
+## Required reading
+
+- Workflow: `ai/shared/instructions.md`
+- Reviewer: `ai/shared/reviewer.agent.md`
+- QA: `ai/shared/qa.agent.md`
+- Security: `ai/shared/security.agent.md`
+
+## On demand
+
+- Dashboard: `ai/shared/frontend-dashboard.agent.md`
+- Skills: `ai/skills/git-change-conventions/SKILL.md`,
+  `ai/skills/python-review-qa-loop/SKILL.md`,
+  `ai/skills/readme-pm-review/SKILL.md` (README PM review only when asked)
+
+## Project constraints
+
+- Compute deterministic training facts in Python (`coach_context.py`); use the
+  LLM for coaching interpretation, not arithmetic.
+- Dashboard: Vanilla HTML/JS/CSS, no React/npm build.
+- Keep data and processing local.
+
+Do not duplicate long prompts in this file; edit `ai/` and keep this pointer
+current.

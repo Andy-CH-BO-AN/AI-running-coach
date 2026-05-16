@@ -1,0 +1,7 @@
+---
+description: AI running coach dashboard design and visualization (Vanilla HTML/JS, report JSON)
+globs: dashboard/**,src/dashboard/**,docs/dashboard.md
+alwaysApply: false
+---
+
+@ai/shared/frontend-dashboard.agent.md

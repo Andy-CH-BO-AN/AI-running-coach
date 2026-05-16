@@ -1,0 +1,6 @@
+---
+description: AI running coach shared dev workflow (minimal patch, review, QA, security)
+alwaysApply: true
+---
+
+@ai/shared/instructions.md

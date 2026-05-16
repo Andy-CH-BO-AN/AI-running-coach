@@ -17,6 +17,15 @@ behavior.
 - [`ai/skills/git-change-conventions/SKILL.md`](../ai/skills/git-change-conventions/SKILL.md)
 - [`ai/skills/git-change-conventions/agents/openai.yaml`](../ai/skills/git-change-conventions/agents/openai.yaml)
 
+## Platform adapters
+
+| Tool | README |
+|------|--------|
+| Cursor | [`.cursor/README-agents.md`](../.cursor/README-agents.md) |
+| Codex | this file |
+| GitHub | [`.github/README-agents.md`](../.github/README-agents.md) |
+| Gemini | [`GEMINI.md`](../GEMINI.md) |
+
 ## Codex Adapters
 
 - [`copilot-instructions.md`](copilot-instructions.md)

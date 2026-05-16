@@ -9,6 +9,7 @@ applyTo:
   - "**/*.py"
   - ".github/**"
   - ".codex/**"
+  - ".cursor/**"
   - "ai/**"
 auto_run_tests: true
 auto_apply_fixes: true

@@ -1,8 +1,9 @@
 # Shared AI Workflow
 
 This repository uses a single source of truth for agent behavior.
-Platform-specific files in `.github/` and `.codex/` should stay thin and
-point back to these shared markdown files.
+Platform-specific files in `.cursor/`, `.github/`, and `.codex/` should
+stay thin and point back to these shared markdown files. See `ai/README.md`
+for the full adapter map.
 
 ## Scope
 
