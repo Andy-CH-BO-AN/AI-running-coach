@@ -203,6 +203,32 @@ def test_calendar_extracts_pace_interval_and_rest_from_description(tmp_path):
     assert "3:40" in thursday["pace_label"]
 
 
+def test_calendar_extracts_interval_label_from_multiplier_first_description(tmp_path):
+    report = {
+        "next_week_plan": {
+            "week_start": "2026-05-18",
+            "days": [
+                {
+                    "date": "2026-05-22",
+                    "day_of_week": "Fri",
+                    "title": "速度課",
+                    "session_type": "interval",
+                    "description": "6x400m，休息90s，配速 3:45/km",
+                    "distance_km": 5,
+                    "duration_min": 40,
+                    "intensity": "hard",
+                    "key_workout": True,
+                }
+            ],
+        }
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    friday = next(day for day in payload["calendar"]["days"] if day["day_key"] == "Fri")
+
+    assert friday["interval_label"] == "400m × 6"
+
+
 def test_power_zones_are_adapted_when_present(tmp_path):
     report = {
         "power_zone_distribution": {

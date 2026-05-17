@@ -365,10 +365,12 @@
     }
 
     if (!meta.interval_label) {
-      var intervalMatch = description.match(/(\d+(?:\.\d+)?)\s*m\s*[×x]\s*(\d+)/i)
-        || description.match(/(\d+)\s*[×x]\s*(\d+)\s*m/i);
-      if (intervalMatch) {
-        meta.interval_label = intervalMatch[1] + "m × " + intervalMatch[2];
+      var distanceFirstMatch = description.match(/(\d+(?:\.\d+)?)\s*m\s*[×x]\s*(\d+)/i);
+      var countFirstMatch = description.match(/(\d+)\s*[×x]\s*(\d+(?:\.\d+)?)\s*m/i);
+      if (distanceFirstMatch) {
+        meta.interval_label = distanceFirstMatch[1] + "m × " + distanceFirstMatch[2];
+      } else if (countFirstMatch) {
+        meta.interval_label = countFirstMatch[2] + "m × " + countFirstMatch[1];
       }
     }
 
