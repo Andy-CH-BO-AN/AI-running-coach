@@ -51,6 +51,17 @@ from src.agents import coach
 
 
 class CoachTests(unittest.TestCase):
+    def test_default_model_fallback_order_prefers_preview_gemini_3(self):
+        self.assertEqual(
+            coach.MODEL_FALLBACKS,
+            (
+                "gemini-flash-latest",
+                "gemini-3-flash-preview",
+                "gemini-3.1-flash-lite",
+                "gemini-2.5-flash",
+            ),
+        )
+
     def test_build_context_includes_goal_user_data_and_activity_data(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             goal_path = Path(temp_dir) / "goal.md"
