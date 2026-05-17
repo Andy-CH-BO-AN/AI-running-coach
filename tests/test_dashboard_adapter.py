@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import shutil
 import subprocess
 
@@ -66,6 +67,22 @@ def test_weekly_metrics_are_derived_from_sessions_and_mark_partial_data(tmp_path
     assert metrics["derived_training_load"] == 44.4
     assert metrics["data_quality"] == "部分資料不足"
     assert set(metrics["missing_fields"]) == {"duration_min", "training_load"}
+
+
+def test_dashboard_renderer_does_not_write_report_text_via_inner_html():
+    source = Path("dashboard/app.js").read_text(encoding="utf-8")
+
+    unsafe_fragments = [
+        'p.innerHTML = "<strong>" + block.label + "：</strong>" + block.text;',
+        'top.innerHTML = "<h4 class=\'week-title\'>" + week.week_label + "</h4>";',
+        'summaryLead.innerHTML = "<p><strong>總結：</strong>" + trend.summaryNote + "</p>";',
+        'temp.innerHTML = "<p>🌡️ 高溫校正：" + trend.temperature_note + "</p>";',
+        'row.innerHTML = "<td>" + (metric.label || metric.metric || "指標") + "</td><td><b>" + value + "</b></td><td>" + (metric.source_label || "資料來源") + "</td>";',
+        'card.innerHTML = "<span class=\'coach-note-label\'>" + block.label + "</span><p>" + block.text + "</p>";',
+    ]
+
+    for fragment in unsafe_fragments:
+        assert fragment not in source
 
 
 def test_risk_flags_use_human_readable_labels(tmp_path):

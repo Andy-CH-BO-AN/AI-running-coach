@@ -68,6 +68,35 @@
     });
   }
 
+  function textElement(tagName, className, text) {
+    var node = document.createElement(tagName);
+    if (className) {
+      node.className = className;
+    }
+    node.textContent = text;
+    return node;
+  }
+
+  function appendLabeledCopy(container, className, labelText, bodyText) {
+    var paragraph = document.createElement("p");
+    paragraph.className = className;
+    paragraph.appendChild(textElement("strong", "", labelText + "："));
+    paragraph.appendChild(document.createTextNode(bodyText));
+    container.appendChild(paragraph);
+  }
+
+  function appendTableCells(row, values, boldIndex) {
+    values.forEach(function(value, index) {
+      var cell = document.createElement("td");
+      if (index === boldIndex) {
+        cell.appendChild(textElement("b", "", value));
+      } else {
+        cell.textContent = value;
+      }
+      row.appendChild(cell);
+    });
+  }
+
   function renderPrimaryAction(model) {
     var primary = model.primary_action;
     clear(elements.primaryAction);
@@ -142,7 +171,7 @@
     grid.className = "summary-columns";
 
     var insightsCol = document.createElement("div");
-    insightsCol.innerHTML = "<h3>教練觀察</h3>";
+    insightsCol.appendChild(textElement("h3", "", "教練觀察"));
     var insightsList = document.createElement("ul");
     summary.top_3_insights.forEach(function(item) {
       var li = document.createElement("li");
@@ -152,7 +181,7 @@
     insightsCol.appendChild(insightsList);
 
     var actionsCol = document.createElement("div");
-    actionsCol.innerHTML = "<h3>下一步建議</h3>";
+    actionsCol.appendChild(textElement("h3", "", "下一步建議"));
     var actionsList = document.createElement("ul");
     summary.top_3_actions.forEach(function(item) {
       var li = document.createElement("li");
@@ -242,7 +271,13 @@
   function renderActivityStat(label, value, unit) {
     var div = document.createElement("div");
     div.className = "activity-stat";
-    div.innerHTML = "<span class='stat-label'>" + label + "</span><span class='stat-value'>" + value + " <span class='stat-unit'>" + unit + "</span></span>";
+    div.appendChild(textElement("span", "stat-label", label));
+    var valueWrap = document.createElement("span");
+    valueWrap.className = "stat-value";
+    valueWrap.appendChild(document.createTextNode(String(value)));
+    valueWrap.appendChild(document.createTextNode(" "));
+    valueWrap.appendChild(textElement("span", "stat-unit", unit));
+    div.appendChild(valueWrap);
     return div;
   }
 
@@ -263,7 +298,7 @@
     }).filter(function keep(value) { return Number.isFinite(value); });
 
     if (paces.length < 2) {
-      wrap.innerHTML = "<p class='subtle'>分段資料不足，無法繪製趨勢圖。</p>";
+      wrap.appendChild(textElement("p", "subtle", "分段資料不足，無法繪製趨勢圖。"));
       return wrap;
     }
 
@@ -306,7 +341,7 @@
     var latest = model.latest_activity;
 
     if (!latest || !latest.has_data) {
-      elements.latestActivity.innerHTML = "<p class='subtle'>尚無近期活動紀錄。</p>";
+      elements.latestActivity.appendChild(textElement("p", "subtle", "尚無近期活動紀錄。"));
       return;
     }
 
@@ -336,7 +371,7 @@
       var trend = document.createElement("details");
       trend.className = "rep-trend-details";
       trend.open = true;
-      trend.innerHTML = "<summary>重點分段趨勢</summary>";
+      trend.appendChild(textElement("summary", "", "重點分段趨勢"));
       if (latest.rep_trend_label) {
         var trendText = document.createElement("p");
         trendText.className = "rep-sparkline-note";
@@ -360,7 +395,8 @@
       noteBlocks.forEach(function addNote(block) {
         var card = document.createElement("div");
         card.className = "coach-note-card";
-        card.innerHTML = "<span class='coach-note-label'>" + block.label + "</span><p>" + block.text + "</p>";
+        card.appendChild(textElement("span", "coach-note-label", block.label));
+        card.appendChild(textElement("p", "", block.text));
         stack.appendChild(card);
       });
       elements.latestActivity.appendChild(stack);
@@ -372,7 +408,7 @@
     clear(elements.weeklyChart);
 
     if (weeks.length === 0) {
-      elements.weeklyChart.innerHTML = "<div class='chart-empty'>尚無訓練資料</div>";
+      elements.weeklyChart.appendChild(textElement("div", "chart-empty", "尚無訓練資料"));
       return;
     }
 
@@ -475,7 +511,7 @@
 
       var top = document.createElement("div");
       top.className = "week-topline";
-      top.innerHTML = "<h4 class='week-title'>" + week.week_label + "</h4>";
+      top.appendChild(textElement("h4", "week-title", week.week_label));
       var quality = document.createElement("span");
       quality.className = "quality-pill" + (week.metrics.data_quality === "部分資料不足" ? " partial" : "");
       quality.textContent = week.metrics.data_quality;
@@ -484,9 +520,13 @@
 
       var metrics = document.createElement("div");
       metrics.className = "week-metrics";
-      metrics.innerHTML = "<span>" + week.metrics.derived_total_distance_km + " km</span><span>" +
-        week.metrics.derived_total_duration_min + " min</span><span>" +
-        week.metrics.derived_training_load + " TSS</span>";
+      [
+        week.metrics.derived_total_distance_km + " km",
+        week.metrics.derived_total_duration_min + " min",
+        week.metrics.derived_training_load + " TSS"
+      ].forEach(function(value) {
+        metrics.appendChild(textElement("span", "", value));
+      });
       card.appendChild(metrics);
 
       [
@@ -494,10 +534,7 @@
         { label: "評估", text: week.weekly_assessment },
         { label: "建議", text: week.weekly_recommendation }
       ].forEach(function(block) {
-        var p = document.createElement("p");
-        p.className = "week-copy";
-        p.innerHTML = "<strong>" + block.label + "：</strong>" + block.text;
-        card.appendChild(p);
+        appendLabeledCopy(card, "week-copy", block.label, block.text);
       });
 
       if (week.risk_flags.length > 0) {
@@ -525,7 +562,7 @@
 
     var summaryLead = document.createElement("div");
     summaryLead.className = "trend-summary-note";
-    summaryLead.innerHTML = "<p><strong>總結：</strong>" + trend.summaryNote + "</p>";
+    appendLabeledCopy(summaryLead, "", "總結", trend.summaryNote);
     elements.twelveWeekContent.appendChild(summaryLead);
 
     (trend.metrics || [
@@ -534,9 +571,12 @@
     ]).forEach(function(metric) {
       var card = document.createElement("div");
       card.className = "trend-metric-card";
-      card.innerHTML = "<span class='trend-metric-label'>" + metric.label + "</span>" +
-                       "<span class='trend-metric-value'>" + metric.value + "</span>" +
-                       "<div class='trend-sparkline'>" + renderSparkline(metric.series || []) + "</div>";
+      card.appendChild(textElement("span", "trend-metric-label", metric.label));
+      card.appendChild(textElement("span", "trend-metric-value", metric.value));
+      var sparkline = document.createElement("div");
+      sparkline.className = "trend-sparkline";
+      sparkline.innerHTML = renderSparkline(metric.series || []);
+      card.appendChild(sparkline);
       grid.appendChild(card);
     });
 
@@ -545,7 +585,7 @@
     if (trend.temperature_note) {
       var temp = document.createElement("div");
       temp.className = "trend-summary-note";
-      temp.innerHTML = "<p>🌡️ 高溫校正：" + trend.temperature_note + "</p>";
+      temp.appendChild(textElement("p", "", "🌡️ 高溫校正：" + trend.temperature_note));
       elements.twelveWeekContent.appendChild(temp);
     }
   }
@@ -650,13 +690,13 @@
 
     var keySection = document.createElement("div");
     keySection.className = "plan-key-section";
-    keySection.innerHTML = "<p class='plan-section-label'>核心訓練</p>";
+    keySection.appendChild(textElement("p", "plan-section-label", "核心訓練"));
     var keyGrid = document.createElement("div");
     keyGrid.className = "plan-key-grid";
 
     var supportSection = document.createElement("div");
     supportSection.className = "plan-support-section";
-    supportSection.innerHTML = "<p class='plan-section-label'>輔助與恢復</p>";
+    supportSection.appendChild(textElement("p", "plan-section-label", "輔助與恢復"));
     var supportRow = document.createElement("div");
     supportRow.className = "plan-support-row";
 
@@ -716,9 +756,12 @@
     list.className = "zone-list";
     distribution.zones.forEach(function(zone) {
       var li = document.createElement("li");
-      li.innerHTML = "<span class='zone-color' style='background:" + zone.color + "'></span>" +
-                     "<span class='zone-name'>" + zone.name + "</span>" +
-                     "<span class='zone-value'>" + zone.percentage + "%</span>";
+      var dot = document.createElement("span");
+      dot.className = "zone-color";
+      dot.style.background = zone.color;
+      li.appendChild(dot);
+      li.appendChild(textElement("span", "zone-name", zone.name));
+      li.appendChild(textElement("span", "zone-value", zone.percentage + "%"));
       list.appendChild(li);
     });
     block.appendChild(list);
@@ -873,7 +916,12 @@
     mechanics.metrics.forEach(function(m) {
       var div = document.createElement("div");
       div.className = "mechanic-item";
-      div.innerHTML = "<span class='stat-label'>" + m.title + "</span><span class='stat-value'>" + m.display_value + " <span class='stat-unit'>" + m.unit + "</span></span>";
+      div.appendChild(textElement("span", "stat-label", m.title));
+      var valueWrap = document.createElement("span");
+      valueWrap.className = "stat-value";
+      valueWrap.appendChild(document.createTextNode(m.display_value + " "));
+      valueWrap.appendChild(textElement("span", "stat-unit", m.unit));
+      div.appendChild(valueWrap);
       grid.appendChild(div);
     });
 
@@ -892,7 +940,7 @@
     clear(elements.evidenceLayer);
 
     if (!evidence.hasEvidence) {
-      elements.evidenceLayer.innerHTML = "<p class='subtle'>" + evidence.fallbackMessage + "</p>";
+      elements.evidenceLayer.appendChild(textElement("p", "subtle", evidence.fallbackMessage));
       return;
     }
 
@@ -903,7 +951,7 @@
     var wrapper = document.createElement("details");
     wrapper.className = "evidence-wrapper";
     wrapper.open = false;
-    wrapper.innerHTML = "<summary>展開 " + evidence.items.length + " 項 AI 建議依據</summary>";
+    wrapper.appendChild(textElement("summary", "", "展開 " + evidence.items.length + " 項 AI 建議依據"));
 
     evidence.items.forEach(function(item) {
       var card = document.createElement("article");
@@ -921,7 +969,7 @@
 
       var advanced = document.createElement("details");
       advanced.className = "evidence-advanced";
-      advanced.innerHTML = "<summary>查看依據數據</summary>";
+      advanced.appendChild(textElement("summary", "", "查看依據數據"));
 
       var narrative = document.createElement("p");
       narrative.className = "evidence-narrative";
@@ -938,12 +986,19 @@
         item.supporting_metrics.forEach(function(metric) {
           var row = document.createElement("tr");
           var value = metric.display_value || metric.value || "資料不足";
-          row.innerHTML = "<td>" + (metric.label || metric.metric || "指標") + "</td><td><b>" + value + "</b></td><td>" + (metric.source_label || "資料來源") + "</td>";
+          appendTableCells(row, [
+            metric.label || metric.metric || "指標",
+            value,
+            metric.source_label || "資料來源"
+          ], 1);
           tbody.appendChild(row);
           if (isDebugMode() && metric.source_path) {
             var debugRow = document.createElement("tr");
             debugRow.className = "evidence-debug-path";
-            debugRow.innerHTML = "<td colspan='3'>資料來源：" + (metric.source_label || "資料來源") + "</td>";
+            var debugCell = document.createElement("td");
+            debugCell.colSpan = 3;
+            debugCell.textContent = "資料來源：" + (metric.source_label || "資料來源");
+            debugRow.appendChild(debugCell);
             debugRow.title = metric.source_path;
             tbody.appendChild(debugRow);
           }
