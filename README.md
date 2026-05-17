@@ -21,9 +21,9 @@ data、processed artifacts 與 AI report 都保留在本機。
 - 從 Garmin Connect 抓取個人資料、個人紀錄、近期活動、分圈資料與活動詳細 payload。
 - 支援 `running`、`lap_swimming`、`cycling` 活動；輸出時會正規化為跑步、游泳與自行車指標。
 - 產生 processed CSV、deterministic coach context JSON，以及 AI coach JSON report。
-- 在程式端先計算週訓練負荷、心率 Z1-Z5 分佈、跑姿、配速區間、交叉訓練摘要與下週日期 seed。
-- 透過 Gemini 把 deterministic facts 轉成狀態標籤、風險解釋、賽事準備度、下週課表與 evidence 文案。
-- 啟動本機 dashboard，讀取 `output/ai_report_YYYYMMDD.json` 並用跑者可讀標籤呈現報告。
+- 在程式端先計算週訓練負荷、心率 Z1-Z5 分佈、功率 Z1-Z5 分佈、跑姿、配速區間、交叉訓練摘要與下週日期 seed。
+- 透過 Gemini 把 deterministic facts 轉成狀態標籤、風險解釋、賽事準備度、下週課表，以及**心率＋功率**雙軌強度解讀與 evidence 文案。
+- 啟動本機 dashboard（V2 跑者介面），讀取 `output/ai_report_YYYYMMDD.json`：Primary Action、最近重點訓練回顧、Key/Support 課表、可折疊 Zone E（心率/功率/配速區間/跑姿），以及跑者可讀的 AI 建議依據與分段明細。
 - 選用 PostgreSQL 匯入 raw/user/processed artifacts，支援 idempotent upsert 與後續資料版本化。
 
 ## 目前限制
@@ -90,8 +90,16 @@ python3 -m src.dashboard.server
 ```
 
 預設網址是 `http://127.0.0.1:8765`。Dashboard 會掃描 `output/`，
-優先載入日期最新的 report。設計與欄位對應見
+優先載入日期最新的 report（選單顯示 `2026/05/16（最新）` 格式）。設計與欄位對應見
 [`docs/dashboard.md`](docs/dashboard.md)。
+
+Dashboard V2 重點：
+
+- **下週課表**：核心訓練卡顯示配速、間歇距離、休息；頂部 summary 列顯示主題與週跑量。
+- **訓練回顧**：優先選最近一次 interval / tempo / long / race 等重點訓練；interval 顯示重點分段趨勢，沒有重點課時才回退到最新活動。
+- **強度分佈**：心率與功率區間並列，含 AI `assessment` / `recommendation`（需重跑 pipeline 產生新 report）。
+- **Zone E**：預設收合的 `<details>`，內含配速區間表與跑姿（排除休息段的有效跑步分圈）。
+- **Evidence**：展開後顯示 supporting session 的分段明細，包含配速、心率、步頻與步幅；畫面使用跑者可讀來源名稱，不直接露出 JSON path。
 
 ## 自訂賽事目標
 

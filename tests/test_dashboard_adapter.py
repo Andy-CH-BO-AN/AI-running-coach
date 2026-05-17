@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import shutil
 import subprocess
 
@@ -26,6 +27,7 @@ def run_adapter_case(tmp_path, report):
         + "evidence: model.evidence,"
         + "physio: model.physio_metrics,"
         + "mechanics: model.running_mechanics,"
+        + "latest: model.latest_activity,"
         + "summary: model.coaching_summary"
         + "});\n"
     )
@@ -67,6 +69,31 @@ def test_weekly_metrics_are_derived_from_sessions_and_mark_partial_data(tmp_path
     assert set(metrics["missing_fields"]) == {"duration_min", "training_load"}
 
 
+def test_dashboard_renderer_does_not_write_report_text_via_inner_html():
+    source = Path("dashboard/app.js").read_text(encoding="utf-8")
+
+    unsafe_fragments = [
+        'p.innerHTML = "<strong>" + block.label + "：</strong>" + block.text;',
+        'top.innerHTML = "<h4 class=\'week-title\'>" + week.week_label + "</h4>";',
+        'summaryLead.innerHTML = "<p><strong>總結：</strong>" + trend.summaryNote + "</p>";',
+        'temp.innerHTML = "<p>🌡️ 高溫校正：" + trend.temperature_note + "</p>";',
+        'row.innerHTML = "<td>" + (metric.label || metric.metric || "指標") + "</td><td><b>" + value + "</b></td><td>" + (metric.source_label || "資料來源") + "</td>";',
+        'card.innerHTML = "<span class=\'coach-note-label\'>" + block.label + "</span><p>" + block.text + "</p>";',
+    ]
+
+    for fragment in unsafe_fragments:
+        assert fragment not in source
+
+
+def test_dashboard_uses_local_font_stack_only():
+    index_source = Path("dashboard/index.html").read_text(encoding="utf-8")
+    style_source = Path("dashboard/styles.css").read_text(encoding="utf-8")
+
+    assert "fonts.googleapis.com" not in index_source
+    assert "fonts.gstatic.com" not in index_source
+    assert "font-family: Inter" not in style_source
+
+
 def test_risk_flags_use_human_readable_labels(tmp_path):
     report = {
         "weekly_analysis": [
@@ -94,6 +121,145 @@ def test_risk_flags_use_human_readable_labels(tmp_path):
         {"code": "high_intensity_long_run", "label": "長跑強度偏高"},
         {"code": "fatigue_risk", "label": "疲勞風險"},
     ]
+
+
+def test_work_reps_exclude_warmup_and_recovery_segments(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "interval",
+                        "segments": [
+                            {
+                                "segment_type": "warmup",
+                                "distance_km": 1.5,
+                                "avg_pace": "06:00",
+                            },
+                            {
+                                "segment_type": "main",
+                                "distance_km": 0.4,
+                                "avg_pace": "04:00",
+                            },
+                            {
+                                "segment_type": "recovery",
+                                "distance_km": 0.2,
+                                "avg_pace": "08:00",
+                            },
+                        ],
+                    }
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    script = open("dashboard/reportAdapter.js", encoding="utf-8").read() + (
+        "\nvar model = DashboardAdapter.buildDashboardModel("
+        + json.dumps(report, ensure_ascii=False)
+        + ");\nJSON.stringify(model.latest_activity.work_reps);\n"
+    )
+    script_path = tmp_path / "work_reps_case.js"
+    script_path.write_text(script, encoding="utf-8")
+    result = subprocess.run(
+        ["osascript", "-l", "JavaScript", str(script_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    reps = json.loads(result.stdout)
+    assert len(reps) == 1
+    assert reps[0]["avg_pace"] == "04:00"
+
+
+def test_calendar_extracts_pace_interval_and_rest_from_description(tmp_path):
+    report = {
+        "next_week_plan": {
+            "week_start": "2026-05-18",
+            "theme": "速度週",
+            "days": [
+                {
+                    "date": "2026-05-21",
+                    "day_of_week": "Thu",
+                    "title": "400m 間歇",
+                    "session_type": "interval",
+                    "description": "400m×6，84-88s/rep，休息90s，配速 3:40-3:45/km",
+                    "distance_km": 6,
+                    "duration_min": 50,
+                    "intensity": "hard",
+                    "key_workout": True,
+                }
+            ],
+        }
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    thursday = next(day for day in payload["calendar"]["days"] if day["day_key"] == "Thu")
+
+    assert thursday["interval_label"] == "400m × 6"
+    assert thursday["rest_label"] == "90s"
+    assert "3:40" in thursday["pace_label"]
+
+
+def test_calendar_extracts_interval_label_from_multiplier_first_description(tmp_path):
+    report = {
+        "next_week_plan": {
+            "week_start": "2026-05-18",
+            "days": [
+                {
+                    "date": "2026-05-22",
+                    "day_of_week": "Fri",
+                    "title": "速度課",
+                    "session_type": "interval",
+                    "description": "6x400m，休息90s，配速 3:45/km",
+                    "distance_km": 5,
+                    "duration_min": 40,
+                    "intensity": "hard",
+                    "key_workout": True,
+                }
+            ],
+        }
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    friday = next(day for day in payload["calendar"]["days"] if day["day_key"] == "Fri")
+
+    assert friday["interval_label"] == "400m × 6"
+
+
+def test_power_zones_are_adapted_when_present(tmp_path):
+    report = {
+        "power_zone_distribution": {
+            "period_weeks": 4,
+            "zones": [
+                {"zone": 1, "name": "Z1", "minutes": 10, "percentage": 10},
+                {"zone": 2, "name": "Z2", "minutes": 20, "percentage": 20},
+                {"zone": 3, "name": "Z3", "minutes": 30, "percentage": 30},
+                {"zone": 4, "name": "Z4", "minutes": 25, "percentage": 25},
+                {"zone": 5, "name": "Z5", "minutes": 15, "percentage": 15},
+            ],
+        },
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    script = open("dashboard/reportAdapter.js", encoding="utf-8").read() + (
+        "\nvar model = DashboardAdapter.buildDashboardModel("
+        + json.dumps(report, ensure_ascii=False)
+        + ");\nJSON.stringify(model.power_zones);\n"
+    )
+    script_path = tmp_path / "power_case.js"
+    script_path.write_text(script, encoding="utf-8")
+    result = subprocess.run(
+        ["osascript", "-l", "JavaScript", str(script_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    power = json.loads(result.stdout)
+    assert power["has_data"] is True
+    assert power["zones"][0]["percentage"] == 10
 
 
 def test_calendar_fills_missing_days_and_normalizes_day_names(tmp_path):
@@ -367,6 +533,32 @@ def test_evidence_uses_human_readable_labels_for_ui_pills_and_sources(tmp_path):
     assert second["supporting_metrics"][0]["source_label"] == "目標能力 > 信心分數"
 
 
+def test_evidence_metric_display_value_does_not_duplicate_units(tmp_path):
+    report = {
+        "evidence_links": [
+            {
+                "insight_id": "heat_impact",
+                "claim": "高溫環境導致心率偏高。",
+                "source_sections": ["weekly_analysis"],
+                "supporting_metrics": [
+                    {"label": "高溫環境心率影響", "value": "約 5bpm", "unit": "bpm"},
+                    {"label": "Z4 佔比", "value": 11.4, "unit": "%"},
+                    {"label": "平均心率", "value": 180, "unit": "bpm"},
+                ],
+                "supporting_sessions": [],
+                "confidence": 90,
+                "visualization_hint": "metric_card",
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    metrics = payload["evidence"]["items"][0]["supporting_metrics"]
+
+    assert [metric["display_value"] for metric in metrics] == ["約 5bpm", "11.4%", "180 bpm"]
+
+
 def test_evidence_sessions_are_enriched_with_source_segments(tmp_path):
     report = {
         "weekly_analysis": [
@@ -383,6 +575,7 @@ def test_evidence_sessions_are_enriched_with_source_segments(tmp_path):
                                 "avg_pace": "06:10",
                                 "avg_hr": 145,
                                 "cadence": 170.2,
+                                "stride_length_m": 1.08,
                                 "note": "輕鬆熱身",
                             },
                             {
@@ -391,6 +584,7 @@ def test_evidence_sessions_are_enriched_with_source_segments(tmp_path):
                                 "avg_pace": "03:38",
                                 "avg_hr": 181,
                                 "cadence": 188.4,
+                                "stride_length_m": 1.22,
                                 "note": "400m",
                             },
                         ],
@@ -421,6 +615,7 @@ def test_evidence_sessions_are_enriched_with_source_segments(tmp_path):
     payload = run_adapter_case(tmp_path, report)
     segments = payload["evidence"]["items"][0]["supporting_sessions"][0]["segments"]
 
+    assert len(segments) == 2
     assert segments == [
         {
             "index": 1,
@@ -430,6 +625,7 @@ def test_evidence_sessions_are_enriched_with_source_segments(tmp_path):
             "avg_pace": "06:10",
             "avg_hr": 145,
             "cadence": 170.2,
+            "stride_length_m": 1.08,
             "note": "輕鬆熱身",
         },
         {
@@ -440,6 +636,107 @@ def test_evidence_sessions_are_enriched_with_source_segments(tmp_path):
             "avg_pace": "03:38",
             "avg_hr": 181,
             "cadence": 188.4,
+            "stride_length_m": 1.22,
             "note": "400m",
         },
     ]
+
+
+def test_latest_activity_prefers_recent_focus_session_over_easy_run(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-15",
+                        "type": "interval",
+                        "distance_km": 6,
+                        "duration_min": 40,
+                        "avg_pace": "04:10",
+                        "avg_hr": 170,
+                    },
+                    {
+                        "date": "2026-05-16",
+                        "type": "easy",
+                        "distance_km": 4,
+                        "duration_min": 32,
+                        "avg_pace": "08:00",
+                        "avg_hr": 132,
+                    },
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+
+    assert payload["latest"]["date_label"] == "5/15"
+    assert payload["latest"]["type_label"] == "間歇"
+    assert payload["latest"]["conclusion"] == ""
+    assert payload["latest"]["has_ai_conclusion"] is False
+
+
+def test_latest_activity_uses_real_coaching_note_as_conclusion(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-15",
+                        "type": "interval",
+                        "coaching_note": "最後一趟仍能加速，速度儲備良好。",
+                    }
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+
+    assert payload["latest"]["conclusion"] == "最後一趟仍能加速，速度儲備良好。"
+    assert payload["latest"]["has_ai_conclusion"] is True
+
+
+def test_evidence_segments_estimate_stride_when_legacy_report_lacks_stride(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "interval",
+                        "segments": [
+                            {
+                                "segment_type": "main",
+                                "distance_km": 0.4,
+                                "avg_pace": "04:00",
+                                "avg_hr": 181,
+                                "cadence": 180,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        "evidence_links": [
+            {
+                "insight_id": "stride_context",
+                "claim": "步幅需搭配速度段判斷。",
+                "source_sections": ["weekly_analysis"],
+                "supporting_sessions": [{"source_path": "weekly_analysis[0].sessions[0]"}],
+                "confidence": 85,
+                "visualization_hint": "session_list",
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    segment = payload["evidence"]["items"][0]["supporting_sessions"][0]["segments"][0]
+
+    assert segment["stride_length_m"] == 1.39

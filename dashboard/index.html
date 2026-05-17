@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="AI 跑步教練訓練狀態 Dashboard，每日訓練決策、負荷監控與體能趨勢分析">
     <title>AI 跑步教練 Dashboard</title>
     <link rel="stylesheet" href="/dashboard/styles.css">
   </head>
@@ -16,44 +17,69 @@
         <div class="report-tools">
           <label class="select-label" for="reportSelect">報告</label>
           <select id="reportSelect" class="report-select"></select>
-          <button id="reloadButton" class="icon-button" type="button" aria-label="重新整理報告" title="重新整理報告">
-            ↻
-          </button>
+          <button id="reloadButton" class="icon-button" type="button" aria-label="重新整理報告" title="重新整理報告">↻</button>
         </div>
       </header>
 
       <main>
         <div id="appStatus" class="app-status" role="status">正在載入報告...</div>
 
-        <section class="status-grid" aria-label="頂部狀態列" id="statusGrid"></section>
+        <!-- Primary Action Bar: 今天做什麼 -->
+        <div id="primaryAction"></div>
 
-        <section class="section-grid two-col">
-          <article class="panel decision-panel">
+        <section id="statusGrid" class="status-grid" aria-label="目前狀態"></section>
+
+        <!-- Zone A: 本週教練判斷 + 7-Day Load + Race Readiness -->
+        <section class="section-grid two-col" aria-label="本週訓練決策">
+          <article class="panel decision-panel light-surface">
             <div class="section-heading">
               <div>
-                <p class="eyebrow">Daily decision</p>
-                <h2>教練摘要</h2>
+                <p class="eyebrow">今天 · 本週</p>
+                <h2>教練判斷</h2>
               </div>
             </div>
             <div id="coachSummary"></div>
           </article>
 
-          <article class="panel load-panel">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Load state</p>
-                <h2>目前負荷</h2>
+          <aside class="side-stack">
+            <article class="panel load-panel">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">近 7 天</p>
+                  <h2>訓練負荷</h2>
+                </div>
               </div>
-            </div>
-            <div id="loadAssessment"></div>
-          </article>
+              <div id="loadAssessment"></div>
+            </article>
+            <article class="panel">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">賽事準備度</p>
+                  <h2>目標賽事</h2>
+                </div>
+              </div>
+              <div id="raceReadiness"></div>
+            </article>
+          </aside>
         </section>
 
-        <section class="panel">
+        <!-- Zone B: 最近一次重點訓練回顧 -->
+        <section class="panel" aria-label="最近訓練回顧">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">4-week trend</p>
-              <h2>訓練負荷與跑量趨勢</h2>
+              <p class="eyebrow">最近一次重點訓練</p>
+              <h2>訓練回顧</h2>
+            </div>
+          </div>
+          <div id="latestActivity"></div>
+        </section>
+
+        <!-- Zone C: 4-Week Load + Narratives -->
+        <section class="panel" aria-label="近4週訓練趨勢">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">近 4 週</p>
+              <h2>跑量與訓練負荷趨勢</h2>
             </div>
             <div class="legend">
               <span><i class="legend-line distance"></i>跑量</span>
@@ -66,67 +92,77 @@
           </div>
         </section>
 
-        <section class="section-grid two-col">
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Heart rate</p>
-                <h2>心率區間分佈</h2>
-              </div>
-            </div>
-            <div id="hrZones"></div>
-          </article>
-
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Race readiness</p>
-                <h2>賽事準備度</h2>
-              </div>
-            </div>
-            <div id="raceReadiness"></div>
-          </article>
-        </section>
-
-        <section class="panel">
+        <!-- Zone C2: 12-Week Fitness Trend -->
+        <section class="panel" aria-label="近12週體能趨勢">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Next week</p>
-              <h2>下週課表日曆</h2>
+              <p class="eyebrow">近 12 週</p>
+              <h2>長期體能趨勢</h2>
             </div>
-            <p id="planTheme" class="subtle"></p>
           </div>
+          <div id="twelveWeekContent"></div>
+        </section>
+
+        <!-- Next Week Plan -->
+        <section class="panel" aria-label="下週訓練計畫">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">下週課表</p>
+              <h2>訓練計畫</h2>
+            </div>
+          </div>
+          <div id="planSummary" class="plan-summary-bar"></div>
+          <p id="planAdjustment" class="plan-adjustment-banner hidden"></p>
           <div id="weeklyCalendar" class="calendar-grid"></div>
         </section>
 
-        <section class="section-grid two-col">
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Physiology</p>
-                <h2>配速與生理能力</h2>
+        <!-- Zone E: 詳細指標（預設收合） -->
+        <details class="panel foldable-panel zone-e-panel">
+          <summary class="foldable-summary">
+            <span class="eyebrow">詳細指標</span>
+            <span class="foldable-title">心率 / 功率 / 配速區間 / 跑姿</span>
+          </summary>
+          <div class="foldable-body">
+            <article class="panel nested-panel">
+              <div class="section-heading compact">
+                <div>
+                  <p class="eyebrow">強度分佈</p>
+                  <h2>心率與功率區間</h2>
+                </div>
               </div>
-            </div>
-            <div id="physioMetrics"></div>
-          </article>
+              <div id="intensityZones"></div>
+            </article>
 
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Mechanics</p>
-                <h2>跑姿與經濟性</h2>
+            <article class="panel nested-panel">
+              <div class="section-heading compact">
+                <div>
+                  <p class="eyebrow">生理能力</p>
+                  <h2>配速與體能指標</h2>
+                </div>
               </div>
-            </div>
-            <div id="runningMechanics"></div>
-          </article>
-        </section>
+              <div id="physioMetrics"></div>
+            </article>
 
-        <section class="panel">
+            <article class="panel nested-panel">
+              <div class="section-heading compact">
+                <div>
+                  <p class="eyebrow">跑步經濟性</p>
+                  <h2>跑姿與經濟性</h2>
+                </div>
+              </div>
+              <div id="runningMechanics"></div>
+            </article>
+          </div>
+        </details>
+
+        <!-- Zone F: Evidence Layer (collapsed by default) -->
+        <section class="panel" aria-label="AI建議依據">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Traceability</p>
+              <p class="eyebrow">可追溯依據</p>
               <h2>AI 建議依據</h2>
             </div>
+            <span class="subtle" style="font-size:13px">預設收合</span>
           </div>
           <div id="evidenceLayer"></div>
         </section>

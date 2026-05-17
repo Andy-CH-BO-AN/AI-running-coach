@@ -49,7 +49,7 @@
 
 0. Deterministic context 一致性：
    - `meta.today` 必須等於 `deterministic_context.meta.today`。
-   - `weekly_analysis[].week_start`、`weekly_analysis[].week_label`、`weekly_analysis[].session_counts`、`weekly_analysis[].sessions[]`、`hr_zone_distribution.zones[]`、`physio_metrics.pace_zones[]`、`running_mechanics`、`load_assessment.current_tss_weekly` 與 `next_week_plan_seed.week_start/days[].date` 優先沿用 deterministic_context。
+   - `weekly_analysis[].week_start`、`weekly_analysis[].week_label`、`weekly_analysis[].session_counts`、`weekly_analysis[].sessions[]`、`hr_zone_distribution.zones[]`、`power_zone_distribution.zones[]`、`physio_metrics.pace_zones[]`、`running_mechanics`、`load_assessment.current_tss_weekly` 與 `next_week_plan_seed.week_start/days[].date` 優先沿用 deterministic_context。
    - 你可以新增自然語言評估，例如 `assessment`、`recommendation`、`label`、`coaching_note`，但不得把已計算數值改成另一組數字。
    - 如果 deterministic_context 的某週 `data_quality.message` 為「部分資料不足」，最終報告也必須在該週 assessment 或 evidence 中說明資料限制。
    - `meta.today`、4 週 bucket、`week_label`、`next_week_plan.week_start`、`next_week_plan.days[].date` 皆視為 deterministic output；請直接沿用，不要重算。
@@ -69,6 +69,7 @@
    - 對 `sessions[].type = "interval"` 的活動必須優先分析。不要只看整段平均配速、平均心率或平均步頻；請檢查 `segments[]` 中的快段與恢復段，分別判斷主課表品質、恢復是否過長、速度維持能力、步頻/步幅是否只在快段成立。
    - 評論步幅時，不依據主要來自 easy / recovery session；這類結論應優先建立在 interval 跑步段、節奏跑或其他速度段 evidence 上。
    - 當 interval 活動進入 `evidence_links.supporting_sessions`，必須在 `reason` 說明至少一個與分段相關的觀察，例如快段配速、休息段配速/步頻、快慢段落差、或分段心率反應。
+   - 若 `supporting_sessions` 引用含 `segments[]` 的活動，dashboard 會展開**全部分段 (splits)**；請確保該活動在 `weekly_analysis[].sessions[]` 內有完整 `segments[]`（含 warmup / main / recovery）。
    - 如果 claim 是關於輕鬆跑、高溫壓力、長跑或恢復跑，不要引用 interval 活動的分段作為 source_path；請讓 `activity_id`、`source_path` 與文字描述指向同一筆活動。
 
 3. 下週課表：
@@ -82,6 +83,9 @@
    - `physio_metrics.pace_zones` 必須優先沿用 `deterministic_context.physio_metrics.pace_zones`，固定輸出 zones 1-5，依 zone 遞增排序。
    - `hr_zone_distribution.zones` 必須優先沿用 `deterministic_context.hr_zone_distribution.zones`，固定輸出 zones 1-5，依 zone 遞增排序。
    - `hr_zone_distribution.zones[].percentage` 加總必須接近 100，允許四捨五入誤差 ±1。
+   - `power_zone_distribution.zones` 必須優先沿用 `deterministic_context.power_zone_distribution.zones`，固定輸出 zones 1-5，依 zone 遞增排序。
+   - `power_zone_distribution.zones[].percentage` 加總必須接近 100，允許四捨五入誤差 ±1。
+   - 強度分佈解讀必須**同時**分析心率區間與功率區間：`hr_zone_distribution.assessment` / `recommendation` 與 `power_zone_distribution.assessment` / `recommendation` 都要輸出，並說明兩者是否一致（例如高溫下心率偏高但功率分佈仍偏有氧）。
    - `coaching_summary.top_3_insights` 必須剛好 3 筆。
    - `coaching_summary.top_3_actions` 必須剛好 3 筆。
 
@@ -184,6 +188,7 @@
               "avg_pace": "MM:SS",
               "avg_hr": number,
               "cadence": number,
+              "stride_length_m": number,
               "note": "string"
             }
           ],
@@ -209,9 +214,24 @@
       }
       // zones 1-5
     ],
-    "assessment": "string",     // 整體分佈評估
+    "assessment": "string",     // 整體分佈評估（跑者語言，說明 Z1-Z5 分佈與目標賽事/週期階段的關係）
     "is_polarized": true,       // 是否符合極化訓練分佈
-    "recommendation": "string"
+    "recommendation": "string"  // 下週心率強度配置建議
+  },
+
+  "power_zone_distribution": {
+    "period_weeks": 4,
+    "zones": [
+      {
+        "zone": 1,
+        "name": "string",
+        "minutes": number,
+        "percentage": number
+      }
+      // zones 1-5；分鐘與百分比必須沿用 deterministic_context
+    ],
+    "assessment": "string",     // 功率區間整體評估（跑者語言；若無功率資料則說明「資料不足」）
+    "recommendation": "string"  // 依功率分佈的訓練建議；需與心率區間解讀交叉比對
   },
 
   "running_mechanics": {
@@ -357,7 +377,8 @@
 | 視覺化元件 | 對應 JSON 欄位 |
 |---|---|
 | 狀態儀表板 | `athlete_status.*` |
-| 心率區間圓餅/長條圖 | `hr_zone_distribution.zones` |
+| 心率區間圓餅/長條圖 | `hr_zone_distribution.zones`, `assessment`, `recommendation` |
+| 功率區間圓餅/長條圖 | `power_zone_distribution.zones`, `assessment`, `recommendation` |
 | 週訓練量折線圖 | 由前端根據 `weekly_analysis[].sessions[].distance_km` 加總 |
 | 每週 AI 觀察與建議 | `weekly_analysis[].key_observation`, `weekly_analysis[].weekly_assessment`, `weekly_analysis[].weekly_recommendation`, `weekly_analysis[].risk_flags` |
 | 配速區間表格 | `physio_metrics.pace_zones` |

@@ -42,6 +42,13 @@ ZONE_NAMES = {
     4: "Z4 閾值",
     5: "Z5 高強度",
 }
+POWER_ZONE_NAMES = {
+    1: "Z1 恢復",
+    2: "Z2 耐力",
+    3: "Z3 節奏",
+    4: "Z4 閾值",
+    5: "Z5 無氧",
+}
 PACE_ZONE_NAMES = {
     1: "恢復跑",
     2: "輕鬆有氧",
@@ -78,6 +85,7 @@ SEGMENT_OUTPUT_KEYS = (
     "avg_pace",
     "avg_hr",
     "cadence",
+    "stride_length_m",
     "note",
 )
 
@@ -175,6 +183,7 @@ def _segment_from_split(split: Dict[str, Any]) -> CoachSegment:
         "avg_pace": _format_pace_minutes(split.get("pace")),
         "avg_hr": _round_or_none(split.get("average_heart_rate"), 0),
         "cadence": _round_or_none(split.get("avg_cadence"), 1),
+        "stride_length_m": _round_or_none(_stride_length_to_meters(_safe_float(split.get("stride_length"))), 2),
         "temperature_c": _round_or_none(split.get("temperature"), 1),
         "note": None,
     }
@@ -306,6 +315,49 @@ def _build_hr_zone_distribution(
         ],
         "total_minutes": _round_or_none(total_minutes, 1) or 0.0,
         "is_polarized": easy_pct >= 75 and hard_pct <= 20 if total_minutes > 0 else False,
+    }
+
+
+def _build_power_zone_distribution(
+    sessions: Sequence[CoachSession],
+    processed_by_id: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    minutes_by_zone: Dict[int, float] = {zone: 0.0 for zone in ZONE_RANGE}
+    for session in sessions:
+        processed = processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
+        for zone in ZONE_RANGE:
+            zone_seconds = _safe_float(
+                _get_any(
+                    processed,
+                    f"advanced_metrics.power_zones.power_zone_{zone}",
+                    f"advanced_metrics.power_zones.power_zone_{zone}",
+                )
+            )
+            minutes_by_zone[zone] += (zone_seconds or 0.0) / 60
+
+    total_minutes = sum(minutes_by_zone.values())
+    percentages = {
+        zone: _round_or_none(minutes / total_minutes * 100, 1) if total_minutes > 0 else 0.0
+        for zone, minutes in minutes_by_zone.items()
+    }
+    if total_minutes > 0:
+        rounding_delta = _round_or_none(100.0 - sum(percentages.values()), 1)
+        if rounding_delta:
+            largest_zone = max(minutes_by_zone, key=minutes_by_zone.get)
+            percentages[largest_zone] = _round_or_none(percentages[largest_zone] + rounding_delta, 1) or 0.0
+
+    return {
+        "period_weeks": 4,
+        "zones": [
+            {
+                "zone": zone,
+                "name": POWER_ZONE_NAMES[zone],
+                "minutes": _round_or_none(minutes_by_zone[zone], 1) or 0.0,
+                "percentage": percentages[zone],
+            }
+            for zone in ZONE_RANGE
+        ],
+        "total_minutes": _round_or_none(total_minutes, 1) or 0.0,
     }
 
 
@@ -613,6 +665,31 @@ def _build_week_session_counts(week_sessions: Sequence[CoachSession]) -> CoachSe
         "by_type": dict(sorted(by_type.items())),
         "by_source_activity_type": dict(sorted(by_source_activity_type.items())),
     }
+
+
+def _build_12week_summary(
+    sessions: Sequence[CoachSession],
+    today: date,
+) -> List[Dict[str, Any]]:
+    """Build 12-week weekly aggregates for sparkline trend charts on the dashboard."""
+    current_week_start = _week_start_for(today)
+    weeks: List[Dict[str, Any]] = []
+    for offset in range(12):
+        week_start = current_week_start - timedelta(days=offset * 7)
+        week_end = week_start + timedelta(days=6)
+        week_sessions = [
+            s for s in sessions
+            if (sd := _parse_date(s.get("date"))) is not None
+            and week_start <= sd <= week_end
+        ]
+        weeks.append({
+            "week_start": week_start.isoformat(),
+            "week_label": _format_week_label(week_start),
+            "derived_total_distance_km": _round_or_none(sum(s["distance_km"] for s in week_sessions), 2) or 0.0,
+            "derived_training_load": _round_or_none(sum(s["training_load"] for s in week_sessions), 1) or 0.0,
+            "sessions_count": len(week_sessions),
+        })
+    return list(reversed(weeks))  # chronological: oldest first
 
 
 def _build_weekly_analysis(
@@ -992,6 +1069,13 @@ def enforce_deterministic_report_fields(
                 hr_zone_distribution[key] = deepcopy(deterministic_context["hr_zone_distribution"][key])
         result["hr_zone_distribution"] = hr_zone_distribution
 
+    if deterministic_context.get("power_zone_distribution"):
+        power_zone_distribution = deepcopy(result.get("power_zone_distribution") or {})
+        for key in ("period_weeks", "zones"):
+            if key in deterministic_context["power_zone_distribution"]:
+                power_zone_distribution[key] = deepcopy(deterministic_context["power_zone_distribution"][key])
+        result["power_zone_distribution"] = power_zone_distribution
+
     if deterministic_context.get("physio_metrics"):
         result["physio_metrics"] = _overlay_deterministic(
             result.get("physio_metrics") or {},
@@ -1016,6 +1100,8 @@ def enforce_deterministic_report_fields(
 
     result["next_week_plan"] = _enforce_next_week_plan(result, deterministic_context)
     _enforce_evidence_source_paths(result)
+    if deterministic_context.get("twelve_week_summary"):
+        result["twelve_week_summary"] = deepcopy(deterministic_context["twelve_week_summary"])
     return result
 
 
@@ -1047,6 +1133,7 @@ def build_deterministic_coach_context(
         for session in week["sessions"]
     ]
     hr_zone_distribution = _build_hr_zone_distribution(four_week_sessions, processed_by_id)
+    power_zone_distribution = _build_power_zone_distribution(four_week_sessions, processed_by_id)
     load_assessment = _build_load_assessment(weekly_analysis)
 
     return {
@@ -1065,6 +1152,8 @@ def build_deterministic_coach_context(
             "weekly_analysis[].derived_training_load",
             "hr_zone_distribution.zones[].minutes",
             "hr_zone_distribution.zones[].percentage",
+            "power_zone_distribution.zones[].minutes",
+            "power_zone_distribution.zones[].percentage",
             "physio_metrics.pace_zones",
             "running_mechanics",
             "load_assessment.current_tss_weekly",
@@ -1080,10 +1169,12 @@ def build_deterministic_coach_context(
         "pb_validation_seed": _build_pb_validation_seed(user_data),
         "weekly_analysis": weekly_analysis,
         "hr_zone_distribution": hr_zone_distribution,
+        "power_zone_distribution": power_zone_distribution,
         "running_mechanics": _build_running_mechanics(four_week_sessions, processed_by_id),
         "cross_training": _build_cross_training(four_week_sessions, processed_by_id),
         "load_assessment": load_assessment,
         "next_week_plan_seed": _build_next_week_seed(resolved_today, user_data),
+        "twelve_week_summary": _build_12week_summary(sessions, today=resolved_today),
         "evidence_facts": _build_evidence_facts(
             weekly_analysis=weekly_analysis,
             hr_zone_distribution=hr_zone_distribution,
