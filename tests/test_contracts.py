@@ -160,6 +160,7 @@ def test_processed_to_deterministic_context_contract():
     assert "heat_stress" in current_week["risk_flags"]
     assert current_week["sessions"][0]["activity_id"] == 9001
     assert current_week["sessions"][0]["segments"][0]["avg_pace"] == "5:00"
+    assert current_week["sessions"][0]["segments"][0]["stride_length_m"] == 1.12
 
     zones = context["hr_zone_distribution"]["zones"]
     assert [zone["zone"] for zone in zones] == [1, 2, 3, 4, 5]

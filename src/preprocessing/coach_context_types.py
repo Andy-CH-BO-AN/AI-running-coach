@@ -23,6 +23,7 @@ class CoachSegment(TypedDict, total=False):
     avg_pace: str | None
     avg_hr: int | None
     cadence: float | None
+    stride_length_m: float | None
     temperature_c: float | None
     note: str | None
 

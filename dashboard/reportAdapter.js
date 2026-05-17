@@ -56,9 +56,11 @@
     warmup: "熱身",
     main: "主課表",
     cooldown: "緩和",
+    recovery: "恢復",
     lap: "分段"
   };
   var HR_ZONE_COLORS = ["#2f9e44", "#0ca678", "#f59f00", "#f76707", "#e03131"];
+  var POWER_ZONE_COLORS = ["#4dabf7", "#339af0", "#228be6", "#1c7ed6", "#1864ab"];
   var SOURCE_SECTION_LABELS = {
     deterministic_context: "程式計算資料",
     athlete_status: "目前狀態",
@@ -212,6 +214,22 @@
     return VISUALIZATION_HINT_LABELS[key] || humanizeIdentifier(key) || "呈現方式";
   }
 
+  function metricDisplayValue(value, unit) {
+    var rawValue = fallbackText(value, "資料不足");
+    var rawUnit = fallbackText(unit, "").trim();
+    if (!rawUnit || rawValue === "資料不足") {
+      return rawValue;
+    }
+
+    var normalizedValue = rawValue.toLowerCase().replace(/\s+/g, "");
+    var normalizedUnit = rawUnit.toLowerCase().replace(/\s+/g, "");
+    if (normalizedValue.slice(-normalizedUnit.length) === normalizedUnit) {
+      return rawValue;
+    }
+
+    return rawValue + (rawUnit === "%" ? "" : " ") + rawUnit;
+  }
+
   function riskFlagLabel(flag) {
     var key = fallbackText(flag, "");
     return RISK_FLAG_LABELS[key] || humanizeIdentifier(key) || "風險提醒";
@@ -278,6 +296,242 @@
     }
 
     return text + "/km";
+  }
+
+  function parsePaceSeconds(paceValue) {
+    var text = fallbackText(paceValue, "").replace(/\/km/gi, "").trim();
+    if (!text || text === "資料不足") {
+      return null;
+    }
+
+    var parts = text.split(":");
+    if (parts.length !== 2) {
+      return null;
+    }
+
+    var minutes = Number(parts[0]);
+    var seconds = Number(parts[1]);
+    if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) {
+      return null;
+    }
+
+    return minutes * 60 + seconds;
+  }
+
+  function normalizeStrideLength(value) {
+    if (!isPresentNumber(value)) {
+      return null;
+    }
+
+    var number = Number(value);
+    return roundTo(number > 10 ? number / 100 : number, 2);
+  }
+
+  function segmentStrideLength(segment) {
+    var direct = normalizeStrideLength(segment && (segment.stride_length_m || segment.stride_length));
+    if (direct !== null) {
+      return direct;
+    }
+
+    var paceSeconds = parsePaceSeconds(segment && segment.avg_pace);
+    var cadence = Number(segment && segment.cadence);
+    if (!paceSeconds || !Number.isFinite(cadence) || cadence <= 0) {
+      return null;
+    }
+
+    return roundTo(1000 / ((paceSeconds / 60) * cadence), 2);
+  }
+
+  function isRecoveryPace(paceValue) {
+    var seconds = parsePaceSeconds(paceValue);
+    return seconds !== null && seconds >= 480;
+  }
+
+  function extractPlanWorkoutMeta(daySource) {
+    var source = daySource || {};
+    var description = fallbackText(source.description, "");
+    var meta = {
+      pace_label: fallbackText(source.target_pace || source.pace_target, ""),
+      interval_label: fallbackText(source.interval_distance || source.rep_distance, ""),
+      rest_label: fallbackText(source.rest_time || source.rest_seconds, "")
+    };
+
+    if (!meta.pace_label) {
+      var paceMatch = description.match(/(\d{1,2}:\d{2})(?:\s*[-–]\s*(\d{1,2}:\d{2}))?\s*\/\s*km/i)
+        || description.match(/(\d{1,2}:\d{2})(?:\s*[-–]\s*(\d{1,2}:\d{2}))?/);
+      if (paceMatch) {
+        meta.pace_label = paceMatch[2] ? paceMatch[1] + "–" + paceMatch[2] + "/km" : paceMatch[1] + "/km";
+      }
+    }
+
+    if (!meta.interval_label) {
+      var intervalMatch = description.match(/(\d+(?:\.\d+)?)\s*m\s*[×x]\s*(\d+)/i)
+        || description.match(/(\d+)\s*[×x]\s*(\d+)\s*m/i);
+      if (intervalMatch) {
+        meta.interval_label = intervalMatch[1] + "m × " + intervalMatch[2];
+      }
+    }
+
+    if (!meta.rest_label) {
+      var restMatch = description.match(/休息\s*(\d+)\s*s/i)
+        || description.match(/rest\s*(\d+)\s*s/i)
+        || description.match(/(\d+)\s*s\s*\/\s*rep/i);
+      if (restMatch) {
+        meta.rest_label = restMatch[1] + "s";
+      }
+    }
+
+    return meta;
+  }
+
+  function isWorkRepSegment(segment) {
+    if (!segment) {
+      return false;
+    }
+
+    var segmentType = fallbackText(segment.segment_type, "lap");
+    if (segmentType === "cooldown" || segmentType === "recovery" || segmentType === "warmup") {
+      return false;
+    }
+
+    if (isRecoveryPace(segment.avg_pace)) {
+      return false;
+    }
+
+    var distance = toNumber(segment.distance_km);
+    if (distance > 0 && distance < 0.08) {
+      return false;
+    }
+
+    return segmentType === "main" || segmentType === "lap" || distance >= 0.08;
+  }
+
+  function adaptWorkReps(session) {
+    return safeArray(session && session.segments)
+      .filter(isWorkRepSegment)
+      .map(function adaptRep(segment, index) {
+        return {
+          index: index + 1,
+          distance_km: isPresentNumber(segment.distance_km) ? roundTo(segment.distance_km, 2) : null,
+          avg_pace: segment.avg_pace || null,
+          avg_hr: isPresentNumber(segment.avg_hr) ? roundTo(segment.avg_hr, 1) : null,
+          cadence: isPresentNumber(segment.cadence) ? roundTo(segment.cadence, 1) : null,
+          stride_length_m: segmentStrideLength(segment),
+          note: fallbackText(segment.note, "")
+        };
+      });
+  }
+
+  function isFocusSession(session) {
+    var type = fallbackText(session && session.type, "");
+    return type === "interval" || type === "tempo" || type === "race" || type === "long";
+  }
+
+  function findLatestSession(report) {
+    var latest = null;
+    var latestFocus = null;
+    safeArray(report.weekly_analysis).forEach(function scanWeek(week) {
+      safeArray(week && week.sessions).forEach(function scanSession(session) {
+        if (!session || !session.date) {
+          return;
+        }
+
+        if (!latest || fallbackText(session.date, "").localeCompare(fallbackText(latest.date, "")) > 0) {
+          latest = session;
+        }
+
+        if (isFocusSession(session) && (!latestFocus || fallbackText(session.date, "").localeCompare(fallbackText(latestFocus.date, "")) > 0)) {
+          latestFocus = session;
+        }
+      });
+    });
+    return latestFocus || latest;
+  }
+
+  function buildLatestActivity(report) {
+    var session = findLatestSession(report);
+    if (!session) {
+      return { has_data: false };
+    }
+
+    var adapted = adaptSession(session);
+    var sessionType = adapted.type;
+    var layout = sessionType === "interval" ? "interval" : sessionType === "long" ? "long" : sessionType === "race" ? "race" : "easy";
+    var environment = session.environment || {};
+    var workReps = adaptWorkReps(session);
+    var repPaces = workReps.map(function pickPace(rep) { return rep.avg_pace; }).filter(Boolean);
+    var firstPace = repPaces[0];
+    var lastPace = repPaces[repPaces.length - 1];
+
+    return {
+      has_data: true,
+      layout: layout,
+      date_label: formatDateLabel(adapted.date),
+      type_label: adapted.type_label,
+      conclusion: fallbackText(session.coaching_note, ""),
+      has_ai_conclusion: Boolean(fallbackText(session.coaching_note, "")),
+      distance_km: adapted.distance_km,
+      avg_pace: adapted.avg_pace || "--:--",
+      avg_hr: adapted.avg_hr,
+      temperature_c: isPresentNumber(environment.estimated_temp_c) ? roundTo(environment.estimated_temp_c, 1) : null,
+      training_load: adapted.training_load,
+      work_reps: workReps,
+      rep_trend_label: workReps.length >= 2 && firstPace && lastPace
+        ? "快段配速趨勢：" + firstPace + " → " + lastPace
+        : "",
+      coaching_notes: {
+        observation: fallbackText(session.observation, ""),
+        interpretation: fallbackText(session.interpretation, ""),
+        recommendation: fallbackText(session.recommendation, "")
+      }
+    };
+  }
+
+  function buildPowerZones(report) {
+    var distribution = report.power_zone_distribution || {};
+    var zonesByNumber = {};
+    safeArray(distribution.zones).forEach(function mapZone(zone) {
+      if (zone && isPresentNumber(zone.zone)) {
+        zonesByNumber[Number(zone.zone)] = zone;
+      }
+    });
+
+    var zones = [1, 2, 3, 4, 5].map(function normalizeZone(zoneNumber, index) {
+      var zone = zonesByNumber[zoneNumber] || {};
+      return {
+        zone: zoneNumber,
+        name: fallbackText(zone.name, "Z" + String(zoneNumber)),
+        minutes: roundTo(zone.minutes, 1),
+        percentage: roundTo(zone.percentage, 1),
+        color: POWER_ZONE_COLORS[index],
+        sourcePath: "power_zone_distribution.zones[" + String(index) + "]"
+      };
+    });
+
+    return {
+      period_weeks: distribution.period_weeks || null,
+      zones: zones,
+      assessment: fallbackText(distribution.assessment, ""),
+      recommendation: fallbackText(distribution.recommendation, ""),
+      has_data: zones.some(function hasMinutes(zone) {
+        return zone.minutes > 0 || zone.percentage > 0;
+      })
+    };
+  }
+
+  function evidenceRunnerNarrative(item) {
+    var session = safeArray(item.supporting_sessions)[0];
+    if (session && session.date) {
+      var typeLabel = SESSION_TYPE_LABELS[session.type] || session.type || "訓練";
+      return "來自 " + formatDateLabel(session.date) + " " + typeLabel + " 的分段與環境資料";
+    }
+
+    var metric = safeArray(item.supporting_metrics)[0];
+    if (metric && metric.label) {
+      return "依據「" + metric.label + "」等關鍵指標";
+    }
+
+    return "依據近期訓練與生理指標";
   }
 
   function paceRangeLabel(paceMin, paceMax) {
@@ -539,7 +793,8 @@
       avg_pace: session ? session.avg_pace : null,
       training_effect_aerobic: session ? session.training_effect_aerobic : null,
       training_effect_anaerobic: session ? session.training_effect_anaerobic : null,
-      coaching_note: fallbackText(session && session.coaching_note, "")
+      coaching_note: fallbackText(session && session.coaching_note, ""),
+      segments: safeArray(session && session.segments)
     };
   }
 
@@ -733,6 +988,7 @@
       var sessionType = fallbackText(source.session_type, intensity === "rest" ? "rest" : "easy");
       var dayKey = normalizeDayKey(source.day_of_week, date);
 
+      var workoutMeta = extractPlanWorkoutMeta(source);
       days.push({
         date: date,
         date_label: formatDateLabel(date),
@@ -748,16 +1004,25 @@
         intensity_label: intensityMeta.label,
         intensity_class: intensityMeta.className,
         key_workout: Boolean(source.key_workout),
-        weather_consideration: fallbackText(source.weather_consideration, "")
+        weather_consideration: fallbackText(source.weather_consideration, ""),
+        pace_label: workoutMeta.pace_label,
+        interval_label: workoutMeta.interval_label,
+        rest_label: workoutMeta.rest_label
       });
     }
+
+    var totalDistance = roundTo(days.reduce(function sumDistance(total, day) {
+      return total + toNumber(day.distance_km);
+    }, 0), 2);
 
     return {
       week_start: startDate,
       theme: fallbackText(plan.theme, "下週課表"),
-      total_distance_km: roundTo(days.reduce(function sumDistance(total, day) {
-        return total + toNumber(day.distance_km);
-      }, 0), 2),
+      total_distance_km: totalDistance,
+      target_training_load: isPresentNumber(plan.target_training_load)
+        ? roundTo(plan.target_training_load, 1)
+        : (isPresentNumber(plan.weekly_target_tss) ? roundTo(plan.weekly_target_tss, 1) : null),
+      adjustment_rule: fallbackText(plan.adjustment_rule || plan.volume_adjustment_rule, ""),
       days: days,
       has_data: days.some(function hasWorkout(day) {
         return day.session_type !== "rest" || day.distance_km > 0 || day.duration_min > 0;
@@ -791,7 +1056,8 @@
       ],
       running_economy_score: economy,
       running_economy_label: economy === null ? "資料不足" : String(economy),
-      improvement_tips: safeArray(mechanics.improvement_tips)
+      improvement_tips: safeArray(mechanics.improvement_tips),
+      filter_note: "已排除輕鬆跑與間歇休息段，僅計入有效跑步分圈。"
     };
   }
 
@@ -846,18 +1112,7 @@
       item.supporting_sessions
     ]).toLowerCase();
     var markers = [
-      "risk",
-      "fatigue",
-      "injury",
-      "overtraining",
-      "overreaching",
-      "load",
-      "疲勞",
-      "風險",
-      "傷",
-      "疼痛",
-      "過度",
-      "中暑"
+      "risk", "fatigue", "injury", "overtraining", "overreaching", "load", "疲勞", "風險", "傷", "疼痛", "過度", "中暑"
     ];
 
     return markers.some(function containsMarker(marker) {
@@ -881,6 +1136,8 @@
             copy[key] = metric[key];
           });
           copy.source_label = sourcePathLabel(sourcePath);
+          copy.source_path = sourcePath;
+          copy.display_value = metricDisplayValue(copy.value, copy.unit);
           return copy;
         }),
         supporting_sessions: safeArray(item && item.supporting_sessions).map(function adaptSupportingSession(session) {
@@ -891,6 +1148,7 @@
             copy[key] = session[key];
           });
           copy.source_label = sourcePathLabel(sourcePath);
+          copy.source_path = sourcePath;
           copy.segments = safeArray(
             copy.segments && copy.segments.length ? copy.segments : sourceSession && sourceSession.segments
           ).map(function adaptSegment(segment, segmentIndex) {
@@ -903,6 +1161,7 @@
               avg_pace: segment ? segment.avg_pace : null,
               avg_hr: isPresentNumber(segment && segment.avg_hr) ? roundTo(segment.avg_hr, 1) : null,
               cadence: isPresentNumber(segment && segment.cadence) ? roundTo(segment.cadence, 1) : null,
+              stride_length_m: segmentStrideLength(segment),
               note: fallbackText(segment && segment.note, "")
             };
           });
@@ -919,7 +1178,6 @@
       if (a.high_risk !== b.high_risk) {
         return a.high_risk ? -1 : 1;
       }
-
       return b.confidence - a.confidence;
     });
 
@@ -930,104 +1188,61 @@
     };
   }
 
-  function normalizeForMatch(value) {
-    return fallbackText(value, "").replace(/\s+/g, "").toLowerCase();
-  }
-
-  function evidenceSearchText(item) {
-    return normalizeForMatch([
-      item.id,
-      item.claim,
-      item.source_sections,
-      item.supporting_metrics,
-      item.supporting_sessions,
-      item.visualization_hint
-    ]);
-  }
-
-  function keywordTokens(value) {
-    var normalized = normalizeForMatch(value);
-    var knownTerms = [
-      "疲勞",
-      "風險",
-      "強度",
-      "高強度",
-      "低強度",
-      "恢復",
-      "心率",
-      "高區間",
-      "長距離",
-      "長跑",
-      "跑量",
-      "負荷",
-      "配速",
-      "目標配速",
-      "1500",
-      "vo2max",
-      "間歇",
-      "閾值",
-      "有氧",
-      "極化",
-      "zone",
-      "高溫",
-      "補水",
-      "防曬",
-      "賽事",
-      "能力",
-      "交叉訓練",
-      "自行車"
-    ];
-    var tokens = [];
-
-    knownTerms.forEach(function addKnownTerm(term) {
-      if (normalized.indexOf(term) !== -1) {
-        tokens.push(term);
-      }
-    });
-
-    fallbackText(value, "").toLowerCase().split(/[^\p{L}\p{N}]+/u).forEach(function addWord(word) {
-      if (word.length >= 3) {
-        tokens.push(word);
-      }
-    });
-
-    return tokens.filter(function unique(token, index) {
-      return token && tokens.indexOf(token) === index;
-    });
-  }
-
-  function evidenceMatchScore(text, item) {
-    var needle = normalizeForMatch(text);
-    var haystack = evidenceSearchText(item);
-    if (!needle || !haystack) {
-      return 0;
-    }
-
-    var textPrefix = needle.slice(0, Math.min(12, needle.length));
-    var claim = normalizeForMatch(item.claim);
-    var claimPrefix = claim.slice(0, Math.min(12, claim.length));
-    if (claim.indexOf(textPrefix) !== -1 || needle.indexOf(claimPrefix) !== -1) {
-      return 100 + item.confidence / 100;
-    }
-
-    return keywordTokens(text).reduce(function countOverlap(score, token) {
-      return haystack.indexOf(token) !== -1 ? score + 1 : score;
-    }, 0) + item.confidence / 1000;
-  }
-
   function findEvidenceForText(text, evidenceItems) {
+    var needle = fallbackText(text, "").toLowerCase();
+    if (!needle) {
+      return null;
+    }
+
     var match = null;
     var bestScore = 0;
 
     safeArray(evidenceItems).forEach(function scoreEvidence(item) {
-      var score = evidenceMatchScore(text, item);
+      var claim = fallbackText(item.claim, "").toLowerCase();
+      if (!claim) {
+        return;
+      }
+
+      var score = 0;
+
+      // Exact substring match is strongest
+      if (needle.indexOf(claim) !== -1 || claim.indexOf(needle) !== -1) {
+        score = 20;
+      } else {
+        // Character bigram overlap for fuzzy matching
+        var needleBigrams = {};
+        var claimBigrams = {};
+        var i;
+        for (i = 0; i < needle.length - 1; i += 1) {
+          var nb = needle.slice(i, i + 2);
+          needleBigrams[nb] = (needleBigrams[nb] || 0) + 1;
+        }
+        for (i = 0; i < claim.length - 1; i += 1) {
+          var cb = claim.slice(i, i + 2);
+          claimBigrams[cb] = (claimBigrams[cb] || 0) + 1;
+        }
+
+        var overlap = 0;
+        var total = 0;
+        Object.keys(needleBigrams).forEach(function countOverlap(bigram) {
+          total += needleBigrams[bigram];
+          if (claimBigrams[bigram]) {
+            overlap += Math.min(needleBigrams[bigram], claimBigrams[bigram]);
+          }
+        });
+
+        if (total > 0) {
+          score = (overlap / total) * 15;
+        }
+      }
+
       if (score > bestScore) {
         bestScore = score;
         match = item;
       }
     });
 
-    return bestScore >= 1 ? match : null;
+    return bestScore >= 3 ? match : null;
   }
 
   function buildCoachingSummary(report, evidenceItems) {
@@ -1054,6 +1269,64 @@
     };
   }
 
+  function buildPrimaryAction(report) {
+    var summary = report.coaching_summary || {};
+    var status = report.athlete_status || {};
+    var overall = status.overall_rating || {};
+    
+    var todayAction = safeArray(summary.top_3_actions)[0] || "依課表正常執行";
+    var rationale = safeArray(summary.top_3_insights)[0] || "維持訓練節奏";
+    
+    return {
+      todayAction: todayAction,
+      rationale: rationale,
+      statusBadge: fallbackText(overall.label, "狀態穩定"),
+      statusClass: scoreState(clampScore(overall.score), false)
+    };
+  }
+
+  function build12WeekTrend(report) {
+    var rawTrend = safeArray(report.twelve_week_summary);
+    var physio = report.physio_metrics || {};
+
+    var distanceSeries = rawTrend.map(function mapDistance(week) {
+      return toNumber(week.derived_total_distance_km);
+    });
+    var loadSeries = rawTrend.map(function mapLoad(week) {
+      return toNumber(week.derived_training_load);
+    });
+
+    return {
+      metrics: [
+        {
+          label: "12 週跑量",
+          value: distanceSeries.length ? String(distanceSeries[distanceSeries.length - 1]) + " km" : "資料不足",
+          series: distanceSeries
+        },
+        {
+          label: "12 週訓練量",
+          value: loadSeries.length ? String(loadSeries[loadSeries.length - 1]) + " TSS" : "資料不足",
+          series: loadSeries
+        },
+        {
+          label: "乳酸閾配速",
+          value: fallbackText(physio.lactate_threshold && physio.lactate_threshold.pace && physio.lactate_threshold.pace.value, "資料不足"),
+          series: []
+        },
+        {
+          label: "VO2max",
+          value: physio.vo2max && isPresentNumber(physio.vo2max.value) ? String(physio.vo2max.value) : "資料不足",
+          series: []
+        }
+      ],
+      summaryNote: fallbackText(
+        report.twelve_week_summary_note,
+        "體能趨勢穩定回升中；高溫季節心率偏高時，請以配速與主課表表現交叉解讀。"
+      ),
+      temperature_note: fallbackText(report.temperature_adjustment_note, "")
+    };
+  }
+
   function buildDashboardModel(report) {
     var source = report || {};
     var evidence = buildEvidence(source);
@@ -1063,6 +1336,7 @@
       status_cards: buildStatusCards(source),
       weekly_analysis: buildWeeklyAnalysis(source),
       hr_zones: buildHrZones(source),
+      power_zones: buildPowerZones(source),
       physio_metrics: buildPhysioMetrics(source),
       load_assessment: buildLoadAssessment(source),
       race_readiness: buildRaceReadiness(source),
@@ -1070,7 +1344,10 @@
       next_week_plan: buildCalendar(source),
       running_mechanics: buildMechanics(source),
       evidence: evidence,
-      coaching_summary: buildCoachingSummary(source, evidence.items)
+      coaching_summary: buildCoachingSummary(source, evidence.items),
+      primary_action: buildPrimaryAction(source),
+      twelve_week_trend: build12WeekTrend(source),
+      latest_activity: buildLatestActivity(source)
     };
   }
 
@@ -1085,6 +1362,9 @@
     sourceSectionLabel: sourceSectionLabel,
     visualizationHintLabel: visualizationHintLabel,
     riskFlagLabel: riskFlagLabel,
-    sourcePathLabel: sourcePathLabel
+    sourcePathLabel: sourcePathLabel,
+    metricDisplayValue: metricDisplayValue,
+    evidenceRunnerNarrative: evidenceRunnerNarrative,
+    parsePaceSeconds: parsePaceSeconds
   };
 });

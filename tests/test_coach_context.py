@@ -39,6 +39,7 @@ def test_builds_monday_week_buckets_and_derived_weekly_metrics():
                     "pace": "05:00 /km",
                     "average_heart_rate": 148,
                     "avg_cadence": 174,
+                    "stride_length": 112,
                     "temperature": 28,
                 }
             ],
@@ -104,6 +105,7 @@ def test_builds_monday_week_buckets_and_derived_weekly_metrics():
     assert current_week["data_quality"]["missing_fields"] == ["training_load"]
     assert "heat_stress" in current_week["risk_flags"]
     assert len(current_week["sessions"][0]["segments"]) == 1
+    assert current_week["sessions"][0]["segments"][0]["stride_length_m"] == 1.12
 
 
 def test_hr_zones_are_sorted_and_percentages_are_deterministic():

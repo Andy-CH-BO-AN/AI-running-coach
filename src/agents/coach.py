@@ -14,7 +14,7 @@ load_dotenv()
 PROMPT_PATH = Path("prompts/coach.md")
 DEFAULT_GOAL_PATH = Path("prompts/goal.md")
 OUTPUT_DIR = Path("output")
-MODEL_FALLBACKS = ("gemini-pro-latest", "gemini-flash-latest")
+MODEL_FALLBACKS = ("gemini-3-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash")
 MAX_RETRIES_PER_MODEL = 3
 RETRY_BACKOFF_SECONDS = 1
 
@@ -69,6 +69,7 @@ def _is_retryable_model_error(exc: Exception) -> bool:
     error_message = str(exc).lower()
     return (
         "503" in error_message
+        or "429" in error_message
         or ("unavailable" in error_message and "high demand" in error_message)
         or "high demand" in error_message
         or "try again later" in error_message
