@@ -85,6 +85,15 @@ def test_dashboard_renderer_does_not_write_report_text_via_inner_html():
         assert fragment not in source
 
 
+def test_dashboard_uses_local_font_stack_only():
+    index_source = Path("dashboard/index.html").read_text(encoding="utf-8")
+    style_source = Path("dashboard/styles.css").read_text(encoding="utf-8")
+
+    assert "fonts.googleapis.com" not in index_source
+    assert "fonts.gstatic.com" not in index_source
+    assert "font-family: Inter" not in style_source
+
+
 def test_risk_flags_use_human_readable_labels(tmp_path):
     report = {
         "weekly_analysis": [
