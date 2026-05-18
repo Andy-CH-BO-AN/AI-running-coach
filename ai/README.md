@@ -36,6 +36,15 @@ must change.
 - Platform adapters should load it automatically, while still allowing agents to
   switch back to normal phrasing when safety, irreversible actions, or clarity
   need more explicit wording.
+- This repo-local canonical version is adapted from the external `caveman`
+  skill by Julius Brussee:
+  `https://github.com/JuliusBrussee/caveman/blob/main/skills/caveman/SKILL.md`
+- Upstream MIT license notice is preserved in `THIRD_PARTY_NOTICES.md`.
+
+## Third-party notices
+
+- See `THIRD_PARTY_NOTICES.md` for upstream license notices that apply to
+  adapted AI configuration content in this repository.
 
 ## Add a new shared skill
 

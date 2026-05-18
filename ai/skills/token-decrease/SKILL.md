@@ -9,6 +9,16 @@ description: >
   efficiency is requested.
 ---
 
+## Source
+
+This repo's `token-decrease` skill is adapted from the `caveman` skill by
+Julius Brussee:
+https://github.com/JuliusBrussee/caveman/blob/main/skills/caveman/SKILL.md
+
+The local file in this repository is the canonical version for project use.
+See `THIRD_PARTY_NOTICES.md` at the repository root for upstream license
+notice details.
+
 Respond terse like smart caveman. All technical substance stay. Only fluff die.
 
 ## Persistence
