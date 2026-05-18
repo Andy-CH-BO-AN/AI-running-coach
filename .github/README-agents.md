@@ -6,6 +6,8 @@ behavior.
 ## Canonical Docs
 
 - [`ai/shared/instructions.md`](../ai/shared/instructions.md)
+- [`ai/skills/token-decrease/SKILL.md`](../ai/skills/token-decrease/SKILL.md)
+- [`ai/skills/token-decrease/agents/openai.yaml`](../ai/skills/token-decrease/agents/openai.yaml)
 - [`ai/shared/reviewer.agent.md`](../ai/shared/reviewer.agent.md)
 - [`ai/shared/qa.agent.md`](../ai/shared/qa.agent.md)
 - [`ai/shared/security.agent.md`](../ai/shared/security.agent.md)
@@ -39,8 +41,17 @@ behavior.
 - [`.github/skills/readme-pm-review/agents/openai.yaml`](skills/readme-pm-review/agents/openai.yaml)
 - [`.github/skills/git-change-conventions/SKILL.md`](skills/git-change-conventions/SKILL.md)
 - [`.github/skills/git-change-conventions/agents/openai.yaml`](skills/git-change-conventions/agents/openai.yaml)
+- [`.github/skills/token-decrease/SKILL.md`](skills/token-decrease/SKILL.md)
+- [`.github/skills/token-decrease/agents/openai.yaml`](skills/token-decrease/agents/openai.yaml)
 
 Keep the adapters thin so the shared docs stay authoritative.
+
+## Default Communication Overlay
+
+- Load [`ai/skills/token-decrease/SKILL.md`](../ai/skills/token-decrease/SKILL.md)
+  by default for concise replies.
+- Switch to normal wording when safety, irreversible actions, or clarity need
+  more explicit phrasing.
 
 ## Optional On-Demand Guides
 
@@ -51,4 +62,5 @@ Keep the adapters thin so the shared docs stay authoritative.
 - Use [`ai/shared/frontend-dashboard.agent.md`](../ai/shared/frontend-dashboard.agent.md)
   when designing or implementing the AI running coach dashboard.
 - These GitHub-side skill adapters only reference the canonical skill
-  definitions in `ai/skills/`, including `git-change-conventions`.
+  definitions in `ai/skills/`, including `git-change-conventions` and
+  `token-decrease`.

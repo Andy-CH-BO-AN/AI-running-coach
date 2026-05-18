@@ -271,6 +271,13 @@ DB tests 會拒絕 `TEST_DATABASE_URL` 等於 `DATABASE_URL` 或 database
 | `.cursor/`、`.github/`、`.codex/` | 各編輯器／Copilot 的薄 adapter，指向 `ai/`。 |
 | `AGENTS.md`、`CLAUDE.md`、`.windsurfrules`、`GEMINI.md` | Cursor、Claude Code、Windsurf、Gemini 的根目錄入口，同樣指向 `ai/`。 |
 
+## AI 設定來源
+
+AI agent / skill 設定以 [`ai/README.md`](ai/README.md) 為單一來源，`.codex/`、
+`.cursor/`、`.github/`、[`AGENTS.md`](AGENTS.md)、[`CLAUDE.md`](CLAUDE.md)、
+[`GEMINI.md`](GEMINI.md) 都只做薄適配。預設回覆壓縮風格由
+[`ai/skills/token-decrease/SKILL.md`](ai/skills/token-decrease/SKILL.md) 定義。
+
 ## 測試
 
 一般 unit tests 不會呼叫真實 Garmin API。想跑 README 這組核心測試時，可直接用：

@@ -12,7 +12,7 @@ only contain thin adapters that point here.
 | `ai/shared/qa.agent.md` | QA and testing |
 | `ai/shared/security.agent.md` | Security review |
 | `ai/shared/frontend-dashboard.agent.md` | Dashboard design and implementation |
-| `ai/skills/*/SKILL.md` | On-demand skills |
+| `ai/skills/*/SKILL.md` | Shared skills and communication overlays |
 
 ## Platform adapters
 
@@ -28,6 +28,14 @@ only contain thin adapters that point here.
 When you add or change behavior, edit files under `ai/` first, then update
 adapters only if paths, discovery metadata, or tool-specific frontmatter
 must change.
+
+## Default communication overlay
+
+- `ai/skills/token-decrease/SKILL.md` is the default response-style overlay for
+  repo-local agents.
+- Platform adapters should load it automatically, while still allowing agents to
+  switch back to normal phrasing when safety, irreversible actions, or clarity
+  need more explicit wording.
 
 ## Add a new shared skill
 

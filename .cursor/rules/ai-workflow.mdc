@@ -1,6 +1,7 @@
 ---
-description: AI running coach shared dev workflow (minimal patch, review, QA, security)
+description: AI running coach shared dev workflow and default concise communication overlay
 alwaysApply: true
 ---
 
 @ai/shared/instructions.md
+@ai/skills/token-decrease/SKILL.md

@@ -5,6 +5,7 @@ Canonical agent configuration: [`ai/README.md`](ai/README.md).
 ## Required reading
 
 - Workflow: `ai/shared/instructions.md`
+- Default communication overlay: `ai/skills/token-decrease/SKILL.md`
 - Reviewer: `ai/shared/reviewer.agent.md`
 - QA: `ai/shared/qa.agent.md`
 - Security: `ai/shared/security.agent.md`
@@ -14,7 +15,15 @@ Canonical agent configuration: [`ai/README.md`](ai/README.md).
 - Dashboard: `ai/shared/frontend-dashboard.agent.md`
 - Skills: `ai/skills/git-change-conventions/SKILL.md`,
   `ai/skills/python-review-qa-loop/SKILL.md`,
-  `ai/skills/readme-pm-review/SKILL.md` (README PM review only when asked)
+  `ai/skills/readme-pm-review/SKILL.md` (README PM review only when asked),
+  `ai/skills/token-decrease/SKILL.md`
+
+## Default style
+
+- Keep `ai/skills/token-decrease/SKILL.md` active by default for concise
+  responses.
+- Fall back to normal wording when safety, irreversible actions, or clarity
+  need more explicit phrasing.
 
 ## Project constraints
 
