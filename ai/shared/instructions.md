@@ -5,6 +5,10 @@ Platform-specific files in `.cursor/`, `.github/`, and `.codex/` should
 stay thin and point back to these shared markdown files. See `ai/README.md`
 for the full adapter map.
 
+Default communication style is defined in
+`ai/skills/token-decrease/SKILL.md`. Apply it unless clarity, safety, or an
+explicit user request requires normal phrasing.
+
 ## Scope
 
 This workflow applies to feature work, bug fixes, and test changes that
@@ -36,6 +40,8 @@ touch `src/`, `tests/`, or Python files.
 - Use the canonical Git change naming skill in
   `ai/skills/git-change-conventions/SKILL.md` whenever creating a
   branch, naming a PR, or writing commit messages.
+- Keep `ai/skills/token-decrease/SKILL.md` active as the default communication
+  overlay unless a task needs clearer non-compressed wording.
 - Avoid automatic merging; leave the final merge or PR action to the
   human maintainer unless instructed otherwise.
 - If tests cannot be run, report why and provide clear reproduction
@@ -48,3 +54,4 @@ touch `src/`, `tests/`, or Python files.
 - `ai/shared/qa.agent.md`
 - `ai/shared/security.agent.md`
 - `ai/skills/git-change-conventions/SKILL.md`
+- `ai/skills/token-decrease/SKILL.md`

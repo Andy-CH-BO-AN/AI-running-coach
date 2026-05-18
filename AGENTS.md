@@ -6,6 +6,7 @@ rules here; adapters under `.cursor/` point to `ai/`.
 ## Read first
 
 - Workflow: [`ai/shared/instructions.md`](ai/shared/instructions.md)
+- Default communication overlay: [`ai/skills/token-decrease/SKILL.md`](ai/skills/token-decrease/SKILL.md)
 - Reviewer: [`ai/shared/reviewer.agent.md`](ai/shared/reviewer.agent.md)
 - QA: [`ai/shared/qa.agent.md`](ai/shared/qa.agent.md)
 - Security: [`ai/shared/security.agent.md`](ai/shared/security.agent.md)
@@ -24,5 +25,12 @@ rules here; adapters under `.cursor/` point to `ai/`.
   only.
 - Dashboard is Vanilla HTML/JS/CSS with no build step.
 - Data stays local; no cloud deployment architecture.
+
+## Default style
+
+- Load [`ai/skills/token-decrease/SKILL.md`](ai/skills/token-decrease/SKILL.md)
+  by default for concise responses.
+- Fall back to normal phrasing when safety, irreversible actions, or clarity
+  need more explicit wording.
 
 For Gemini-specific notes, see [`GEMINI.md`](GEMINI.md).

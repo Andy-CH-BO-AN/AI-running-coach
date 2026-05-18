@@ -1,0 +1,8 @@
+#
+# Thin GitHub reference adapter. Canonical metadata is maintained in:
+# ai/skills/token-decrease/agents/openai.yaml
+#
+interface:
+  display_name: "Token Decrease"
+  short_description: "Keep repo-local agent replies concise by default"
+  default_prompt: "Use $token-decrease as the default concise communication overlay unless safety, irreversible actions, or clarity need normal wording."

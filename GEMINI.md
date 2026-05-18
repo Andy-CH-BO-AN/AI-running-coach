@@ -8,9 +8,10 @@ Canonical 設定集中在 [`ai/README.md`](ai/README.md)。各工具僅保留薄
 當你啟動此專案時，必須優先讀取並遵循以下路徑中的規範：
 
 1. **開發工作流：** `ai/shared/instructions.md`（Reviewer、QA、Security 等同目錄）
-2. **專案技能：** `ai/skills/`（含 `git-change-conventions`、`python-review-qa-loop`、
-   `readme-pm-review`）
-3. **Prompt 範本：** `prompts/coach.md` 與 `prompts/goal.md`
+2. **預設回覆風格：** `ai/skills/token-decrease/SKILL.md`（預設啟用；若安全、不可逆操作或清晰度需要，改回正常表達）
+3. **專案技能：** `ai/skills/`（含 `git-change-conventions`、`python-review-qa-loop`、
+   `readme-pm-review`、`token-decrease`）
+4. **Prompt 範本：** `prompts/coach.md` 與 `prompts/goal.md`
 
 ## 核心架構與職責邊界 (Crucial Design Principles)
 

@@ -17,9 +17,14 @@ prompt_before_actions: false
 
 instructions: |
   Canonical workflow: [`ai/shared/instructions.md`](../ai/shared/instructions.md)
+  Default communication overlay: [`ai/skills/token-decrease/SKILL.md`](../ai/skills/token-decrease/SKILL.md)
   Reviewer guidance: [`ai/shared/reviewer.agent.md`](../ai/shared/reviewer.agent.md)
   QA guidance: [`ai/shared/qa.agent.md`](../ai/shared/qa.agent.md)
   Security guidance: [`ai/shared/security.agent.md`](../ai/shared/security.agent.md)
+
+  Keep `ai/skills/token-decrease/SKILL.md` active by default for concise
+  responses. Switch to normal wording when safety, irreversible actions,
+  or clarity need more explicit phrasing.
 
   If a task touches DB logic, migrations, credentials, secrets, `.env`
   handling, or Garmin password/account flows, include the shared

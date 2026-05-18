@@ -6,6 +6,7 @@ Files under `.cursor/` are thin Cursor adapters only.
 ## Canonical docs
 
 - [`ai/shared/instructions.md`](../ai/shared/instructions.md)
+- [`ai/skills/token-decrease/SKILL.md`](../ai/skills/token-decrease/SKILL.md)
 - [`ai/shared/reviewer.agent.md`](../ai/shared/reviewer.agent.md)
 - [`ai/shared/qa.agent.md`](../ai/shared/qa.agent.md)
 - [`ai/shared/security.agent.md`](../ai/shared/security.agent.md)
@@ -33,6 +34,8 @@ pattern as `.codex/` and `.github/` skill adapters).
 
 - **Reviewer / QA / Security:** delegate via subagents or follow the shared
   docs in the review loop.
+- **`token-decrease`:** default concise communication overlay. Keep it active
+  unless safety, irreversible actions, or clarity need normal wording.
 - **`python-review-qa-loop`:** Python changes in `src/`, `tests/`, or workflow
   docs.
 - **`git-change-conventions`:** branches, PR titles, commit messages.
