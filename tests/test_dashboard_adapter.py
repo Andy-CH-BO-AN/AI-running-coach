@@ -22,6 +22,7 @@ def run_adapter_case(tmp_path, report):
         + "var model = DashboardAdapter.buildDashboardModel(report);\n"
         + "JSON.stringify({"
         + "weekly: model.weekly_analysis.weeks,"
+        + "crossTraining: model.cross_training_highlights,"
         + "calendar: model.next_week_plan,"
         + "race: model.race_readiness,"
         + "evidence: model.evidence,"
@@ -51,8 +52,10 @@ def test_weekly_metrics_are_derived_from_sessions_and_mark_partial_data(tmp_path
                 "total_distance_km": 999,
                 "training_load": 999,
                 "sessions": [
-                    {"distance_km": 5.125, "duration_min": 30.04, "training_load": 44.44},
-                    {"distance_km": 3, "duration_min": None},
+                    {"type": "easy", "distance_km": 5.125, "duration_min": 30.04, "training_load": 44.44},
+                    {"type": "bike", "distance_km": 12, "duration_min": 35, "training_load": 24},
+                    {"type": "swim", "distance_km": 1.2, "duration_min": 28, "training_load": 18},
+                    {"type": "easy", "distance_km": 3, "duration_min": None},
                 ],
             }
         ],
@@ -63,8 +66,11 @@ def test_weekly_metrics_are_derived_from_sessions_and_mark_partial_data(tmp_path
     metrics = payload["weekly"][0]["metrics"]
 
     assert metrics["derived_total_distance_km"] == 8.13
-    assert metrics["derived_total_duration_min"] == 30.0
-    assert metrics["derived_training_load"] == 44.4
+    assert metrics["derived_running_distance_km"] == 8.13
+    assert metrics["derived_swim_distance_km"] == 1.2
+    assert metrics["derived_bike_distance_km"] == 12
+    assert metrics["derived_total_duration_min"] == 93.0
+    assert metrics["derived_training_load"] == 86.4
     assert metrics["data_quality"] == "部分資料不足"
     assert set(metrics["missing_fields"]) == {"duration_min", "training_load"}
 
@@ -121,6 +127,185 @@ def test_risk_flags_use_human_readable_labels(tmp_path):
         {"code": "high_intensity_long_run", "label": "長跑強度偏高"},
         {"code": "fatigue_risk", "label": "疲勞風險"},
     ]
+
+
+def test_weekly_intensity_focuses_are_adapted_and_limited_to_two(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "intensity_focuses": [
+                    {"dimension": "heart_rate", "headline": "心率先上升", "analysis": "熱天心率反應快。"},
+                    {"dimension": "power", "headline": "功率仍穩", "analysis": "輸出沒有一起飄高。"},
+                    {"dimension": "load", "headline": "不應保留", "analysis": "第三筆應被截斷。"},
+                ],
+                "sessions": [],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    focuses = payload["weekly"][0]["intensity_focuses"]
+
+    assert len(focuses) == 2
+    assert focuses[0]["label"] == "心率"
+    assert focuses[1]["label"] == "功率"
+    assert focuses[0]["headline"] == "心率先上升"
+
+
+def test_weekly_intensity_focuses_fall_back_from_sessions_and_risks(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "risk_flags": ["heat_stress"],
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "interval",
+                        "training_load": 42,
+                        "avg_hr": 182,
+                        "training_effect_anaerobic": 3.8,
+                        "training_effect_aerobic": 2.4,
+                        "environment": {"estimated_temp_c": 29.4},
+                    },
+                    {
+                        "date": "2026-05-14",
+                        "type": "tempo",
+                        "training_load": 54,
+                        "training_effect_anaerobic": 1.2,
+                        "training_effect_aerobic": 3.7,
+                    }
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    focuses = payload["weekly"][0]["intensity_focuses"]
+
+    assert len(focuses) == 2
+    assert focuses[0]["dimension"] == "heat"
+    assert focuses[1]["headline"] == "代表課 1：5/12 間歇"
+    assert "無氧 TE 3.8" in focuses[1]["analysis"]
+
+
+def test_cross_training_highlights_pick_highest_load_session_per_week(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_label": "05/11-05/17",
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "swim",
+                        "distance_km": 1.2,
+                        "duration_min": 42,
+                        "training_load": 38,
+                        "training_effect_aerobic": 2.1,
+                    },
+                    {
+                        "date": "2026-05-14",
+                        "type": "bike",
+                        "distance_km": 18,
+                        "duration_min": 54,
+                        "training_load": 72,
+                        "training_effect_aerobic": 3.2,
+                    },
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    highlight = payload["crossTraining"][0]
+
+    assert highlight["session_type"] == "bike"
+    assert highlight["title"] == "5/14 自行車"
+    assert highlight["load_label"] == "72 TSS"
+
+
+def test_cross_training_highlights_prefer_ai_analysis_when_present(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_label": "05/11-05/17",
+                "week_start": "2026-05-11",
+                "cross_training_focus": {
+                    "activity_id": 22,
+                    "headline": "單車是心肺補量，不是恢復日",
+                    "analysis": "這堂單車有明確有氧刺激，隔天跑步應避免再堆高強度。",
+                },
+                "sessions": [
+                    {
+                        "activity_id": 22,
+                        "date": "2026-05-14",
+                        "type": "bike",
+                        "distance_km": 18,
+                        "duration_min": 54,
+                        "training_load": 72,
+                    },
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    highlight = payload["crossTraining"][0]
+
+    assert highlight["title"] == "單車是心肺補量，不是恢復日"
+    assert highlight["session_label"] == "5/14 自行車"
+    assert highlight["analysis"] == "這堂單車有明確有氧刺激，隔天跑步應避免再堆高強度。"
+    assert highlight["has_ai_analysis"] is True
+
+
+def test_cross_training_highlights_match_ai_focus_activity_id_before_load(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_label": "05/11-05/17",
+                "week_start": "2026-05-11",
+                "cross_training_focus": {
+                    "activity_id": 11,
+                    "headline": "恢復游泳保留跑步主課品質",
+                    "analysis": "這堂游泳負荷較低，但更能代表本週交叉訓練的恢復目的。",
+                },
+                "sessions": [
+                    {
+                        "activity_id": 11,
+                        "date": "2026-05-12",
+                        "type": "swim",
+                        "distance_km": 1.2,
+                        "duration_min": 42,
+                        "training_load": 38,
+                    },
+                    {
+                        "activity_id": 22,
+                        "date": "2026-05-14",
+                        "type": "bike",
+                        "distance_km": 18,
+                        "duration_min": 54,
+                        "training_load": 72,
+                    },
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    highlight = payload["crossTraining"][0]
+
+    assert highlight["session_type"] == "swim"
+    assert highlight["title"] == "恢復游泳保留跑步主課品質"
+    assert highlight["session_label"] == "5/12 游泳"
+    assert highlight["load_label"] == "38 TSS"
+    assert highlight["analysis"] == "這堂游泳負荷較低，但更能代表本週交叉訓練的恢復目的。"
 
 
 def test_work_reps_exclude_warmup_and_recovery_segments(tmp_path):
@@ -354,7 +539,7 @@ def test_evidence_fallback_and_priority_sorting(tmp_path):
         "low",
     ]
     assert payload["evidence"]["hasEvidence"] is False
-    assert payload["evidence"]["fallbackMessage"] == "此報告尚未提供可追溯依據"
+    assert payload["evidence"]["fallbackMessage"] == "此報告尚未提供教練判斷理由"
 
 
 def test_pace_strings_are_preserved(tmp_path):
@@ -364,6 +549,7 @@ def test_pace_strings_are_preserved(tmp_path):
                 "heart_rate": {"value": 191, "unit": "bpm"},
                 "pace": {"value": "03:59/km", "unit": ""},
             },
+            "resting_heart_rate": {"value": 50, "unit": "bpm", "source": "garmin"},
             "pace_zones": [
                 {"zone": 2, "name": "有氧", "pace_min": "05:30", "pace_max": "04:50"},
                 {"zone": 1, "name": "恢復", "pace_min": "07:00", "pace_max": "06:00"},
@@ -379,6 +565,7 @@ def test_pace_strings_are_preserved(tmp_path):
     assert payload["physio"]["lactate_threshold"]["pace"]["assessment"] == ""
     assert [zone["zone"] for zone in payload["physio"]["pace_zones"]] == [1, 2, 5]
     assert payload["physio"]["pace_zones"][2]["pace_range"] == "快於 03:45/km"
+    assert payload["physio"]["resting_heart_rate"]["value"] == 50
 
 
 def test_running_mechanics_only_surface_cadence_assessment_in_metric_cards(tmp_path):
@@ -431,8 +618,8 @@ def test_evidence_humanizes_deterministic_context_running_mechanics_paths(tmp_pa
     payload = run_adapter_case(tmp_path, report)
     metric = payload["evidence"]["items"][0]["supporting_metrics"][0]
 
-    assert payload["evidence"]["items"][0]["source_section_labels"] == ["程式計算資料", "跑姿指標"]
-    assert metric["source_label"] == "程式計算資料 > 跑姿指標 > 平均步幅"
+    assert payload["evidence"]["items"][0]["source_section_labels"] == ["訓練資料", "跑姿指標"]
+    assert metric["source_label"] == "訓練資料 > 跑姿指標 > 平均步幅"
 
 
 def test_coaching_summary_links_to_semantically_related_evidence(tmp_path):
@@ -527,10 +714,55 @@ def test_evidence_uses_human_readable_labels_for_ui_pills_and_sources(tmp_path):
     assert first["visualization_label"] == "指標卡"
     assert first["supporting_metrics"][0]["source_label"] == "目前狀態 > 疲勞程度 > 分數"
     assert first["supporting_metrics"][1]["source_label"] == "強度分佈 > 心率區間 3 > 比例"
-    assert first["supporting_sessions"][0]["source_label"] == "近期訓練 4 > 活動 1"
+    assert first["supporting_sessions"][0]["source_label"] == "第 4 週第 1 堂訓練"
     assert second["source_section_labels"] == ["目標能力", "課表建議"]
     assert second["visualization_label"] == "圖表註記"
     assert second["supporting_metrics"][0]["source_label"] == "目標能力 > 信心分數"
+
+
+def test_evidence_sources_use_runner_language_for_session_fields(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "easy",
+                        "distance_km": 2.05,
+                        "environment": {"estimated_temp_c": 27.9},
+                    }
+                ],
+            }
+        ],
+        "evidence_links": [
+            {
+                "insight_id": "low_volume",
+                "claim": "跑步訓練量不足。",
+                "supporting_metrics": [
+                    {
+                        "label": "本週跑量",
+                        "value": 2.05,
+                        "unit": "km",
+                        "source_path": "weekly_analysis[0].sessions[0].distance_km",
+                    },
+                    {
+                        "label": "環境溫度",
+                        "value": 27.9,
+                        "unit": "°C",
+                        "source_path": "weekly_analysis[0].sessions[0].environment.estimated_temp_c",
+                    },
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    metrics = payload["evidence"]["items"][0]["supporting_metrics"]
+
+    assert metrics[0]["source_label"] == "5/12 輕鬆跑 > 距離"
+    assert metrics[1]["source_label"] == "5/12 輕鬆跑 > 環境 > 氣溫"
 
 
 def test_evidence_metric_display_value_does_not_duplicate_units(tmp_path):

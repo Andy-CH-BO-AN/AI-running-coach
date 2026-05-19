@@ -20,6 +20,7 @@
     latestActivity: document.getElementById("latestActivity"),
     weeklyChart: document.getElementById("weeklyChart"),
     weeklyNarratives: document.getElementById("weeklyNarratives"),
+    crossTrainingHighlights: document.getElementById("crossTrainingHighlights"),
     twelveWeekContent: document.getElementById("twelveWeekContent"),
     weeklyCalendar: document.getElementById("weeklyCalendar"),
     planSummary: document.getElementById("planSummary"),
@@ -281,61 +282,6 @@
     return div;
   }
 
-  function renderRepSparkline(reps) {
-    var wrap = document.createElement("div");
-    wrap.className = "rep-sparkline-wrap";
-    var width = 520;
-    var height = 90;
-    var pad = 18;
-    var ns = "http://www.w3.org/2000/svg";
-    var paces = reps.map(function pickPace(rep) {
-      var raw = rep.avg_pace || "";
-      var parts = String(raw).replace(/\/km/gi, "").trim().split(":");
-      if (parts.length !== 2) {
-        return null;
-      }
-      return Number(parts[0]) * 60 + Number(parts[1]);
-    }).filter(function keep(value) { return Number.isFinite(value); });
-
-    if (paces.length < 2) {
-      wrap.appendChild(textElement("p", "subtle", "分段資料不足，無法繪製趨勢圖。"));
-      return wrap;
-    }
-
-    var minPace = Math.min.apply(null, paces);
-    var maxPace = Math.max.apply(null, paces);
-    var range = Math.max(maxPace - minPace, 20);
-    var plotW = width - pad * 2;
-    var plotH = height - pad * 2;
-    var step = plotW / (paces.length - 1);
-    var svg = document.createElementNS(ns, "svg");
-    svg.setAttribute("viewBox", "0 0 " + width + " " + height);
-    svg.setAttribute("class", "rep-sparkline-svg");
-    var points = paces.map(function mapPoint(value, index) {
-      var x = pad + index * step;
-      var y = pad + ((value - minPace) / range) * plotH;
-      return x + "," + y;
-    }).join(" ");
-    var polyline = document.createElementNS(ns, "polyline");
-    polyline.setAttribute("points", points);
-    polyline.setAttribute("fill", "none");
-    polyline.setAttribute("stroke", "var(--blue)");
-    polyline.setAttribute("stroke-width", "3");
-    svg.appendChild(polyline);
-    paces.forEach(function drawDot(value, index) {
-      var circle = document.createElementNS(ns, "circle");
-      circle.setAttribute("cx", pad + index * step);
-      circle.setAttribute("cy", pad + ((value - minPace) / range) * plotH);
-      circle.setAttribute("r", "4");
-      circle.setAttribute("fill", "var(--panel)");
-      circle.setAttribute("stroke", "var(--blue)");
-      circle.setAttribute("stroke-width", "3");
-      svg.appendChild(circle);
-    });
-    wrap.appendChild(svg);
-    return wrap;
-  }
-
   function renderLatestActivity(model) {
     clear(elements.latestActivity);
     var latest = model.latest_activity;
@@ -367,19 +313,30 @@
     stats.appendChild(renderActivityStat("氣溫", latest.temperature_c !== null ? latest.temperature_c : "--", "°C"));
     elements.latestActivity.appendChild(stats);
 
-    if (latest.layout === "interval" && latest.work_reps.length > 0) {
+    if (latest.layout === "interval" && latest.work_reps.length > 1) {
       var trend = document.createElement("details");
       trend.className = "rep-trend-details";
       trend.open = true;
-      trend.appendChild(textElement("summary", "", "重點分段趨勢"));
-      if (latest.rep_trend_label) {
-        var trendText = document.createElement("p");
-        trendText.className = "rep-sparkline-note";
-        trendText.textContent = latest.rep_trend_label;
-        trend.appendChild(trendText);
+      trend.appendChild(textElement("summary", "", "split 比較"));
+
+      var splitRows = latest.work_reps.map(function adaptRep(rep) {
+        return {
+          index: rep.index,
+          segment_type: "main",
+          segment_type_label: "主課表",
+          distance_km: rep.distance_km,
+          avg_pace: rep.avg_pace,
+          avg_hr: rep.avg_hr,
+          cadence: rep.cadence,
+          stride_length_m: rep.stride_length_m,
+          note: rep.note
+        };
+      });
+      var splitTable = renderSessionSplitsTable(splitRows, "主課表 splits");
+      if (splitTable) {
+        trend.appendChild(splitTable);
+        elements.latestActivity.appendChild(trend);
       }
-      trend.appendChild(renderRepSparkline(latest.work_reps));
-      elements.latestActivity.appendChild(trend);
     }
 
     var notes = latest.coaching_notes || {};
@@ -520,11 +477,18 @@
 
       var metrics = document.createElement("div");
       metrics.className = "week-metrics";
-      [
-        week.metrics.derived_total_distance_km + " km",
-        week.metrics.derived_total_duration_min + " min",
-        week.metrics.derived_training_load + " TSS"
-      ].forEach(function(value) {
+      var metricLabels = [
+        "跑步 " + week.metrics.derived_running_distance_km + " km"
+      ];
+      if (week.metrics.derived_swim_distance_km > 0) {
+        metricLabels.push("游泳 " + week.metrics.derived_swim_distance_km + " km");
+      }
+      if (week.metrics.derived_bike_distance_km > 0) {
+        metricLabels.push("單車 " + week.metrics.derived_bike_distance_km + " km");
+      }
+      metricLabels.push(week.metrics.derived_total_duration_min + " min");
+      metricLabels.push(week.metrics.derived_training_load + " TSS");
+      metricLabels.forEach(function(value) {
         metrics.appendChild(textElement("span", "", value));
       });
       card.appendChild(metrics);
@@ -536,6 +500,32 @@
       ].forEach(function(block) {
         appendLabeledCopy(card, "week-copy", block.label, block.text);
       });
+
+      if (week.intensity_focuses.length > 0) {
+        var focusWrap = document.createElement("div");
+        focusWrap.className = "week-focuses";
+        focusWrap.appendChild(textElement("p", "week-focuses-title", "本週強度重點"));
+
+        week.intensity_focuses.forEach(function(focus) {
+          var item = document.createElement("div");
+          item.className = "week-focus-item";
+
+          var head = document.createElement("div");
+          head.className = "week-focus-head";
+          head.appendChild(textElement("span", "week-focus-pill", focus.label));
+          head.appendChild(textElement("strong", "week-focus-headline", focus.headline));
+
+          var body = document.createElement("p");
+          body.className = "week-focus-text";
+          body.textContent = focus.analysis;
+
+          item.appendChild(head);
+          item.appendChild(body);
+          focusWrap.appendChild(item);
+        });
+
+        card.appendChild(focusWrap);
+      }
 
       if (week.risk_flags.length > 0) {
         var risks = document.createElement("div");
@@ -550,6 +540,50 @@
       }
 
       elements.weeklyNarratives.appendChild(card);
+    });
+  }
+
+  function renderCrossTrainingHighlights(model) {
+    clear(elements.crossTrainingHighlights);
+    if (!elements.crossTrainingHighlights) {
+      return;
+    }
+
+    var highlights = model.cross_training_highlights || [];
+    if (!highlights.length) {
+      return;
+    }
+
+    highlights.forEach(function(highlight) {
+      var card = document.createElement("article");
+      card.className = "cross-training-card";
+
+      var top = document.createElement("div");
+      top.className = "cross-training-top";
+      top.appendChild(textElement("h4", "cross-training-week", highlight.week_label));
+      top.appendChild(textElement("span", "cross-training-type", highlight.session_type_label));
+      card.appendChild(top);
+
+      card.appendChild(textElement("p", "cross-training-title", highlight.title));
+      if (highlight.has_ai_analysis && highlight.session_label && highlight.session_label !== highlight.title) {
+        card.appendChild(textElement("p", "cross-training-session", highlight.session_label));
+      }
+
+      var stats = document.createElement("div");
+      stats.className = "cross-training-metrics";
+      [
+        highlight.distance_label,
+        highlight.duration_label,
+        highlight.load_label
+      ].forEach(function(value) {
+        if (value) {
+          stats.appendChild(textElement("span", "", value));
+        }
+      });
+      card.appendChild(stats);
+
+      card.appendChild(textElement("p", "cross-training-copy", highlight.analysis));
+      elements.crossTrainingHighlights.appendChild(card);
     });
   }
 
@@ -800,7 +834,12 @@
     var items = [
       { label: "VO2max", value: physio.vo2max.value || "資料不足", unit: "" },
       { label: "乳酸閾值配速", value: physio.lactate_threshold.pace.value || "資料不足", unit: physio.lactate_threshold.pace.value && physio.lactate_threshold.pace.value.indexOf("/") === -1 ? "/km" : "" },
-      { label: "最大心率", value: physio.max_heart_rate.value || "資料不足", unit: physio.max_heart_rate.value ? "bpm" : "" }
+      { label: "最大心率", value: physio.max_heart_rate.value || "資料不足", unit: physio.max_heart_rate.value ? "bpm" : "" },
+      {
+        label: physio.resting_heart_rate.source === "estimated_from_lowest_activity_avg_hr" ? "靜止心率(估)" : "靜止心率",
+        value: physio.resting_heart_rate.value || "資料不足",
+        unit: physio.resting_heart_rate.value ? "bpm" : ""
+      }
     ];
 
     items.forEach(function(item) {
@@ -863,7 +902,7 @@
     }
   }
 
-  function renderSessionSplitsTable(segments) {
+  function renderSessionSplitsTable(segments, titleText) {
     if (!segments || !segments.length) {
       return null;
     }
@@ -873,7 +912,7 @@
 
     var title = document.createElement("p");
     title.className = "evidence-splits-title";
-    title.textContent = "分段明細";
+    title.textContent = titleText || "分段明細";
     wrap.appendChild(title);
 
     var table = document.createElement("table");
@@ -951,7 +990,7 @@
     var wrapper = document.createElement("details");
     wrapper.className = "evidence-wrapper";
     wrapper.open = false;
-    wrapper.appendChild(textElement("summary", "", "展開 " + evidence.items.length + " 項 AI 建議依據"));
+    wrapper.appendChild(textElement("summary", "", "查看 " + evidence.items.length + " 項教練判斷理由"));
 
     evidence.items.forEach(function(item) {
       var card = document.createElement("article");
@@ -969,7 +1008,7 @@
 
       var advanced = document.createElement("details");
       advanced.className = "evidence-advanced";
-      advanced.appendChild(textElement("summary", "", "查看依據數據"));
+      advanced.appendChild(textElement("summary", "", "查看訓練數據"));
 
       var narrative = document.createElement("p");
       narrative.className = "evidence-narrative";
@@ -981,7 +1020,7 @@
       if (item.supporting_metrics.length > 0) {
         var table = document.createElement("table");
         table.className = "evidence-table";
-        table.innerHTML = "<thead><tr><th>指標</th><th>數值</th><th>來源</th></tr></thead>";
+        table.innerHTML = "<thead><tr><th>指標</th><th>數值</th><th>資料脈絡</th></tr></thead>";
         var tbody = document.createElement("tbody");
         item.supporting_metrics.forEach(function(metric) {
           var row = document.createElement("tr");
@@ -1054,6 +1093,7 @@
     renderLatestActivity(model);
     renderWeeklyChart(model);
     renderWeeklyNarratives(model);
+    renderCrossTrainingHighlights(model);
     render12WeekTrend(model);
     renderCalendar(model);
     renderIntensityZones(model);

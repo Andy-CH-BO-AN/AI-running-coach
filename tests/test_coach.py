@@ -149,6 +149,28 @@ class CoachTests(unittest.TestCase):
         self.assertEqual(generate_content.call_count, 3)
         self.assertEqual(sleep_mock.call_args_list, [call(1), call(2)])
 
+    def test_coach_uses_gemini_retry_delay_when_available(self):
+        retryable_error = Exception(
+            "429 RESOURCE_EXHAUSTED. {'error': {'details': ["
+            "{'@type': 'type.googleapis.com/google.rpc.RetryInfo', "
+            "'retryDelay': '5s'}]}}"
+        )
+        generate_content = Mock(
+            side_effect=[
+                retryable_error,
+                types.SimpleNamespace(text='{"headline": "recovered report"}'),
+            ]
+        )
+        fake_client = types.SimpleNamespace(models=types.SimpleNamespace(generate_content=generate_content))
+
+        with patch.object(coach, "client", fake_client), patch.object(
+            coach, "MODEL_FALLBACKS", ("model-a",)
+        ), patch.object(coach.time, "sleep") as sleep_mock:
+            report = coach.coach(data=[{"activity_id": 1}])
+
+        self.assertEqual(report, {"headline": "recovered report"})
+        sleep_mock.assert_called_once_with(5.0)
+
     def test_coach_falls_back_after_retryable_error_exhausts_retries(self):
         call_counts = {"model-a": 0, "model-b": 0}
 

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -81,6 +82,16 @@ def _is_retryable_model_error(exc: Exception) -> bool:
     )
 
 
+def _retry_delay_seconds(exc: Exception) -> Optional[float]:
+    retry_delay_match = re.search(
+        r"['\"]?retryDelay['\"]?\s*:\s*['\"]?([0-9]+(?:\.[0-9]+)?)s",
+        str(exc),
+    )
+    if not retry_delay_match:
+        return None
+    return float(retry_delay_match.group(1))
+
+
 def _extract_json_document(text: str) -> str:
     cleaned = text.strip()
     if cleaned.startswith("```"):
@@ -148,7 +159,12 @@ def _generate_content_with_retries(model_name: str, full_prompt: str) -> Dict[st
                 )
             )
             if should_retry:
-                wait_seconds = RETRY_BACKOFF_SECONDS * attempt
+                retry_delay_seconds = _retry_delay_seconds(exc)
+                wait_seconds = (
+                    retry_delay_seconds
+                    if retry_delay_seconds is not None
+                    else RETRY_BACKOFF_SECONDS * attempt
+                )
                 print(
                     f"模型 {model_name} 暫時高負載，第 {attempt} 次失敗，"
                     f"{wait_seconds} 秒後重試..."

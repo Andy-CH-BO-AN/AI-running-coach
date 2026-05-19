@@ -19,11 +19,11 @@ data、processed artifacts 與 AI report 都保留在本機。
 ## 目前能做什麼
 
 - 從 Garmin Connect 抓取個人資料、個人紀錄、近期活動、分圈資料與活動詳細 payload。
-- 支援 `running`、`lap_swimming`、`cycling` 活動；輸出時會正規化為跑步、游泳與自行車指標。
+- 支援 `running`、`lap_swimming`、`cycling` 活動；輸出時會正規化為跑步、游泳與自行車指標，週統計會分開計算各運動距離與負荷。
 - 產生 processed CSV、deterministic coach context JSON，以及 AI coach JSON report。
-- 在程式端先計算週訓練負荷、心率 Z1-Z5 分佈、功率 Z1-Z5 分佈、跑姿、配速區間、交叉訓練摘要與下週日期 seed。
-- 透過 Gemini 把 deterministic facts 轉成狀態標籤、風險解釋、賽事準備度、下週課表，以及**心率＋功率**雙軌強度解讀與 evidence 文案。
-- 啟動本機 dashboard（V2 跑者介面），讀取 `output/ai_report_YYYYMMDD.json`：Primary Action、最近重點訓練回顧、Key/Support 課表、可折疊 Zone E（心率/功率/配速區間/跑姿），以及跑者可讀的 AI 建議依據與分段明細。
+- 在程式端先計算週訓練負荷、分運動週量、心率 Z1-Z5 分佈、功率 Z1-Z5 分佈、跑姿、配速/心率區間、交叉訓練摘要與下週日期 seed。
+- 透過 Gemini 把 deterministic facts 轉成狀態標籤、風險解釋、賽事準備度、下週課表，以及**心率＋功率＋訓練效果**的強度解讀、交叉訓練評語與 evidence 文案。
+- 啟動本機 dashboard（V2 跑者介面），讀取 `output/ai_report_YYYYMMDD.json`：Primary Action、最近重點訓練回顧、Key/Support 課表、四週 2x2 訓練卡、交叉訓練分析、可折疊 Zone E（心率/功率/配速區間/跑姿），以及跑者可讀的 AI 建議依據與分段明細。
 - 選用 PostgreSQL 匯入 raw/user/processed artifacts，支援 idempotent upsert 與後續資料版本化。
 
 ## 目前限制
@@ -96,9 +96,11 @@ python3 -m src.dashboard.server
 Dashboard V2 重點：
 
 - **下週課表**：核心訓練卡顯示配速、間歇距離、休息；頂部 summary 列顯示主題與週跑量。
-- **訓練回顧**：優先選最近一次 interval / tempo / long / race 等重點訓練；interval 顯示重點分段趨勢，沒有重點課時才回退到最新活動。
+- **訓練回顧**：優先選最近一次 interval / tempo / long / race 等重點訓練；使用 split 明細呈現關鍵段落，沒有重點課時才回退到最新活動。
 - **強度分佈**：心率與功率區間並列，含 AI `assessment` / `recommendation`（需重跑 pipeline 產生新 report）。
+- **四週回顧**：週卡以 2x2 排列，分開顯示跑步、游泳、自行車距離，並由 AI 每週挑出代表強度課與一堂高負荷交叉訓練給教練評語。
 - **Zone E**：預設收合的 `<details>`，內含配速區間表與跑姿（排除休息段的有效跑步分圈）。
+- **生理能力**：心率區間會優先用最新可用靜止心率與最大心率計算儲備心率區間，讓配速/心率對照更完整。
 - **Evidence**：展開後顯示 supporting session 的分段明細，包含配速、心率、步頻與步幅；畫面使用跑者可讀來源名稱，不直接露出 JSON path。
 
 ## 自訂賽事目標
@@ -146,12 +148,12 @@ python run_pipeline.py \
 
 `coach_context_YYYYMMDD.json` 會先由本機程式計算以下內容：
 
-- 近 4 週 Monday-based week bucket、每週 sessions、週總距離、週總時間、訓練負荷與資料品質。
+- 近 4 週 Monday-based week bucket、每週 sessions、分運動週距離、週總時間、訓練負荷與資料品質。
 - 每次活動的距離、時間、training load、平均心率、平均配速、training effect、segments 與高溫 seed。
 - 4 週心率 Z1-Z5 minutes/percentage，以及是否偏極化的 seed。
-- VO2max、最大/靜息心率、乳酸閾值心率/配速與 pace zone seed。
+- VO2max、最大/靜息心率、乳酸閾值心率/配速、pace zone seed 與以儲備心率推估的心率區間。
 - 跑姿平均值：cadence、ground contact、vertical oscillation、stride length 與 running economy score seed。
-- 游泳/自行車交叉訓練摘要、weekly TSS load seed、下週 7 天日期與可訓練日/長跑偏好。
+- 游泳/自行車交叉訓練摘要、每週高負荷交叉訓練候選、weekly TSS load seed、下週 7 天日期與可訓練日/長跑偏好。
 - 可被 Gemini 寫入 `evidence_links` 的 deterministic facts，例如本週負荷、Z4-Z5 佔比與風險 flag。
 
 Gemini 主要負責教練判讀與文字化；日期、加總、百分比與可追溯 facts
@@ -206,8 +208,10 @@ Garmin login API 很容易先顯示兩次 `429` rate limit 訊息，之後才繼
 
 `python run_pipeline.py` 會優先嘗試 DB mode：先查 PostgreSQL 中最新
 活動日期，再向 Garmin 補抓該日期之後的 `running`、`lap_swimming`、
-`cycling` 活動，靠 `garmin_activity_id` upsert 避免重複。若 DB 無法
-連線，pipeline 會 fallback 成直接從 Garmin 抓近期活動並輸出檔案。
+`cycling` 活動，靠 `garmin_activity_id` upsert 避免重複。user profile
+匯入時也會保存每日靜止心率；同一天已有資料時採較低值，coach context
+會取最近一筆可用靜止心率。若 DB 無法連線，pipeline 會 fallback 成直接
+從 Garmin 抓近期活動並輸出檔案。
 
 啟動本機 PostgreSQL：
 

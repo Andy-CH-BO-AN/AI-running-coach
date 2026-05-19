@@ -83,9 +83,17 @@ def insert_user_profile_snapshot(
         source_file=source_file,
     )
     stmt = pg_insert(UserProfileSnapshot).values(**values)
+    excluded = stmt.excluded
     stmt = stmt.on_conflict_do_update(
         constraint="uq_user_profile_snapshots_user_captured_at",
-        set_={key: value for key, value in values.items() if key not in {"user_id", "captured_at"}},
+        set_={
+            **{key: value for key, value in values.items() if key not in {"user_id", "captured_at", "resting_heart_rate"}},
+            "resting_heart_rate": func.coalesce(
+                func.least(UserProfileSnapshot.resting_heart_rate, excluded.resting_heart_rate),
+                excluded.resting_heart_rate,
+                UserProfileSnapshot.resting_heart_rate,
+            ),
+        },
     ).returning(UserProfileSnapshot.id)
     snapshot_id = session.scalar(stmt)
     session.flush()
@@ -111,6 +119,19 @@ def get_profile_history(session: Session, user_id: uuid.UUID) -> list[UserProfil
             .order_by(UserProfileSnapshot.captured_at)
         )
     )
+
+
+def get_latest_resting_heart_rate(session: Session, user_id: uuid.UUID) -> float | None:
+    value = session.scalar(
+        select(UserProfileSnapshot.resting_heart_rate)
+        .where(
+            UserProfileSnapshot.user_id == user_id,
+            UserProfileSnapshot.resting_heart_rate.is_not(None),
+        )
+        .order_by(desc(UserProfileSnapshot.captured_at))
+        .limit(1)
+    )
+    return float(value) if value is not None else None
 
 
 def get_recent_max_heart_rate(

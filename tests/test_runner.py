@@ -186,6 +186,42 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(raw_activities, garmin_payload["activities"])
         self.assertEqual(user_data, garmin_payload["user_data"])
 
+    def test_apply_resting_heart_rate_history_fills_missing_from_latest_db_value(self):
+        session = Mock()
+        with patch.object(runner, "get_latest_resting_heart_rate", return_value=51.0):
+            user_data = runner._apply_resting_heart_rate_history(
+                session=session,
+                user_id="user-1",
+                user_data={"max_heart_rate": 190, "resting_heart_rate": None},
+            )
+
+        self.assertEqual(user_data["resting_heart_rate"], 51.0)
+        self.assertEqual(user_data["resting_heart_rate_source"], "db_latest_profile_history")
+
+    def test_apply_resting_heart_rate_history_keeps_current_day_value_when_present(self):
+        session = Mock()
+        with patch.object(runner, "get_latest_resting_heart_rate", return_value=51.0):
+            user_data = runner._apply_resting_heart_rate_history(
+                session=session,
+                user_id="user-1",
+                user_data={"max_heart_rate": 190, "resting_heart_rate": 49},
+            )
+
+        self.assertEqual(user_data["resting_heart_rate"], 49)
+        self.assertNotIn("resting_heart_rate_source", user_data)
+
+    def test_apply_resting_heart_rate_history_uses_db_value_when_smaller_than_current(self):
+        session = Mock()
+        with patch.object(runner, "get_latest_resting_heart_rate", return_value=48.0):
+            user_data = runner._apply_resting_heart_rate_history(
+                session=session,
+                user_id="user-1",
+                user_data={"max_heart_rate": 190, "resting_heart_rate": 51},
+            )
+
+        self.assertEqual(user_data["resting_heart_rate"], 48.0)
+        self.assertEqual(user_data["resting_heart_rate_source"], "db_latest_profile_history")
+
     def test_run_pipeline_uses_db_loaded_activities_and_filters_all_data(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             raw_activities = [{"activity_id": 1, "type": "cycling", "distance": 0.5, "duration": 2.0}]

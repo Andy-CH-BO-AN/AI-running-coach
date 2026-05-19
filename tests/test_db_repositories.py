@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from src.db.mappers import _activity_values, _user_profile_snapshot_values
 from src.db.models import AIReport, Activity, ActivityFeature, ActivitySplit, SwimmingLength
 from src.db.repositories import (
+    get_latest_resting_heart_rate,
     get_latest_user_profile,
     get_or_create_default_user,
     get_profile_history,
@@ -209,6 +210,56 @@ def test_profile_snapshots_preserve_vo2max_history(db_session):
     assert float(history[0].vo2max_running) == 53.0
     assert float(latest.vo2max_running) == 56.0
     assert latest.raw_profile["max_heart_rate"] == 202
+
+
+def test_get_latest_resting_heart_rate_uses_most_recent_non_null_snapshot(db_session):
+    user = get_or_create_default_user(db_session)
+    insert_user_profile_snapshot(
+        db_session,
+        user.id,
+        {"resting_heart_rate": 48},
+        datetime(2026, 5, 10, tzinfo=timezone.utc),
+    )
+    insert_user_profile_snapshot(
+        db_session,
+        user.id,
+        {"resting_heart_rate": None},
+        datetime(2026, 5, 11, tzinfo=timezone.utc),
+    )
+    insert_user_profile_snapshot(
+        db_session,
+        user.id,
+        {"resting_heart_rate": 51},
+        datetime(2026, 5, 12, tzinfo=timezone.utc),
+    )
+
+    assert get_latest_resting_heart_rate(db_session, user.id) == 51.0
+
+
+def test_profile_snapshot_upsert_keeps_smaller_same_day_resting_heart_rate(db_session):
+    user = get_or_create_default_user(db_session)
+    captured_at = datetime(2026, 5, 10, tzinfo=timezone.utc)
+    insert_user_profile_snapshot(
+        db_session,
+        user.id,
+        {"resting_heart_rate": 52},
+        captured_at,
+    )
+    insert_user_profile_snapshot(
+        db_session,
+        user.id,
+        {"resting_heart_rate": 48},
+        captured_at,
+    )
+    insert_user_profile_snapshot(
+        db_session,
+        user.id,
+        {"resting_heart_rate": None},
+        captured_at,
+    )
+
+    latest = get_latest_user_profile(db_session, user.id)
+    assert float(latest.resting_heart_rate) == 48.0
 
 
 def test_get_recent_max_heart_rate_only_uses_recent_half_year_activities(db_session):

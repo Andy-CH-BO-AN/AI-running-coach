@@ -65,6 +65,11 @@
    - 沒有活動的週仍要保留該 week bucket，`sessions` 為空陣列，並在 `weekly_assessment` 說明該週資料不足或無訓練紀錄。
    - 不要輸出週級總量欄位，例如 `total_distance_km`、`total_duration_min`、`training_load`。週總量、週總時間與週訓練負荷由前端或程式端根據 `sessions[]` deterministic 加總。
    - 每個 week bucket 只需要根據已提供的 deterministic 週資料補上 `key_observation`、`weekly_assessment`、`weekly_recommendation` 與 `risk_flags`。
+   - 每個 week bucket 可額外輸出 `intensity_focuses`，2 筆即可；優先挑 1-2 堂強度最高的課來講。
+   - 選課時優先參考 `sessions[].training_effect_anaerobic`、`sessions[].training_effect_aerobic`、`sessions[].training_load`、課型（interval / tempo / race / long）與分段品質；若高溫明顯影響心率，請在文字中說明「心率偏高不等於輸出更高」。
+   - 每筆 `intensity_focuses` 都應聚焦一個強度解讀角度，例如 `heart_rate`、`power`、`pace`、`heat`、`load`，並用一句短標題加一句分析說清楚「這週最值得看的強度現象」。
+   - 若該 week bucket 有 `sessions[].type = "swim"` 或 `"bike"`，請額外輸出 `cross_training_focus`。只挑該週最值得看的 1 堂交叉訓練，分析它對跑步訓練的作用：恢復、有氧補量、心肺刺激、腿部疲勞或是否影響下一堂跑步主課。
+   - 交叉訓練不要用距離直接互相比強度；游泳、單車距離不可合併判斷。請優先看 `training_load`、`training_effect_aerobic`、`training_effect_anaerobic`、duration 與它和跑步主課的相對位置。
    - 若要提到「本週做了幾次某種類型訓練」，請直接使用 `session_counts.total`、`session_counts.by_type` 或 `session_counts.by_source_activity_type`，不要自行用文字估算次數。
    - 對 `sessions[].type = "interval"` 的活動必須優先分析。不要只看整段平均配速、平均心率或平均步頻；請檢查 `segments[]` 中的快段與恢復段，分別判斷主課表品質、恢復是否過長、速度維持能力、步頻/步幅是否只在快段成立。
    - 評論步幅時，不依據主要來自 easy / recovery session；這類結論應優先建立在 interval 跑步段、節奏跑或其他速度段 evidence 上。
@@ -169,6 +174,18 @@
       "weekly_assessment": "string",  // 該週整體解讀；沒有活動時說明資料不足或恢復狀態
       "weekly_recommendation": "string", // 針對該週狀況給出的調整建議
       "risk_flags": ["string"],       // 例："heat_stress", "fatigue", "low_volume"
+      "intensity_focuses": [
+        {
+          "dimension": "heart_rate | power | pace | heat | load | intensity",
+          "headline": "string",       // 短標題，例：「心率飆升快於功率輸出」
+          "analysis": "string"        // 一句重點解讀，說明本週該看的強度現象
+        }
+      ],
+      "cross_training_focus": {
+        "activity_id": "string | number | null",
+        "headline": "string",          // 短標題，例：「游泳作為低衝擊有氧補量」
+        "analysis": "string"           // 一句教練解讀；若該週無 swim/bike，輸出 null 或省略此欄
+      },
       "sessions": [
         {
           "activity_id": "string | number | null",
