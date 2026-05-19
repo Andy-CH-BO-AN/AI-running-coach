@@ -689,6 +689,16 @@
     title.textContent = day.title;
 
     var detailParts = [];
+    var volumeParts = [];
+    if (day.distance_km) {
+      volumeParts.push(day.distance_km + "km");
+    }
+    if (day.duration_min) {
+      volumeParts.push(day.duration_min + "min");
+    }
+    if (volumeParts.length) {
+      detailParts.push(volumeParts.join(" · "));
+    }
     if (day.interval_label) {
       detailParts.push(day.interval_label);
     }

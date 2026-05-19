@@ -406,10 +406,12 @@
   function extractPlanWorkoutMeta(daySource) {
     var source = daySource || {};
     var description = fallbackText(source.description, "");
+    var restType = normalizePlanRestType(source.rest_type || source.recovery_type || source.rest_mode);
+    var restTime = formatPlanRestTime(source.rest_time || source.rest_seconds);
     var meta = {
       pace_label: fallbackText(source.target_pace || source.pace_target, ""),
       interval_label: fallbackText(source.interval_distance || source.rep_distance, ""),
-      rest_label: fallbackText(source.rest_time || source.rest_seconds, "")
+      rest_label: [restType, restTime].filter(Boolean).join(" ")
     };
 
     if (!meta.pace_label) {
@@ -417,6 +419,15 @@
         || description.match(/(\d{1,2}:\d{2})(?:\s*[-–]\s*(\d{1,2}:\d{2}))?/);
       if (paceMatch) {
         meta.pace_label = paceMatch[2] ? paceMatch[1] + "–" + paceMatch[2] + "/km" : paceMatch[1] + "/km";
+      }
+    }
+    if (!meta.pace_label) {
+      var repSecondsMatch = description.match(/配速\s*(\d{2,3})(?:\s*[-–]\s*(\d{2,3}))?\s*s/i)
+        || description.match(/(\d{2,3})(?:\s*[-–]\s*(\d{2,3}))?\s*s\s*\/\s*(?:rep|趟|組)/i);
+      if (repSecondsMatch) {
+        meta.pace_label = repSecondsMatch[2]
+          ? repSecondsMatch[1] + "–" + repSecondsMatch[2] + "s/rep"
+          : repSecondsMatch[1] + "s/rep";
       }
     }
 
@@ -431,15 +442,44 @@
     }
 
     if (!meta.rest_label) {
-      var restMatch = description.match(/休息\s*(\d+)\s*s/i)
-        || description.match(/rest\s*(\d+)\s*s/i)
-        || description.match(/(\d+)\s*s\s*\/\s*rep/i);
+      var descriptionRestType = normalizePlanRestType(description);
+      var restMatch = description.match(/(?:休息|間休|站休|跑休|走休|慢跑恢復|走路恢復|站著休息)\s*(\d+)\s*(?:s|秒)/i)
+        || description.match(/rest\s*(\d+)\s*s/i);
       if (restMatch) {
-        meta.rest_label = restMatch[1] + "s";
+        meta.rest_label = [descriptionRestType, restMatch[1] + "s"].filter(Boolean).join(" ");
+      } else if (descriptionRestType) {
+        meta.rest_label = descriptionRestType;
       }
     }
 
     return meta;
+  }
+
+  function formatPlanRestTime(value) {
+    var text = fallbackText(value, "").trim();
+    if (!text) {
+      return "";
+    }
+
+    return /^\d+(?:\.\d+)?$/.test(text) ? text + "s" : text;
+  }
+
+  function normalizePlanRestType(value) {
+    var text = fallbackText(value, "").toLowerCase();
+    if (!text) {
+      return "";
+    }
+
+    if (/站休|站著休息|原地休息|standing|stand/.test(text)) {
+      return "站休";
+    }
+    if (/跑休|慢跑恢復|jogging|jog|running recovery/.test(text)) {
+      return "跑休";
+    }
+    if (/走休|走路恢復|walking|walk/.test(text)) {
+      return "走休";
+    }
+    return "";
   }
 
   function isWorkRepSegment(segment) {

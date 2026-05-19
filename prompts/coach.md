@@ -82,6 +82,10 @@
    - `next_week_plan.days` 必須固定輸出 7 天，且順序固定為 `Mon | Tue | Wed | Thu | Fri | Sat | Sun`。
    - `next_week_plan.days[].date` 與 `day_of_week` 必須直接沿用 `deterministic_context.next_week_plan_seed.days[]`；模型只補上課表內容、強度、距離與訓練描述。
    - 沒安排訓練的日期也必須輸出，`intensity` 為 `rest`，`distance_km` 與 `duration_min` 為 0，`key_workout` 為 false。
+   - 所有非休息日都必須輸出 `distance_km > 0` 與 `duration_min > 0`；`description` 也必須明寫總距離或主課表距離，避免 dashboard 只看得到課名。
+   - `session_type = "long"` 的日子必須同時提供 `distance_km`、`duration_min`、`target_pace`，且 `description` 必須包含距離與配速（例：「10km，配速 5:30-5:45/km」）。
+   - `session_type = "interval"` 的日子必須提供 `interval_distance`（例：「400m × 8」）、`target_pace`（例：「3:30-3:40/km」或「84-88s/rep」）、`rest_time`（例：「90s」）與 `rest_type`（`stand`、`walk`、`jog` 三選一），並在 `description` 明寫是站休、走休或跑休。
+   - 間歇課的 `distance_km` 必須是整堂課總距離，包含熱身、主課表、恢復段與收操；不要只填主課表距離。
    - `next_week_plan.total_distance_km` 必須等於 `days[].distance_km` 加總後四捨五入到小數 2 位。
 
 4. 視覺化必要陣列：
@@ -333,6 +337,10 @@
         "description": "string",
         "distance_km": number,
         "duration_min": number,
+        "target_pace": "string | null",
+        "interval_distance": "string | null",
+        "rest_time": "string | null",
+        "rest_type": "stand | walk | jog | null",
         "intensity": "easy | moderate | hard | rest",
         "key_workout": true,
         "weather_consideration": "string"

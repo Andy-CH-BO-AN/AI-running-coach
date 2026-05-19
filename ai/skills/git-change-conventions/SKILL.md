@@ -8,6 +8,7 @@ description: Use when creating or naming branches, pull requests, or commits in 
 Use this skill whenever the task includes:
 
 - creating a branch
+- updating the readme
 - naming a pull request
 - writing commit messages
 - proposing branch, PR, or commit naming conventions
@@ -20,7 +21,7 @@ Pull request titles must use this exact format:
 
 The allowed `<TYPE>` values are:
 
-- `FEAT:` new feature
+- `FEATURE:` new feature
 - `FIX:` bug fix
 - `REFACTOR:` code refactor with no behavior change
 - `DOCS:` documentation only
