@@ -452,6 +452,106 @@ def test_calendar_extracts_interval_label_from_multiplier_first_description(tmp_
     assert friday["interval_label"] == "400m × 6"
 
 
+def test_calendar_extracts_rep_seconds_and_rest_type(tmp_path):
+    report = {
+        "next_week_plan": {
+            "week_start": "2026-05-18",
+            "days": [
+                {
+                    "date": "2026-05-20",
+                    "day_of_week": "Wed",
+                    "title": "1500m 專項速度",
+                    "session_type": "interval",
+                    "description": "400m x 8，配速 84-88s，站休 90秒。",
+                    "distance_km": 6,
+                    "duration_min": 45,
+                    "intensity": "hard",
+                    "key_workout": True,
+                },
+                {
+                    "date": "2026-05-23",
+                    "day_of_week": "Sat",
+                    "title": "長跑",
+                    "session_type": "long",
+                    "description": "穩定跑 10km，配速 5:30-5:45/km。",
+                    "distance_km": 10,
+                    "duration_min": 60,
+                    "intensity": "moderate",
+                    "key_workout": True,
+                },
+            ],
+        }
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    wednesday = next(day for day in payload["calendar"]["days"] if day["day_key"] == "Wed")
+    saturday = next(day for day in payload["calendar"]["days"] if day["day_key"] == "Sat")
+
+    assert wednesday["pace_label"] == "84–88s/rep"
+    assert wednesday["rest_label"] == "站休 90s"
+    assert saturday["distance_km"] == 10
+    assert saturday["pace_label"] == "5:30–5:45/km"
+
+
+def test_calendar_prefers_structured_rest_type_and_seconds(tmp_path):
+    report = {
+        "next_week_plan": {
+            "week_start": "2026-05-18",
+            "days": [
+                {
+                    "date": "2026-05-20",
+                    "day_of_week": "Wed",
+                    "title": "間歇",
+                    "session_type": "interval",
+                    "description": "400m×6",
+                    "distance_km": 6,
+                    "duration_min": 45,
+                    "target_pace": "3:40/km",
+                    "interval_distance": "400m × 6",
+                    "rest_seconds": 90,
+                    "rest_type": "jog",
+                    "intensity": "hard",
+                    "key_workout": True,
+                }
+            ],
+        }
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    wednesday = next(day for day in payload["calendar"]["days"] if day["day_key"] == "Wed")
+
+    assert wednesday["pace_label"] == "3:40/km"
+    assert wednesday["interval_label"] == "400m × 6"
+    assert wednesday["rest_label"] == "跑休 90s"
+
+
+def test_calendar_does_not_treat_rep_seconds_as_rest(tmp_path):
+    report = {
+        "next_week_plan": {
+            "week_start": "2026-05-18",
+            "days": [
+                {
+                    "date": "2026-05-20",
+                    "day_of_week": "Wed",
+                    "title": "間歇",
+                    "session_type": "interval",
+                    "description": "400m×8，84-88s/rep",
+                    "distance_km": 6,
+                    "duration_min": 45,
+                    "intensity": "hard",
+                    "key_workout": True,
+                }
+            ],
+        }
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    wednesday = next(day for day in payload["calendar"]["days"] if day["day_key"] == "Wed")
+
+    assert wednesday["pace_label"] == "84–88s/rep"
+    assert wednesday["rest_label"] == ""
+
+
 def test_power_zones_are_adapted_when_present(tmp_path):
     report = {
         "power_zone_distribution": {
