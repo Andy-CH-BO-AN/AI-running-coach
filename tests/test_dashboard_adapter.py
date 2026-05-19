@@ -308,6 +308,44 @@ def test_cross_training_highlights_match_ai_focus_activity_id_before_load(tmp_pa
     assert highlight["analysis"] == "這堂游泳負荷較低，但更能代表本週交叉訓練的恢復目的。"
 
 
+def test_cross_training_highlights_ignore_ai_text_when_focus_activity_id_misses(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_label": "05/11-05/17",
+                "week_start": "2026-05-11",
+                "cross_training_focus": {
+                    "activity_id": 99,
+                    "headline": "不存在的恢復游泳",
+                    "analysis": "這段文字不應套到其他交叉訓練卡。",
+                },
+                "sessions": [
+                    {
+                        "activity_id": 22,
+                        "date": "2026-05-14",
+                        "type": "bike",
+                        "distance_km": 18,
+                        "duration_min": 54,
+                        "training_load": 72,
+                        "training_effect_aerobic": 3.2,
+                    },
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    highlight = payload["crossTraining"][0]
+
+    assert highlight["session_type"] == "bike"
+    assert highlight["title"] == "5/14 自行車"
+    assert highlight["session_label"] == "5/14 自行車"
+    assert highlight["load_label"] == "72 TSS"
+    assert highlight["analysis"] != "這段文字不應套到其他交叉訓練卡。"
+    assert highlight["has_ai_analysis"] is False
+
+
 def test_work_reps_exclude_warmup_and_recovery_segments(tmp_path):
     report = {
         "weekly_analysis": [

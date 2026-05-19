@@ -1051,16 +1051,18 @@
         ? week.cross_training_focus
         : {};
       var focusActivityId = fallbackText(aiFocus.activity_id, "").trim();
+      var canUseAiFocus = !focusActivityId;
       if (focusActivityId) {
         var focusedSession = sessions.find(function matchesFocusActivity(session) {
           return fallbackText(session.activity_id, "").trim() === focusActivityId;
         });
         if (focusedSession) {
           picked = focusedSession;
+          canUseAiFocus = true;
         }
       }
-      var aiAnalysis = fallbackText(aiFocus.analysis, "").trim();
-      var aiHeadline = fallbackText(aiFocus.headline, "").trim();
+      var aiAnalysis = canUseAiFocus ? fallbackText(aiFocus.analysis, "").trim() : "";
+      var aiHeadline = canUseAiFocus ? fallbackText(aiFocus.headline, "").trim() : "";
 
       return {
         week_index: index,
