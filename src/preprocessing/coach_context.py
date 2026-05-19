@@ -361,10 +361,42 @@ def _build_power_zone_distribution(
     }
 
 
-def _build_pace_zones(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _resolve_resting_heart_rate(
+    user_data: Dict[str, Any],
+    sessions: Sequence[CoachSession],
+) -> tuple[float | None, str | None]:
+    resting_hr = _safe_float(
+        _get_any(
+            user_data,
+            "resting_heart_rate",
+            "restingHeartRate",
+            "userData.restingHeartRate",
+        )
+    )
+    if resting_hr and 30 <= resting_hr <= 100:
+        return resting_hr, str(user_data.get("resting_heart_rate_source") or "garmin")
+
+    low_activity_hr_values = [
+        avg_hr
+        for session in sessions
+        if session.get("type") not in {"interval", "tempo", "race", "swim", "rest"}
+        for avg_hr in [_safe_float(session.get("avg_hr"))]
+        if avg_hr and 80 <= avg_hr <= 170
+    ]
+    if not low_activity_hr_values:
+        return None, None
+
+    estimated = min(max(min(low_activity_hr_values) - 40, 40), 70)
+    return estimated, "estimated_from_lowest_activity_avg_hr"
+
+
+def _build_pace_zones(
+    user_data: Dict[str, Any],
+    resting_heart_rate: float | None = None,
+) -> List[Dict[str, Any]]:
     threshold_seconds = _parse_pace_seconds(user_data.get("lactate_threshold_pace"))
     max_hr = _safe_float(user_data.get("max_heart_rate"))
-    resting_hr = _safe_float(user_data.get("resting_heart_rate"))
+    resting_hr = resting_heart_rate
     hrr = max_hr - resting_hr if max_hr and resting_hr and max_hr > resting_hr else None
 
     pace_offsets = {
@@ -406,7 +438,11 @@ def _build_pace_zones(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return zones
 
 
-def _build_physio_metrics(user_data: Dict[str, Any]) -> Dict[str, Any]:
+def _build_physio_metrics(
+    user_data: Dict[str, Any],
+    sessions: Sequence[CoachSession] | None = None,
+) -> Dict[str, Any]:
+    resting_hr, resting_hr_source = _resolve_resting_heart_rate(user_data, sessions or [])
     return {
         "vo2max": {
             "value": _round_or_none(user_data.get("vo2max_running") or user_data.get("vo2max"), 1),
@@ -424,10 +460,11 @@ def _build_physio_metrics(user_data: Dict[str, Any]) -> Dict[str, Any]:
         },
         "max_heart_rate": {"value": _round_or_none(user_data.get("max_heart_rate"), 0), "unit": "bpm"},
         "resting_heart_rate": {
-            "value": _round_or_none(user_data.get("resting_heart_rate"), 0),
+            "value": _round_or_none(resting_hr, 0),
             "unit": "bpm",
+            "source": resting_hr_source,
         },
-        "pace_zones": _build_pace_zones(user_data),
+        "pace_zones": _build_pace_zones(user_data, resting_hr),
     }
 
 
@@ -941,6 +978,50 @@ def _enforce_weekly_analysis(
         week.setdefault("key_observation", "")
         week.setdefault("weekly_assessment", "")
         week.setdefault("weekly_recommendation", "")
+        raw_focuses = week.get("intensity_focuses")
+        if not isinstance(raw_focuses, list):
+            raw_focuses = []
+        normalized_focuses = []
+        for item in raw_focuses[:2]:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    normalized_focuses.append(
+                        {
+                            "dimension": "intensity",
+                            "headline": "強度重點",
+                            "analysis": text,
+                        }
+                    )
+                continue
+            if not isinstance(item, dict):
+                continue
+
+            analysis = str(item.get("analysis") or item.get("text") or "").strip()
+            if not analysis:
+                continue
+            normalized_focuses.append(
+                {
+                    "dimension": str(item.get("dimension") or "intensity"),
+                    "headline": str(item.get("headline") or "強度重點").strip() or "強度重點",
+                    "analysis": analysis,
+                }
+            )
+        week["intensity_focuses"] = normalized_focuses
+        raw_cross_training_focus = week.get("cross_training_focus")
+        if isinstance(raw_cross_training_focus, dict):
+            cross_analysis = str(raw_cross_training_focus.get("analysis") or "").strip()
+            if cross_analysis:
+                week["cross_training_focus"] = {
+                    "activity_id": raw_cross_training_focus.get("activity_id"),
+                    "headline": str(raw_cross_training_focus.get("headline") or "交叉訓練重點").strip()
+                    or "交叉訓練重點",
+                    "analysis": cross_analysis,
+                }
+            else:
+                week["cross_training_focus"] = None
+        else:
+            week["cross_training_focus"] = None
         week["risk_flags"] = deepcopy(context_week.get("risk_flags") or [])
         week["sessions"] = [
             _output_session(context_session, ai_sessions.get(_normalize_activity_id(context_session.get("activity_id"))))
@@ -1165,7 +1246,7 @@ def build_deterministic_coach_context(
             "available_training_days": user_data.get("available_training_days") or [],
             "preferred_long_training_days": user_data.get("preferred_long_training_days") or [],
         },
-        "physio_metrics": _build_physio_metrics(user_data),
+        "physio_metrics": _build_physio_metrics(user_data, sessions),
         "pb_validation_seed": _build_pb_validation_seed(user_data),
         "weekly_analysis": weekly_analysis,
         "hr_zone_distribution": hr_zone_distribution,

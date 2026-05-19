@@ -416,6 +416,42 @@ def test_physio_seed_preserves_runner_pace_format_and_open_ended_z5():
     assert physio["pace_zones"][4]["zone"] == 5
     assert physio["pace_zones"][4]["pace_max"] is None
     assert "快端無上限" in physio["pace_zones"][4]["note"]
+    assert physio["resting_heart_rate"]["value"] == 50
+    assert physio["pace_zones"][0]["hr_min"] == 140
+    assert physio["pace_zones"][0]["hr_max"] == 155
+
+
+def test_physio_seed_estimates_resting_hr_when_garmin_value_missing():
+    user_data = _sample_user_data()
+    user_data["resting_heart_rate"] = None
+    context = build_deterministic_coach_context(
+        processed_data=[
+            {
+                "activity_id": 401,
+                "type": "cycling",
+                "date": "2026-05-12",
+                "distance_km": 6,
+                "duration_min": 24,
+                "avg_hr": 96,
+            },
+            {
+                "activity_id": 402,
+                "type": "running",
+                "date": "2026-05-13",
+                "distance_km": 5,
+                "duration_min": 32,
+                "avg_hr": 132,
+            },
+        ],
+        user_data=user_data,
+        raw_activities=[],
+        today="2026-05-14",
+    )
+
+    physio = context["physio_metrics"]
+    assert physio["resting_heart_rate"]["value"] == 56
+    assert physio["resting_heart_rate"]["source"] == "estimated_from_lowest_activity_avg_hr"
+    assert physio["pace_zones"][0]["hr_min"] is not None
 
 
 def test_next_week_seed_uses_training_preferences_without_ai():

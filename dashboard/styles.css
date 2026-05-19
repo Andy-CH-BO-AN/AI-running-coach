@@ -360,13 +360,13 @@ select {
 
 .training-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  grid-template-columns: 1fr;
   gap: 14px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .chart-box {
-  min-height: 330px;
+  min-height: 240px;
   padding: 12px;
   box-shadow: none;
 }
@@ -384,7 +384,7 @@ select {
 
 .chart-svg {
   width: 100%;
-  min-height: 286px;
+  min-height: 220px;
 }
 
 .axis-label,
@@ -447,8 +447,80 @@ select {
 
 .week-stack {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   align-content: start;
+}
+
+.cross-training-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.cross-training-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  padding: 12px;
+}
+
+.cross-training-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cross-training-week,
+.cross-training-title {
+  margin: 0;
+}
+
+.cross-training-week {
+  font-size: 14px;
+}
+
+.cross-training-type {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(50, 196, 141, 0.35);
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.cross-training-title {
+  margin-top: 8px;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.cross-training-session {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cross-training-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.cross-training-copy {
+  margin: 10px 0 0;
+  color: #d5deea;
+  font-size: 13px;
 }
 
 .week-item {
@@ -486,6 +558,57 @@ select {
 
 .week-copy strong {
   color: var(--text);
+}
+
+.week-focuses {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.week-focuses-title {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.week-focus-item {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(85, 168, 255, 0.08);
+}
+
+.week-focus-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.week-focus-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 1px solid rgba(85, 168, 255, 0.35);
+  border-radius: 999px;
+  color: #a5d8ff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.week-focus-headline {
+  font-size: 13px;
+}
+
+.week-focus-text {
+  margin: 6px 0 0;
+  color: #d5deea;
+  font-size: 13px;
 }
 
 .quality-pill {
@@ -990,6 +1113,7 @@ select {
 
   .two-col,
   .training-layout,
+  .week-stack,
   .evidence-columns {
     grid-template-columns: 1fr;
   }
@@ -1237,38 +1361,6 @@ select {
 .coach-note-card p {
   margin: 0;
   font-size: 14px;
-}
-
-/* Interval rep sparkline */
-.rep-sparkline-wrap {
-  margin-bottom: 14px;
-}
-
-.rep-sparkline-title {
-  font-size: 13px;
-  font-weight: 800;
-  color: var(--muted);
-  margin: 0 0 8px;
-}
-
-.rep-sparkline-svg {
-  width: 100%;
-  height: 80px;
-  border-radius: 8px;
-  background: var(--panel-soft);
-  overflow: visible;
-}
-
-.rep-sparkline-label {
-  font-size: 11px;
-  fill: var(--muted);
-}
-
-.rep-sparkline-note {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--muted);
-  font-weight: 600;
 }
 
 /* Activity type flag */
@@ -1591,6 +1683,7 @@ body.debug-mode .evidence-debug-path {
 
 .evidence-splits-wrap {
   margin: 8px 0 12px;
+  overflow-x: auto;
 }
 
 .evidence-splits-title {

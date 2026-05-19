@@ -62,7 +62,7 @@
   var HR_ZONE_COLORS = ["#2f9e44", "#0ca678", "#f59f00", "#f76707", "#e03131"];
   var POWER_ZONE_COLORS = ["#4dabf7", "#339af0", "#228be6", "#1c7ed6", "#1864ab"];
   var SOURCE_SECTION_LABELS = {
-    deterministic_context: "程式計算資料",
+    deterministic_context: "訓練資料",
     athlete_status: "目前狀態",
     physio_metrics: "生理指標",
     weekly_analysis: "近期訓練",
@@ -73,7 +73,7 @@
     periodization: "週期化",
     next_week_plan: "課表建議",
     coaching_summary: "教練結論",
-    evidence_links: "可追溯依據",
+    evidence_links: "建議理由",
     pb_validation: "個人紀錄檢核",
     cross_training: "交叉訓練"
   };
@@ -98,8 +98,16 @@
     high_intensity: "強度偏高",
     recovery_needed: "需要恢復"
   };
+  var INTENSITY_FOCUS_LABELS = {
+    heart_rate: "心率",
+    power: "功率",
+    pace: "配速",
+    heat: "高溫",
+    load: "負荷",
+    intensity: "強度"
+  };
   var PATH_SEGMENT_LABELS = {
-    deterministic_context: "程式計算資料",
+    deterministic_context: "訓練資料",
     athlete_status: "目前狀態",
     overall_rating: "整體狀態",
     fatigue_level: "疲勞程度",
@@ -143,7 +151,18 @@
     total: "總活動數",
     recommendation: "建議",
     assessment: "評估",
-    running_economy_score: "跑步經濟性分數"
+    running_economy_score: "跑步經濟性分數",
+    distance_km: "距離",
+    duration_min: "時間",
+    training_load: "訓練負荷",
+    avg_hr: "平均心率",
+    avg_pace: "平均配速",
+    environment: "環境",
+    estimated_temp_c: "氣溫",
+    humidity_pct: "濕度",
+    hr_impact: "心率影響",
+    training_effect_aerobic: "有氧訓練效果",
+    training_effect_anaerobic: "無氧訓練效果"
   };
 
   function safeArray(value) {
@@ -235,6 +254,11 @@
     return RISK_FLAG_LABELS[key] || humanizeIdentifier(key) || "風險提醒";
   }
 
+  function intensityFocusLabel(value) {
+    var key = fallbackText(value, "");
+    return INTENSITY_FOCUS_LABELS[key] || humanizeIdentifier(key) || "強度";
+  }
+
   function sourcePathLabel(path) {
     var raw = fallbackText(path, "");
     if (!raw) {
@@ -254,6 +278,38 @@
 
       return name + " " + String(Number(match[2]) + 1);
     }).join(" > ");
+  }
+
+  function sessionSourceLabel(sourcePath, sourceSession) {
+    var match = /^weekly_analysis\[(\d+)\]\.sessions\[(\d+)\]/.exec(fallbackText(sourcePath, ""));
+    if (!match) {
+      return sourcePathLabel(sourcePath);
+    }
+
+    var type = sourceSession && sourceSession.type;
+    var typeLabel = SESSION_TYPE_LABELS[type] || "";
+    var dateLabel = sourceSession && sourceSession.date ? formatDateLabel(sourceSession.date) : "";
+    if (dateLabel || typeLabel) {
+      return [dateLabel, typeLabel].filter(Boolean).join(" ");
+    }
+    return "第 " + String(Number(match[1]) + 1) + " 週第 " + String(Number(match[2]) + 1) + " 堂訓練";
+  }
+
+  function metricSourceLabel(sourcePath, report) {
+    var raw = fallbackText(sourcePath, "");
+    var sessionMatch = /^(weekly_analysis\[\d+\]\.sessions\[\d+\])(?:\.(.+))?$/.exec(raw);
+    if (!sessionMatch) {
+      return sourcePathLabel(raw);
+    }
+
+    var sourceSession = readJsonPath(report, sessionMatch[1]);
+    var base = sessionSourceLabel(sessionMatch[1], sourceSession);
+    if (!sessionMatch[2]) {
+      return base;
+    }
+
+    var fieldLabel = sourcePathLabel(sessionMatch[2]);
+    return base + " > " + fieldLabel;
   }
 
   function readJsonPath(root, path) {
@@ -461,9 +517,6 @@
     var layout = sessionType === "interval" ? "interval" : sessionType === "long" ? "long" : sessionType === "race" ? "race" : "easy";
     var environment = session.environment || {};
     var workReps = adaptWorkReps(session);
-    var repPaces = workReps.map(function pickPace(rep) { return rep.avg_pace; }).filter(Boolean);
-    var firstPace = repPaces[0];
-    var lastPace = repPaces[repPaces.length - 1];
 
     return {
       has_data: true,
@@ -478,9 +531,6 @@
       temperature_c: isPresentNumber(environment.estimated_temp_c) ? roundTo(environment.estimated_temp_c, 1) : null,
       training_load: adapted.training_load,
       work_reps: workReps,
-      rep_trend_label: workReps.length >= 2 && firstPace && lastPace
-        ? "快段配速趨勢：" + firstPace + " → " + lastPace
-        : "",
       coaching_notes: {
         observation: fallbackText(session.observation, ""),
         interpretation: fallbackText(session.interpretation, ""),
@@ -530,7 +580,7 @@
 
     var metric = safeArray(item.supporting_metrics)[0];
     if (metric && metric.label) {
-      return "依據「" + metric.label + "」等關鍵指標";
+      return "用「" + metric.label + "」等訓練數據判斷";
     }
 
     return "依據近期訓練與生理指標";
@@ -740,7 +790,9 @@
 
   function deriveWeeklyMetrics(week) {
     var sessions = safeArray(week && week.sessions);
-    var distance = 0;
+    var runningDistance = 0;
+    var swimDistance = 0;
+    var bikeDistance = 0;
     var duration = 0;
     var load = 0;
     var missingFields = {};
@@ -758,7 +810,13 @@
         missingFields.training_load = true;
       }
 
-      distance += toNumber(session && session.distance_km);
+      if (session && session.type === "swim") {
+        swimDistance += toNumber(session.distance_km);
+      } else if (session && session.type === "bike") {
+        bikeDistance += toNumber(session.distance_km);
+      } else if (session && session.type !== "rest") {
+        runningDistance += toNumber(session.distance_km);
+      }
       duration += toNumber(session && session.duration_min);
       load += toNumber(session && session.training_load);
     });
@@ -772,7 +830,10 @@
     }
 
     return {
-      derived_total_distance_km: roundTo(distance, 2),
+      derived_total_distance_km: roundTo(runningDistance, 2),
+      derived_running_distance_km: roundTo(runningDistance, 2),
+      derived_swim_distance_km: roundTo(swimDistance, 2),
+      derived_bike_distance_km: roundTo(bikeDistance, 2),
       derived_total_duration_min: roundTo(duration, 1),
       derived_training_load: roundTo(load, 1),
       data_quality: qualityStatus,
@@ -795,6 +856,7 @@
       avg_pace: session ? session.avg_pace : null,
       training_effect_aerobic: session ? session.training_effect_aerobic : null,
       training_effect_anaerobic: session ? session.training_effect_anaerobic : null,
+      environment: session && session.environment ? session.environment : {},
       coaching_note: fallbackText(session && session.coaching_note, ""),
       segments: safeArray(session && session.segments)
     };
@@ -803,6 +865,39 @@
   function adaptWeek(week, index) {
     var metrics = deriveWeeklyMetrics(week || {});
     var weekStart = week ? week.week_start : null;
+    var adaptedSessions = safeArray(week && week.sessions).map(adaptSession);
+    var explicitFocuses = safeArray(week && week.intensity_focuses).map(function adaptFocus(item) {
+      if (typeof item === "string") {
+        var text = item.trim();
+        if (!text) {
+          return null;
+        }
+        return {
+          dimension: "intensity",
+          label: intensityFocusLabel("intensity"),
+          headline: "強度重點",
+          analysis: text
+        };
+      }
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      var analysis = fallbackText(item.analysis || item.text, "").trim();
+      if (!analysis) {
+        return null;
+      }
+      var dimension = fallbackText(item.dimension, "intensity");
+      return {
+        dimension: dimension,
+        label: intensityFocusLabel(dimension),
+        headline: fallbackText(item.headline, "強度重點"),
+        analysis: analysis
+      };
+    }).filter(Boolean).slice(0, 2);
+    var intensityFocuses = explicitFocuses.length > 0
+      ? explicitFocuses
+      : buildFallbackIntensityFocuses(week, adaptedSessions, metrics);
 
     return {
       index: index,
@@ -818,9 +913,86 @@
           label: riskFlagLabel(flag)
         };
       }),
-      sessions: safeArray(week && week.sessions).map(adaptSession),
+      intensity_focuses: intensityFocuses,
+      sessions: adaptedSessions,
       metrics: metrics
     };
+  }
+
+  function buildFallbackIntensityFocuses(week, sessions, metrics) {
+    var focuses = [];
+    var hottestTemp = null;
+    var rankedSessions = sessions.filter(isFocusSession).map(function scoreSession(session) {
+      var type = fallbackText(session.type, "easy");
+      var typeWeight = type === "interval" ? 40
+        : type === "race" ? 36
+        : type === "tempo" ? 32
+        : type === "long" ? 26
+        : 12;
+      var anaerobic = toNumber(session.training_effect_anaerobic) * 12;
+      var aerobic = toNumber(session.training_effect_aerobic) * 7;
+      var load = Math.min(toNumber(session.training_load), 120) * 0.25;
+      return {
+        session: session,
+        score: typeWeight + anaerobic + aerobic + load
+      };
+    }).sort(function sortByScore(a, b) {
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+      return fallbackText(b.session.date, "").localeCompare(fallbackText(a.session.date, ""));
+    });
+
+    sessions.forEach(function inspectSession(session) {
+      var temp = session.environment && session.environment.estimated_temp_c;
+      if (isPresentNumber(temp) && (hottestTemp === null || Number(temp) > hottestTemp)) {
+        hottestTemp = roundTo(temp, 1);
+      }
+    });
+
+    if (safeArray(week && week.risk_flags).indexOf("heat_stress") !== -1 && hottestTemp !== null) {
+      focuses.push({
+        dimension: "heat",
+        label: intensityFocusLabel("heat"),
+        headline: "高溫放大心率反應",
+        analysis: String(hottestTemp) + "°C 環境下，本週強度解讀要同時看體感與配速，不能只看心率高低。"
+      });
+    }
+
+    rankedSessions.slice(0, 2).forEach(function addRepresentativeSession(item, index) {
+      var session = item.session;
+      var typeLabel = SESSION_TYPE_LABELS[session.type] || session.type || "訓練";
+      var teParts = [];
+      if (isPresentNumber(session.training_effect_anaerobic) && toNumber(session.training_effect_anaerobic) > 0) {
+        teParts.push("無氧 TE " + roundTo(session.training_effect_anaerobic, 1));
+      }
+      if (isPresentNumber(session.training_effect_aerobic) && toNumber(session.training_effect_aerobic) > 0) {
+        teParts.push("有氧 TE " + roundTo(session.training_effect_aerobic, 1));
+      }
+      if (isPresentNumber(session.training_load) && toNumber(session.training_load) > 0) {
+        teParts.push("load " + roundTo(session.training_load, 1));
+      }
+
+      focuses.push({
+        dimension: session.type === "interval" || session.type === "race" ? "pace" : "load",
+        label: intensityFocusLabel(session.type === "interval" || session.type === "race" ? "pace" : "load"),
+        headline: "代表課 " + String(index + 1) + "：" + formatDateLabel(session.date) + " " + typeLabel,
+        analysis: teParts.length > 0
+          ? teParts.join(" · ") + "，這堂課比單看平均心率更適合拿來判斷本週強度品質。"
+          : "這堂課是本週最值得優先回看的強度課。"
+      });
+    });
+
+    if (!focuses.length && metrics.derived_training_load > 0) {
+      focuses.push({
+        dimension: "load",
+        label: intensityFocusLabel("load"),
+        headline: "先看總負荷，再看區間比例",
+        analysis: "本週累積 " + metrics.derived_training_load + " TSS，強度分佈應和總量一起解讀，避免單看某一個區間百分比。"
+      });
+    }
+
+    return focuses.slice(0, 2);
   }
 
   function buildWeeklyAnalysis(report) {
@@ -833,6 +1005,79 @@
       weeks: weeks,
       chronological: chronological
     };
+  }
+
+  function crossTrainingAnalysis(session) {
+    var sessionType = fallbackText(session && session.type, "");
+    var sessionTypeLabel = SESSION_TYPE_LABELS[sessionType] || sessionType || "交叉訓練";
+    var load = roundTo(session && session.training_load, 1);
+    var aerobic = roundTo(session && session.training_effect_aerobic, 1);
+    var anaerobic = roundTo(session && session.training_effect_anaerobic, 1);
+
+    if (sessionType === "swim") {
+      if (aerobic >= 3) {
+        return "這堂游泳偏有氧刺激，可補容量又不額外增加跑步衝擊。";
+      }
+      return "這堂游泳以恢復和活動度維持為主，適合放在跑步主課之間。";
+    }
+
+    if (sessionType === "bike") {
+      if (load >= 80 || aerobic >= 3 || anaerobic >= 2) {
+        return "這堂單車負荷偏高，對心肺有幫助，但隔天跑步主課要留意腿部殘留疲勞。";
+      }
+      return "這堂單車主要扮演有氧補量，不應搶走跑步主課的恢復資源。";
+    }
+
+    return sessionTypeLabel + " 是本週負荷最高的交叉訓練，可當作跑步以外的補量刺激。";
+  }
+
+  function buildCrossTrainingHighlights(report) {
+    return safeArray(report.weekly_analysis).map(function buildWeekHighlight(week, index) {
+      var sessions = safeArray(week && week.sessions).map(adaptSession).filter(function keep(session) {
+        return session.type === "swim" || session.type === "bike";
+      });
+      if (!sessions.length) {
+        return null;
+      }
+
+      var picked = sessions.slice().sort(function sortByLoad(a, b) {
+        var loadDiff = toNumber(b.training_load) - toNumber(a.training_load);
+        if (loadDiff !== 0) {
+          return loadDiff;
+        }
+        return fallbackText(b.date, "").localeCompare(fallbackText(a.date, ""));
+      })[0];
+      var aiFocus = week && week.cross_training_focus && typeof week.cross_training_focus === "object"
+        ? week.cross_training_focus
+        : {};
+      var focusActivityId = fallbackText(aiFocus.activity_id, "").trim();
+      var canUseAiFocus = !focusActivityId;
+      if (focusActivityId) {
+        var focusedSession = sessions.find(function matchesFocusActivity(session) {
+          return fallbackText(session.activity_id, "").trim() === focusActivityId;
+        });
+        if (focusedSession) {
+          picked = focusedSession;
+          canUseAiFocus = true;
+        }
+      }
+      var aiAnalysis = canUseAiFocus ? fallbackText(aiFocus.analysis, "").trim() : "";
+      var aiHeadline = canUseAiFocus ? fallbackText(aiFocus.headline, "").trim() : "";
+
+      return {
+        week_index: index,
+        week_label: fallbackText(week && week.week_label, "第" + String(index + 1) + "週"),
+        session_type: picked.type,
+        session_type_label: picked.type_label,
+        title: aiHeadline || formatDateLabel(picked.date) + " " + picked.type_label,
+        session_label: formatDateLabel(picked.date) + " " + picked.type_label,
+        distance_label: picked.distance_km !== null && picked.distance_km > 0 ? picked.distance_km + " km" : "",
+        duration_label: picked.duration_min !== null && picked.duration_min > 0 ? picked.duration_min + " min" : "",
+        load_label: picked.training_load !== null && picked.training_load > 0 ? picked.training_load + " TSS" : "",
+        analysis: aiAnalysis || crossTrainingAnalysis(picked),
+        has_ai_analysis: Boolean(aiAnalysis)
+      };
+    }).filter(Boolean);
   }
 
   function buildHrZones(report) {
@@ -914,7 +1159,8 @@
       },
       resting_heart_rate: {
         value: metrics.resting_heart_rate && isPresentNumber(metrics.resting_heart_rate.value) ? metrics.resting_heart_rate.value : null,
-        unit: fallbackText(metrics.resting_heart_rate && metrics.resting_heart_rate.unit, "bpm")
+        unit: fallbackText(metrics.resting_heart_rate && metrics.resting_heart_rate.unit, "bpm"),
+        source: fallbackText(metrics.resting_heart_rate && metrics.resting_heart_rate.source, "")
       },
       pace_zones: paceZones,
       has_pace_zones: paceZones.length > 0
@@ -1137,7 +1383,7 @@
           Object.keys(metric || {}).forEach(function copyKey(key) {
             copy[key] = metric[key];
           });
-          copy.source_label = sourcePathLabel(sourcePath);
+          copy.source_label = metricSourceLabel(sourcePath, report);
           copy.source_path = sourcePath;
           copy.display_value = metricDisplayValue(copy.value, copy.unit);
           return copy;
@@ -1149,7 +1395,7 @@
           Object.keys(session || {}).forEach(function copyKey(key) {
             copy[key] = session[key];
           });
-          copy.source_label = sourcePathLabel(sourcePath);
+          copy.source_label = sessionSourceLabel(sourcePath, sourceSession);
           copy.source_path = sourcePath;
           copy.segments = safeArray(
             copy.segments && copy.segments.length ? copy.segments : sourceSession && sourceSession.segments
@@ -1186,7 +1432,7 @@
     return {
       items: evidence,
       hasEvidence: evidence.length > 0,
-      fallbackMessage: evidence.length > 0 ? "" : "此報告尚未提供可追溯依據"
+      fallbackMessage: evidence.length > 0 ? "" : "此報告尚未提供教練判斷理由"
     };
   }
 
@@ -1337,6 +1583,7 @@
       meta: source.meta || {},
       status_cards: buildStatusCards(source),
       weekly_analysis: buildWeeklyAnalysis(source),
+      cross_training_highlights: buildCrossTrainingHighlights(source),
       hr_zones: buildHrZones(source),
       power_zones: buildPowerZones(source),
       physio_metrics: buildPhysioMetrics(source),

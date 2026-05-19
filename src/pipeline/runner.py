@@ -9,7 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from src.agents.coach import coach
 from src.db.models import Activity
-from src.db.repositories import get_latest_user_profile, get_or_create_default_user, get_recent_activities
+from src.db.repositories import get_latest_resting_heart_rate, get_latest_user_profile, get_or_create_default_user, get_recent_activities
 from src.db.repositories import get_recent_max_heart_rate
 from src.db.session import SessionLocal
 from src.ingestion.garmin_client import get_garmin_activities
@@ -87,7 +87,34 @@ def _load_recent_raw_activities(session: Any, user_id: Any, limit: int) -> List[
 
 def _load_latest_user_data(session: Any, user_id: Any) -> Dict[str, Any]:
     snapshot = get_latest_user_profile(session, user_id)
-    return dict(snapshot.raw_profile) if snapshot else {}
+    return _apply_resting_heart_rate_history(
+        session=session,
+        user_id=user_id,
+        user_data=dict(snapshot.raw_profile) if snapshot else {},
+    )
+
+
+def _apply_resting_heart_rate_history(
+    session: Any,
+    user_id: Any,
+    user_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    user_data = dict(user_data or {})
+    latest_resting_hr = get_latest_resting_heart_rate(session, user_id)
+    current_resting_hr = user_data.get("resting_heart_rate")
+    try:
+        current_resting_hr = float(current_resting_hr) if current_resting_hr not in (None, "") else None
+    except (TypeError, ValueError):
+        current_resting_hr = None
+
+    if latest_resting_hr is None:
+        return user_data
+
+    resolved_resting_hr = latest_resting_hr if current_resting_hr is None else min(current_resting_hr, latest_resting_hr)
+    if current_resting_hr != resolved_resting_hr:
+        user_data["resting_heart_rate"] = resolved_resting_hr
+        user_data["resting_heart_rate_source"] = "db_latest_profile_history"
+    return user_data
 
 
 def _fetch_garmin_updates(

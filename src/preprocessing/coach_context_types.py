@@ -63,6 +63,8 @@ class CoachWeek(TypedDict, total=False):
     session_counts: CoachSessionCounts
     data_quality: CoachDataQuality
     risk_flags: list[str]
+    intensity_focuses: list[dict[str, str]]
+    cross_training_focus: dict[str, Any] | None
 
 
 class HrZone(TypedDict, total=False):
