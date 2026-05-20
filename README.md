@@ -1,29 +1,28 @@
 # AI 跑步教練
 
-AI 跑步教練是一個本機端 Garmin 訓練分析 workflow。它會同步近期
-Garmin Connect 活動，先用程式端整理出可追溯的訓練指標，再交給
-Gemini 產出 JSON 格式的跑步教練報告，最後可用本機 dashboard 檢視
-訓練狀態、風險、賽事準備度與下週課表。
+本機端 Garmin 訓練分析 workflow：同步近期 Garmin Connect 活動，先用
+Python 產生可追溯的訓練指標，再交給 Gemini 產出 JSON 教練報告，最後用
+本機 dashboard 檢視訓練狀態、風險、賽事準備度與下週課表。
 
-目前專案聚焦在個人跑者使用情境，特別是 1500m 或其他明確賽事目標
-的訓練回顧。它不是雲端服務，也不是多使用者產品；所有 Garmin raw
-data、processed artifacts 與 AI report 都保留在本機。
+這不是雲端服務，也不是多使用者產品。Garmin raw data、processed
+artifacts、coach context 與 AI report 都留在本機，適合想保留資料控制權、
+又想把訓練紀錄轉成教練語意的個人跑者。
 
 ## 適合誰
 
 - 想把 Garmin 原始資料留在本機，並能重跑、除錯、QA 的跑者。
-- 想把最近 1-4 週訓練負荷、心率區間、跑姿與交叉訓練整理成教練語意的人。
+- 想快速看懂近 1-4 週訓練負荷、心率區間、跑姿與交叉訓練意義的人。
 - 想用 AI 輔助週訓練安排，但希望距離、日期、加總與百分比先由程式端 deterministic 計算的人。
 - 想逐步累積 PostgreSQL 訓練資料，未來做長期趨勢、feature engineering 或 report evaluation 的開發者。
 
 ## 目前能做什麼
 
 - 從 Garmin Connect 抓取個人資料、個人紀錄、近期活動、分圈資料與活動詳細 payload。
-- 支援 `running`、`lap_swimming`、`cycling` 活動；輸出時會正規化為跑步、游泳與自行車指標，週統計會分開計算各運動距離與負荷。
+- 支援 `running`、`lap_swimming`、`cycling`，並分開計算各運動週距離與負荷。
 - 產生 processed CSV、deterministic coach context JSON，以及 AI coach JSON report。
-- 在程式端先計算週訓練負荷、分運動週量、心率 Z1-Z5 分佈、功率 Z1-Z5 分佈、跑姿、配速/心率區間、交叉訓練摘要與下週日期 seed。
-- 透過 Gemini 把 deterministic facts 轉成狀態標籤、風險解釋、賽事準備度、下週課表，以及**心率＋功率＋訓練效果**的強度解讀、交叉訓練評語與 evidence 文案。
-- 啟動本機 dashboard（V2 跑者介面），讀取 `output/ai_report_YYYYMMDD.json`：Primary Action、最近重點訓練回顧、Key/Support 課表、四週 2x2 訓練卡、交叉訓練分析、可折疊 Zone E（心率/功率/配速區間/跑姿），以及跑者可讀的 AI 建議依據與分段明細。
+- 在程式端計算週訓練負荷、分運動週量、心率/功率 Z1-Z5、跑姿、配速/心率區間、交叉訓練摘要與下週日期 seed。
+- 透過 Gemini 把 deterministic facts 轉成狀態標籤、風險解釋、賽事準備度、下週課表、強度解讀與 evidence 文案。
+- 啟動本機 dashboard，讀取 `output/ai_report_YYYYMMDD.json`，呈現訓練回顧、下週課表、四週訓練卡、交叉訓練分析與 Zone E。
 - 選用 PostgreSQL 匯入 raw/user/processed artifacts，支援 idempotent upsert 與後續資料版本化。
 
 ## 目前限制
@@ -45,30 +44,28 @@ python -m pip install -r requirements.txt
 
 ### 2. 建立 `.env`
 
-先複製範例設定檔：
-
 ```bash
 cp .env.example .env
 ```
 
-範例內容可見 [`.env.example`](.env.example)：
+最小必要設定：
 
 ```text
 GARMIN_ACCOUNT=your_garmin_email
 GARMIN_PASSWORD=your_garmin_password
 GEMINI_KEY=your_gemini_api_key
+```
 
-# Optional: PostgreSQL mode
+PostgreSQL 只有在要匯入 DB、跑 migration 或 DB tests 時才需要：
+
+```text
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=your_local_postgres_password
 DATABASE_URL=postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@localhost:5432/ai_running_coach
 TEST_DATABASE_URL=postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@localhost:5432/ai_running_coach_test
 ```
 
-只跑 Garmin 匯入與 AI 分析時，前 3 個變數就足夠。只有要使用 DB
-匯入、migration 或 DB tests 時，才需要補 PostgreSQL 相關設定。
-
-### 3. 執行主流程
+### 3. 跑主流程
 
 ```bash
 python run_pipeline.py
@@ -81,7 +78,7 @@ python run_pipeline.py
 python run_pipeline.py --help
 ```
 
-### 4. 開啟本機 Dashboard
+### 4. 開本機 Dashboard
 
 完成主流程並產生 `output/ai_report_YYYYMMDD.json` 後：
 
@@ -90,17 +87,41 @@ python3 -m src.dashboard.server
 ```
 
 預設網址是 `http://127.0.0.1:8765`。Dashboard 會掃描 `output/`，
-優先載入日期最新的 report（選單顯示 `2026/05/16（最新）` 格式）。設計與欄位對應見
-[`docs/dashboard.md`](docs/dashboard.md)。
+優先載入日期最新的 report（選單顯示 `2026/05/16（最新）` 格式）。
+設計與欄位對應見 [`docs/dashboard.md`](docs/dashboard.md)。
 
-Dashboard V2 重點：
+## 你會得到什麼
+
+主流程會在本機產生以下檔案：
+
+| 檔案 | 用途 |
+| --- | --- |
+| `data/raw/garmin_raw_YYYYMMDD.json` | Garmin activities raw payload，包含活動、分圈與游泳 lengths。 |
+| `data/raw/garmin_user_YYYYMMDD.json` | 使用者 profile、PR、生理資料與訓練日偏好。 |
+| `data/processed/processed_YYYYMMDD.csv` | 經 preprocessing 正規化後的活動資料備份。 |
+| `data/processed/coach_context_YYYYMMDD.json` | 程式端 deterministic coach context，是送給 Gemini 前的事實層。 |
+| `output/ai_report_YYYYMMDD.json` | AI coach 最終 JSON report，也是 dashboard 的資料來源。 |
+
+`coach_context_YYYYMMDD.json` 由本機程式先計算：
+
+- 近 4 週 Monday-based week bucket、sessions、分運動週距離、週總時間、訓練負荷與資料品質。
+- 每次活動的距離、時間、training load、平均心率、平均配速、training effect、segments 與高溫 seed。
+- 4 週心率 Z1-Z5 minutes/percentage，以及是否偏極化的 seed。
+- VO2max、最大/靜息心率、乳酸閾值心率/配速、pace zone seed 與以儲備心率推估的心率區間。
+- 跑姿平均值：cadence、ground contact、vertical oscillation、stride length 與 running economy score seed。
+- 游泳/自行車交叉訓練摘要、每週高負荷交叉訓練候選、weekly TSS load seed、下週 7 天日期與可訓練日/長跑偏好。
+- 可被 Gemini 寫入 `evidence_links` 的 deterministic facts，例如本週負荷、Z4-Z5 佔比與風險 flag。
+
+Gemini 主要負責教練判讀與文字化；日期、加總、百分比與可追溯 facts
+由本機程式端負責。
+
+## Dashboard 重點
 
 - **下週課表**：核心訓練卡顯示配速、間歇距離、休息；頂部 summary 列顯示主題與週跑量。
-- **訓練回顧**：優先選最近一次 interval / tempo / long / race 等重點訓練；使用 split 明細呈現關鍵段落，沒有重點課時才回退到最新活動。
+- **訓練回顧**：優先選最近一次 interval / tempo / long / race 等重點訓練；沒有重點課時回退到最新活動。
 - **強度分佈**：心率與功率區間並列，含 AI `assessment` / `recommendation`（需重跑 pipeline 產生新 report）。
-- **四週回顧**：週卡以 2x2 排列，分開顯示跑步、游泳、自行車距離，並由 AI 每週挑出代表強度課與一堂高負荷交叉訓練給教練評語。
+- **四週回顧**：週卡以 2x2 排列，分開顯示跑步、游泳、自行車距離，並由 AI 每週挑出代表強度課與一堂高負荷交叉訓練。
 - **Zone E**：預設收合的 `<details>`，內含配速區間表與跑姿（排除休息段的有效跑步分圈）。
-- **生理能力**：心率區間會優先用最新可用靜止心率與最大心率計算儲備心率區間，讓配速/心率對照更完整。
 - **Evidence**：展開後顯示 supporting session 的分段明細，包含配速、心率、步頻與步幅；畫面使用跑者可讀來源名稱，不直接露出 JSON path。
 
 ## 自訂賽事目標
@@ -133,31 +154,6 @@ python run_pipeline.py \
   --core-goal-file my_goal.md \
   --training-preferences-file my_training_limits.md
 ```
-
-## 執行後會得到什麼
-
-主流程會在本機產生以下檔案：
-
-| 檔案 | 用途 |
-| --- | --- |
-| `data/raw/garmin_raw_YYYYMMDD.json` | Garmin activities raw payload，包含活動、分圈與游泳 lengths。 |
-| `data/raw/garmin_user_YYYYMMDD.json` | 使用者 profile、PR、生理資料與訓練日偏好。 |
-| `data/processed/processed_YYYYMMDD.csv` | 經 preprocessing 正規化後的活動資料備份。 |
-| `data/processed/coach_context_YYYYMMDD.json` | 程式端 deterministic coach context，是送給 Gemini 前的事實層。 |
-| `output/ai_report_YYYYMMDD.json` | AI coach 最終 JSON report，也是 dashboard 的資料來源。 |
-
-`coach_context_YYYYMMDD.json` 會先由本機程式計算以下內容：
-
-- 近 4 週 Monday-based week bucket、每週 sessions、分運動週距離、週總時間、訓練負荷與資料品質。
-- 每次活動的距離、時間、training load、平均心率、平均配速、training effect、segments 與高溫 seed。
-- 4 週心率 Z1-Z5 minutes/percentage，以及是否偏極化的 seed。
-- VO2max、最大/靜息心率、乳酸閾值心率/配速、pace zone seed 與以儲備心率推估的心率區間。
-- 跑姿平均值：cadence、ground contact、vertical oscillation、stride length 與 running economy score seed。
-- 游泳/自行車交叉訓練摘要、每週高負荷交叉訓練候選、weekly TSS load seed、下週 7 天日期與可訓練日/長跑偏好。
-- 可被 Gemini 寫入 `evidence_links` 的 deterministic facts，例如本週負荷、Z4-Z5 佔比與風險 flag。
-
-Gemini 主要負責教練判讀與文字化；日期、加總、百分比與可追溯 facts
-由本機程式端負責。
 
 ## 資料流程
 
@@ -284,7 +280,7 @@ AI agent / skill 設定以 [`ai/README.md`](ai/README.md) 為單一來源，`.co
 
 ## 測試
 
-一般 unit tests 不會呼叫真實 Garmin API。想跑 README 這組核心測試時，可直接用：
+一般 unit tests 不會呼叫真實 Garmin API。README 核心測試：
 
 ```bash
 ./scripts/test_core.sh
