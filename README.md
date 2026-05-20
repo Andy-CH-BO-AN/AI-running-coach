@@ -103,6 +103,30 @@ Dashboard V2 重點：
 - **生理能力**：心率區間會優先用最新可用靜止心率與最大心率計算儲備心率區間，讓配速/心率對照更完整。
 - **Evidence**：展開後顯示 supporting session 的分段明細，包含配速、心率、步頻與步幅；畫面使用跑者可讀來源名稱，不直接露出 JSON path。
 
+### 5. 用 Docker 跑 Dashboard
+
+如果你想直接用容器啟動 dashboard 與 PostgreSQL：
+
+```bash
+docker compose up -d postgres dashboard
+```
+
+這個 compose 設定會：
+
+- 讓 `dashboard` service 讀取本機 `output/`，直接顯示最新的 `output/ai_report_YYYYMMDD.json`
+- 把 `POSTGRES_HOST` / `POSTGRES_*` 傳進容器，由 app 用 SQLAlchemy 安全組出 `DATABASE_URL`
+- 使用 `.env` 裡的 `POSTGRES_USER` / `POSTGRES_PASSWORD`
+- 避免密碼含 `@`、`:` 這類字元時把 PostgreSQL URI 拼壞
+
+常用指令：
+
+```bash
+docker compose build dashboard
+docker compose down
+```
+
+預設 dashboard 網址仍是 `http://127.0.0.1:8765`。
+
 ## 自訂賽事目標
 
 預設訓練目標與限制放在 `prompts/goal.md`。直接執行
