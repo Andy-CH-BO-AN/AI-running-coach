@@ -79,12 +79,9 @@
           <div class="section-heading">
             <div>
               <p class="eyebrow">近 4 週</p>
-              <h2>跑量與訓練負荷趨勢</h2>
+              <h2>跑量與訓練負荷</h2>
             </div>
-            <div class="legend">
-              <span><i class="legend-line distance"></i>跑量</span>
-              <span><i class="legend-bar load"></i>訓練負荷</span>
-            </div>
+            <span class="subtle">四週表格</span>
           </div>
           <div class="training-layout">
             <div id="weeklyChart" class="chart-box"></div>
@@ -104,11 +101,10 @@
           <div id="twelveWeekContent"></div>
         </section>
 
-        <!-- Next Week Plan -->
+        <!-- Zone D: Next Week Plan -->
         <section class="panel" aria-label="下週訓練計畫">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">下週課表</p>
               <h2>訓練計畫</h2>
             </div>
           </div>
@@ -117,44 +113,44 @@
           <div id="weeklyCalendar" class="calendar-grid"></div>
         </section>
 
-        <!-- Zone E: 詳細指標 -->
-        <details class="panel foldable-panel zone-e-panel">
-          <summary class="foldable-summary">
-            <span class="eyebrow">詳細指標</span>
-            <span class="foldable-title">心率 / 功率 / 配速區間 / 跑姿</span>
-          </summary>
-          <div class="foldable-body">
-            <article class="panel nested-panel">
+        <!-- Zone E: Secondary Details -->
+        <section class="panel secondary-details-panel" aria-label="詳細指標">
+          <div class="section-heading">
+            <div>
+              <h2>詳細指標</h2>
+            </div>
+          </div>
+          <div class="secondary-details-grid">
+            <section class="intensity-detail-section">
               <div class="section-heading compact">
                 <div>
                   <p class="eyebrow">強度分佈</p>
-                  <h2>心率與功率區間</h2>
                 </div>
               </div>
               <div id="intensityZones"></div>
-            </article>
+            </section>
 
-            <article class="panel nested-panel">
+            <article class="metric-detail-card">
               <div class="section-heading compact">
                 <div>
                   <p class="eyebrow">生理能力</p>
-                  <h2>配速與體能指標</h2>
+                  <h3>配速與體能指標</h3>
                 </div>
               </div>
               <div id="physioMetrics"></div>
             </article>
 
-            <article class="panel nested-panel">
+            <article class="metric-detail-card">
               <div class="section-heading compact">
                 <div>
                   <p class="eyebrow">跑步經濟性</p>
-                  <h2>跑姿與經濟性</h2>
+                  <h3>跑姿與經濟性</h3>
                 </div>
               </div>
               <div id="runningMechanics"></div>
             </article>
           </div>
-        </details>
+        </section>
 
         <!-- Zone F: Evidence Layer (collapsed by default) -->
         <section class="panel" aria-label="AI建議依據">
