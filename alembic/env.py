@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.db.base import Base
 from src.db import models  # noqa: F401
+from src.db.session import get_database_url
 
 load_dotenv(ROOT / ".env")
 
@@ -19,7 +20,7 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-database_url = os.getenv("DATABASE_URL")
+database_url = os.getenv("DATABASE_URL") or get_database_url()
 if database_url:
     config.set_main_option("sqlalchemy.url", database_url)
 
@@ -57,4 +58,3 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
-
