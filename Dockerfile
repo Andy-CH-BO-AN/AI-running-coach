@@ -12,7 +12,7 @@ WORKDIR /app
 RUN python -m venv "$VIRTUAL_ENV" \
     && pip install --upgrade pip
 
-COPY requirements.txt .python-version ./
+COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
 COPY alembic ./alembic
