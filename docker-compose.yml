@@ -15,5 +15,22 @@ services:
       timeout: 5s
       retries: 10
 
+  dashboard:
+    build:
+      context: .
+    command: ["python", "-m", "src.dashboard.server", "--host", "0.0.0.0", "--port", "8765"]
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ai_running_coach
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./output:/app/output
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
