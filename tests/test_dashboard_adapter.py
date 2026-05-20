@@ -6,21 +6,41 @@ import subprocess
 import pytest
 
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("osascript") is None,
-    reason="dashboard adapter unit tests require macOS JavaScript runtime",
-)
+def _js_runtime():
+    if shutil.which("node"):
+        return ("node",)
+    if shutil.which("osascript"):
+        return ("osascript", "-l", "JavaScript")
+    pytest.skip("dashboard adapter unit tests require Node.js or macOS osascript JavaScript runtime.")
+
+
+def run_adapter_expression(tmp_path, setup, expression, case_name="adapter_case.js"):
+    adapter_source = Path("dashboard/reportAdapter.js").read_text(encoding="utf-8")
+    runtime = _js_runtime()
+    if runtime[0] == "node":
+        trailer = setup + "\nconsole.log(" + expression + ");\n"
+    else:
+        trailer = setup + "\n" + expression + ";\n"
+    script_path = tmp_path / case_name
+    script_path.write_text(adapter_source + "\n" + trailer, encoding="utf-8")
+
+    result = subprocess.run(
+        [*runtime, str(script_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout
 
 
 def run_adapter_case(tmp_path, report):
-    adapter_source = open("dashboard/reportAdapter.js", encoding="utf-8").read()
-    script = (
-        adapter_source
-        + "\nvar report = "
+    setup = (
+        "var report = "
         + json.dumps(report, ensure_ascii=False)
-        + ";\n"
-        + "var model = DashboardAdapter.buildDashboardModel(report);\n"
-        + "JSON.stringify({"
+        + ";\nvar model = DashboardAdapter.buildDashboardModel(report);"
+    )
+    expression = (
+        "JSON.stringify({"
         + "weekly: model.weekly_analysis.weeks,"
         + "crossTraining: model.cross_training_highlights,"
         + "calendar: model.next_week_plan,"
@@ -31,18 +51,9 @@ def run_adapter_case(tmp_path, report):
         + "latest: model.latest_activity,"
         + "summary: model.coaching_summary,"
         + "trend: model.twelve_week_trend"
-        + "});\n"
+        + "})"
     )
-    script_path = tmp_path / "adapter_case.js"
-    script_path.write_text(script, encoding="utf-8")
-
-    result = subprocess.run(
-        ["osascript", "-l", "JavaScript", str(script_path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return json.loads(result.stdout)
+    return json.loads(run_adapter_expression(tmp_path, setup, expression))
 
 
 def test_weekly_metrics_are_derived_from_sessions_and_mark_partial_data(tmp_path):
@@ -407,20 +418,14 @@ def test_work_reps_exclude_warmup_and_recovery_segments(tmp_path):
         "next_week_plan": {"week_start": "2026-05-18", "days": []},
     }
 
-    script = open("dashboard/reportAdapter.js", encoding="utf-8").read() + (
-        "\nvar model = DashboardAdapter.buildDashboardModel("
+    setup = (
+        "var model = DashboardAdapter.buildDashboardModel("
         + json.dumps(report, ensure_ascii=False)
-        + ");\nJSON.stringify(model.latest_activity.work_reps);\n"
+        + ");"
     )
-    script_path = tmp_path / "work_reps_case.js"
-    script_path.write_text(script, encoding="utf-8")
-    result = subprocess.run(
-        ["osascript", "-l", "JavaScript", str(script_path)],
-        check=True,
-        capture_output=True,
-        text=True,
+    reps = json.loads(
+        run_adapter_expression(tmp_path, setup, "JSON.stringify(model.latest_activity.work_reps)", "work_reps_case.js")
     )
-    reps = json.loads(result.stdout)
     assert len(reps) == 1
     assert reps[0]["avg_pace"] == "04:00"
 
@@ -595,20 +600,12 @@ def test_power_zones_are_adapted_when_present(tmp_path):
         "next_week_plan": {"week_start": "2026-05-18", "days": []},
     }
 
-    script = open("dashboard/reportAdapter.js", encoding="utf-8").read() + (
-        "\nvar model = DashboardAdapter.buildDashboardModel("
+    setup = (
+        "var model = DashboardAdapter.buildDashboardModel("
         + json.dumps(report, ensure_ascii=False)
-        + ");\nJSON.stringify(model.power_zones);\n"
+        + ");"
     )
-    script_path = tmp_path / "power_case.js"
-    script_path.write_text(script, encoding="utf-8")
-    result = subprocess.run(
-        ["osascript", "-l", "JavaScript", str(script_path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    power = json.loads(result.stdout)
+    power = json.loads(run_adapter_expression(tmp_path, setup, "JSON.stringify(model.power_zones)", "power_case.js"))
     assert power["has_data"] is True
     assert power["zones"][0]["percentage"] == 10
 

@@ -32,5 +32,37 @@ services:
       postgres:
         condition: service_healthy
 
+  db-tests:
+    image: python:3.13.13-slim-bookworm
+    profiles: ["test"]
+    working_dir: /app
+    environment:
+      PYTHON_DOTENV_DISABLED: "1"
+      DATABASE_URL: ""
+      TEST_DATABASE_URL: ""
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ai_running_coach_test
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      TEST_POSTGRES_HOST: postgres
+      TEST_POSTGRES_DB: ai_running_coach_test
+      TEST_POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      TEST_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      TEST_POSTGRES_MAINTENANCE_DB: ai_running_coach
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        pip install -r requirements.txt pytest
+        python tests/scripts/ensure_test_database.py
+        alembic upgrade head
+        python -m pytest -q tests/test_db_importer.py tests/test_db_repositories.py
+
 volumes:
   postgres_data:

@@ -7,8 +7,8 @@ model。原始 JSON schema 不需要修改。
 ## 資訊架構（V2）
 
 1. **Primary Action**：今日最優先行動（`coaching_summary.top_3_actions[0]`）。
-2. **教練判斷 + 負荷 + 賽事**：warm 決策卡、7 日 TSS、賽事信心分數。
-3. **最近訓練回顧**：依 `sessions[].type` 切換 easy / interval；interval 含 rep 折線。
+2. **教練判斷 + 負荷 + 賽事**：教練判斷卡、7 日 TSS、賽事信心分數。
+3. **最近訓練回顧**：優先選最近一次 `interval` / `tempo` / `long` / `race` 焦點訓練；沒有焦點課時回退到最新活動。`interval` 含 rep 折線，其他課型顯示對應摘要。
 4. **4 週 / 12 週趨勢**：跑量與負荷圖、週敘事、長期 sparkline。
 5. **下週課表**：summary 列 + Key / Support；核心卡含配速、間歇距離、休息。
 6. **Zone E**（`<details>` 預設收合）：心率區間、功率區間、配速區間表、跑姿。
@@ -55,7 +55,7 @@ model。原始 JSON schema 不需要修改。
 - `PrimaryActionBar`：今日指令 + 狀態 badge。
 - `CoachSummaryPanel`：headline、教練觀察、下一步建議。
 - `LoadAssessmentPanel` / `RaceReadinessPanel`：側欄數字卡。
-- `LatestActivityPanel`：結論 + stat grid +（interval）rep 折線。
+- `LatestActivityPanel`：結論 + stat grid；優先呈現最近焦點訓練，並在 interval 課顯示 rep 折線。
 - `WeeklyTrendPanel` / `TwelveWeekPanel`：趨勢圖與敘事。
 - `PlanSummaryBar` + `NextWeekCalendar`：主題、跑量、Key/Support 課表。
 - `ZoneEPanel`：`<details>` 收合心率/功率/配速/跑姿。

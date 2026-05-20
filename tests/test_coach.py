@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import os
 import sys
 import tempfile
@@ -9,9 +10,17 @@ from unittest.mock import Mock, call, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-dotenv_stub = types.ModuleType("dotenv")
-dotenv_stub.load_dotenv = lambda *args, **kwargs: None
-sys.modules.setdefault("dotenv", dotenv_stub)
+dotenv_available = "dotenv" in sys.modules
+if not dotenv_available:
+    try:
+        dotenv_available = importlib.util.find_spec("dotenv") is not None
+    except ValueError:
+        dotenv_available = True
+
+if not dotenv_available:
+    dotenv_stub = types.ModuleType("dotenv")
+    dotenv_stub.load_dotenv = lambda *args, **kwargs: None
+    sys.modules.setdefault("dotenv", dotenv_stub)
 
 google_stub = types.ModuleType("google")
 genai_stub = types.ModuleType("google.genai")

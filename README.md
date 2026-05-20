@@ -272,9 +272,17 @@ docker compose exec postgres sh -c 'createdb -U "$POSTGRES_USER" ai_running_coac
 python3 -m pytest -q tests/test_db_importer.py tests/test_db_repositories.py
 ```
 
+也可以用 test profile 一次啟動 PostgreSQL、建立 test DB、執行 migration
+並跑 DB tests：
+
+```bash
+docker compose --profile test up --abort-on-container-exit --exit-code-from db-tests db-tests
+```
+
 DB tests 會拒絕 `TEST_DATABASE_URL` 等於 `DATABASE_URL` 或 database
 名稱不含 `test` 的連線，並只在 temporary schema 內建表，避免誤清主 DB。
-沒有 test database 時，DB tests 會 skip。
+沒有 test database 或缺少 `TEST_DATABASE_URL` / `TEST_POSTGRES_*` 設定時，
+DB tests 會以環境缺失 skip；連到主 DB 或非 test DB 時，則屬安全防呆 skip。
 
 ## 專案結構
 
@@ -330,6 +338,10 @@ python3 -m pytest -q \
   tests/test_dashboard_adapter.py \
   tests/test_dashboard_server.py
 ```
+
+GitHub Actions 會在 PostgreSQL service 上執行 migration，並讓 DB tests 帶
+`TEST_DATABASE_URL` 必跑；dashboard adapter tests 會優先用 Node.js 執行，
+本機 macOS 仍可 fallback 到 `osascript`。
 
 手動 Garmin smoke test 會呼叫真實 Garmin API，且需要本機 credentials：
 
