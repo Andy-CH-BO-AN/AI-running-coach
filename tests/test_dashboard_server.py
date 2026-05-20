@@ -1,5 +1,6 @@
 import json
 
+import src.dashboard.server as dashboard_server
 from src.dashboard.server import discover_reports, read_report, safe_report_path
 
 
@@ -52,3 +53,21 @@ def test_read_report_returns_json_object_only(tmp_path):
     assert read_report(output_dir, "ai_report_20260513.json") == {"meta": {"today": "2026-05-13"}}
     assert read_report(output_dir, "ai_report_20260514.json") is None
     assert read_report(output_dir, "missing.json") is None
+
+
+def test_read_report_handles_non_object_meta_with_db_trend_enabled(tmp_path, monkeypatch):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    payload = {"meta": None, "coaching_summary": {"top_3_actions": ["跑 30 分鐘"]}}
+    write_json(output_dir / "ai_report_20260513.json", payload)
+
+    seen = {}
+
+    def fake_build_db_fitness_trend(today):
+        seen["today"] = today
+        return None
+
+    monkeypatch.setattr(dashboard_server, "_build_db_fitness_trend", fake_build_db_fitness_trend)
+
+    assert read_report(output_dir, "ai_report_20260513.json", include_db_fitness_trend=True) == payload
+    assert seen["today"] is None

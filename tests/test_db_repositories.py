@@ -188,18 +188,28 @@ def test_cycling_speed_values_are_persisted_without_polluting_pace_columns(db_se
     assert split.raw_json["pace"] == 20.0
 
 
-def test_profile_snapshots_preserve_vo2max_history(db_session):
+def test_profile_snapshots_preserve_daily_vo2max_and_lactate_threshold_history(db_session):
     user = get_or_create_default_user(db_session)
     insert_user_profile_snapshot(
         db_session,
         user.id,
-        {"vo2max_running": 53, "max_heart_rate": 200},
+        {
+            "vo2max_running": 53,
+            "lactate_threshold_pace": "04:24/km",
+            "lactate_threshold_heart_rate": 191,
+            "max_heart_rate": 200,
+        },
         datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
     insert_user_profile_snapshot(
         db_session,
         user.id,
-        {"vo2max_running": 56, "max_heart_rate": 202},
+        {
+            "vo2max_running": 56,
+            "lactate_threshold_pace": "04:18/km",
+            "lactate_threshold_heart_rate": 193,
+            "max_heart_rate": 202,
+        },
         datetime(2026, 2, 1, tzinfo=timezone.utc),
     )
 
@@ -208,7 +218,10 @@ def test_profile_snapshots_preserve_vo2max_history(db_session):
 
     assert len(history) == 2
     assert float(history[0].vo2max_running) == 53.0
+    assert history[0].lactate_threshold_pace == "04:24/km"
+    assert float(history[1].lactate_threshold_heart_rate) == 193.0
     assert float(latest.vo2max_running) == 56.0
+    assert latest.lactate_threshold_pace == "04:18/km"
     assert latest.raw_profile["max_heart_rate"] == 202
 
 

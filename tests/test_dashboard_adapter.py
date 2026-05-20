@@ -29,7 +29,8 @@ def run_adapter_case(tmp_path, report):
         + "physio: model.physio_metrics,"
         + "mechanics: model.running_mechanics,"
         + "latest: model.latest_activity,"
-        + "summary: model.coaching_summary"
+        + "summary: model.coaching_summary,"
+        + "trend: model.twelve_week_trend"
         + "});\n"
     )
     script_path = tmp_path / "adapter_case.js"
@@ -98,6 +99,33 @@ def test_dashboard_uses_local_font_stack_only():
     assert "fonts.googleapis.com" not in index_source
     assert "fonts.gstatic.com" not in index_source
     assert "font-family: Inter" not in style_source
+
+
+def test_12_week_trend_uses_db_weeks_and_hides_single_profile_snapshot(tmp_path):
+    report = {
+        "twelve_week_summary": [
+            {"week_label": "舊資料", "derived_total_distance_km": 99, "derived_training_load": 999}
+        ],
+        "db_fitness_trend": {
+            "weeks": [
+                {"week_label": "5/4-5/10", "derived_total_distance_km": 8.5, "derived_training_load": 100},
+                {"week_label": "5/11-5/17", "derived_total_distance_km": 11.17, "derived_training_load": 172},
+            ],
+            "profile_series": {
+                "vo2max_running": [{"date": "2026-05-17", "value": 53}],
+                "lactate_threshold_pace": [{"date": "2026-05-17", "value": "04:24 /km"}],
+            },
+        },
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    trend = payload["trend"]
+
+    assert [metric["label"] for metric in trend["metrics"]] == ["12 週跑量", "12 週訓練量"]
+    assert trend["metrics"][0]["value"] == "11.17 km"
+    assert trend["metrics"][1]["value"] == "172 TSS"
+    assert trend["metrics"][0]["points"][1]["label"] == "5/11-5/17"
 
 
 def test_risk_flags_use_human_readable_labels(tmp_path):
@@ -692,6 +720,7 @@ def test_pace_strings_are_preserved(tmp_path):
                 {"zone": 2, "name": "有氧", "pace_min": "05:30", "pace_max": "04:50"},
                 {"zone": 1, "name": "恢復", "pace_min": "07:00", "pace_max": "06:00"},
                 {"zone": 5, "name": "衝刺", "pace_min": "03:45", "pace_max": "00:00"},
+                {"zone": 6, "name": "開口速度", "pace_min": "03:30", "pace_max": None},
             ],
         },
         "next_week_plan": {"week_start": "2026-05-18", "days": []},
@@ -701,8 +730,9 @@ def test_pace_strings_are_preserved(tmp_path):
 
     assert payload["physio"]["lactate_threshold"]["pace"]["value"] == "03:59/km"
     assert payload["physio"]["lactate_threshold"]["pace"]["assessment"] == ""
-    assert [zone["zone"] for zone in payload["physio"]["pace_zones"]] == [1, 2, 5]
+    assert [zone["zone"] for zone in payload["physio"]["pace_zones"]] == [1, 2, 5, 6]
     assert payload["physio"]["pace_zones"][2]["pace_range"] == "快於 03:45/km"
+    assert payload["physio"]["pace_zones"][3]["pace_range"] == "快於 03:30/km"
     assert payload["physio"]["resting_heart_rate"]["value"] == 50
 
 

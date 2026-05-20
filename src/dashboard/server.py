@@ -11,6 +11,7 @@ import json
 import mimetypes
 import re
 from dataclasses import dataclass
+from datetime import date, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,6 +20,7 @@ from urllib.parse import unquote, urlparse
 
 
 REPORT_RE = re.compile(r"^ai_report_(\d{8})\.json$")
+RUNNING_TYPE_RE = re.compile(r"(run|running|treadmill)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -93,7 +95,119 @@ def safe_report_path(output_dir: Path, file_name: str) -> Path | None:
     return candidate
 
 
-def read_report(output_dir: Path, file_name: str) -> dict[str, Any] | None:
+def _parse_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+def _week_start_for(value: date) -> date:
+    return value - timedelta(days=value.weekday())
+
+
+def _num(value: Any) -> float:
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _round(value: float, digits: int = 1) -> float:
+    return round(value + 1e-9, digits)
+
+
+def _week_label(week_start: date) -> str:
+    week_end = week_start + timedelta(days=6)
+    return f"{week_start.month}/{week_start.day}-{week_end.month}/{week_end.day}"
+
+
+def _is_running_activity(activity_type: str | None) -> bool:
+    return bool(activity_type and RUNNING_TYPE_RE.search(activity_type))
+
+
+def _build_db_fitness_trend(today_value: str | None) -> dict[str, Any] | None:
+    """Best-effort local DB trend. Dashboard falls back to report JSON if DB is unavailable."""
+
+    try:
+        from sqlalchemy import desc, select
+
+        from src.db.models import Activity
+        from src.db.session import SessionLocal
+    except Exception:
+        return None
+
+    today = _parse_date(today_value) or date.today()
+    current_week_start = _week_start_for(today)
+    first_week_start = current_week_start - timedelta(weeks=11)
+    last_week_end = current_week_start + timedelta(days=6)
+
+    try:
+        with SessionLocal() as session:
+            user_id = session.scalar(select(Activity.user_id).order_by(desc(Activity.started_at)).limit(1))
+            if user_id is None:
+                return None
+
+            weeks = {}
+            for offset in range(12):
+                week_start = first_week_start + timedelta(weeks=offset)
+                is_current_week = week_start == current_week_start
+                weeks[week_start] = {
+                    "week_start": week_start.isoformat(),
+                    "week_label": _week_label(week_start),
+                    "derived_total_distance_km": 0.0,
+                    "derived_training_load": 0.0,
+                    "sessions_count": 0,
+                    "is_current_week": is_current_week,
+                    "week_progress_ratio": round(((today - week_start).days + 1) / 7, 3) if is_current_week else 1.0,
+                    "source": "db",
+                }
+
+            activities = session.scalars(
+                select(Activity).where(
+                    Activity.user_id == user_id,
+                    Activity.activity_date >= first_week_start,
+                    Activity.activity_date <= last_week_end,
+                )
+            ).all()
+            for activity in activities:
+                if activity.activity_date is None:
+                    continue
+                week = weeks.get(_week_start_for(activity.activity_date))
+                if week is None:
+                    continue
+                week["sessions_count"] += 1
+                if _is_running_activity(activity.activity_type):
+                    week["derived_total_distance_km"] += _num(activity.distance_km)
+                week["derived_training_load"] += _num(activity.training_stress_score)
+
+        week_rows = []
+        for week in weeks.values():
+            week_rows.append(
+                {
+                    **week,
+                    "derived_total_distance_km": _round(week["derived_total_distance_km"], 2),
+                    "derived_training_load": _round(week["derived_training_load"], 1),
+                }
+            )
+
+        has_activity_data = any(row["sessions_count"] > 0 for row in week_rows)
+        if not has_activity_data:
+            return None
+
+        return {
+            "source": "db",
+            "weeks": week_rows,
+        }
+    except Exception:
+        return None
+
+
+def read_report(output_dir: Path, file_name: str, *, include_db_fitness_trend: bool = False) -> dict[str, Any] | None:
     report_path = safe_report_path(output_dir, file_name)
     if report_path is None:
         return None
@@ -101,7 +215,17 @@ def read_report(output_dir: Path, file_name: str) -> dict[str, Any] | None:
     with report_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
 
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+
+    if include_db_fitness_trend:
+        meta = payload.get("meta")
+        today = meta.get("today") if isinstance(meta, dict) else None
+        db_trend = _build_db_fitness_trend(today)
+        if db_trend is not None:
+            payload = {**payload, "db_fitness_trend": db_trend}
+
+    return payload
 
 
 def content_type_for(path: Path) -> str:
@@ -134,7 +258,7 @@ def create_handler(paths: DashboardPaths) -> type[BaseHTTPRequestHandler]:
             if request_path.startswith("/api/reports/"):
                 file_name = request_path.removeprefix("/api/reports/")
                 try:
-                    payload = read_report(paths.output_dir, file_name)
+                    payload = read_report(paths.output_dir, file_name, include_db_fitness_trend=True)
                 except json.JSONDecodeError:
                     self._send_json({"error": "Invalid JSON report"}, HTTPStatus.BAD_REQUEST)
                     return

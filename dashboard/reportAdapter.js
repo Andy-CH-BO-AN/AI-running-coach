@@ -120,6 +120,7 @@
     max_heart_rate: "最大心率",
     resting_heart_rate: "靜息心率",
     pace_zones: "配速區間",
+    segments: "分段",
     weekly_analysis: "近期訓練",
     sessions: "活動",
     hr_zone_distribution: "強度分佈",
@@ -157,6 +158,8 @@
     training_load: "訓練負荷",
     avg_hr: "平均心率",
     avg_pace: "平均配速",
+    avg_hr: "平均心率",
+    cadence: "步頻",
     environment: "環境",
     estimated_temp_c: "氣溫",
     humidity_pct: "濕度",
@@ -646,7 +649,7 @@
     }
 
     if (!max) {
-      return withPaceUnit(min);
+      return "快於 " + withPaceUnit(min);
     }
 
     return min + " - " + max;
@@ -1574,43 +1577,56 @@
   }
 
   function build12WeekTrend(report) {
-    var rawTrend = safeArray(report.twelve_week_summary);
-    var physio = report.physio_metrics || {};
+    var dbTrend = report.db_fitness_trend || {};
+    var rawTrend = safeArray(dbTrend.weeks).length ? safeArray(dbTrend.weeks) : safeArray(report.twelve_week_summary);
 
-    var distanceSeries = rawTrend.map(function mapDistance(week) {
-      return toNumber(week.derived_total_distance_km);
+    var distancePoints = rawTrend.map(function mapDistance(week) {
+      var value = toNumber(week.derived_total_distance_km);
+      return {
+        label: fallbackText(week.week_label, fallbackText(week.week_start, "週資料")),
+        week_start_label: fallbackText(week.week_start, "").slice(5).replace("-", "/"),
+        is_current_week: Boolean(week.is_current_week),
+        week_progress_ratio: isPresentNumber(week.week_progress_ratio) ? Number(week.week_progress_ratio) : 1,
+        value: value,
+        display: String(value)
+      };
     });
-    var loadSeries = rawTrend.map(function mapLoad(week) {
-      return toNumber(week.derived_training_load);
+    var loadPoints = rawTrend.map(function mapLoad(week) {
+      var value = toNumber(week.derived_training_load);
+      return {
+        label: fallbackText(week.week_label, fallbackText(week.week_start, "週資料")),
+        week_start_label: fallbackText(week.week_start, "").slice(5).replace("-", "/"),
+        is_current_week: Boolean(week.is_current_week),
+        week_progress_ratio: isPresentNumber(week.week_progress_ratio) ? Number(week.week_progress_ratio) : 1,
+        value: value,
+        display: String(value)
+      };
     });
+    var distanceSeries = distancePoints.map(function(point) { return point.value; });
+    var loadSeries = loadPoints.map(function(point) { return point.value; });
+
+    var metrics = [
+      {
+        label: "12 週跑量",
+        value: distanceSeries.length ? String(distanceSeries[distanceSeries.length - 1]) + " km" : "資料不足",
+        unit: "km",
+        points: distancePoints
+      },
+      {
+        label: "12 週訓練量",
+        value: loadSeries.length ? String(loadSeries[loadSeries.length - 1]) + " TSS" : "資料不足",
+        unit: "TSS",
+        points: loadPoints
+      }
+    ];
 
     return {
-      metrics: [
-        {
-          label: "12 週跑量",
-          value: distanceSeries.length ? String(distanceSeries[distanceSeries.length - 1]) + " km" : "資料不足",
-          series: distanceSeries
-        },
-        {
-          label: "12 週訓練量",
-          value: loadSeries.length ? String(loadSeries[loadSeries.length - 1]) + " TSS" : "資料不足",
-          series: loadSeries
-        },
-        {
-          label: "乳酸閾配速",
-          value: fallbackText(physio.lactate_threshold && physio.lactate_threshold.pace && physio.lactate_threshold.pace.value, "資料不足"),
-          series: []
-        },
-        {
-          label: "VO2max",
-          value: physio.vo2max && isPresentNumber(physio.vo2max.value) ? String(physio.vo2max.value) : "資料不足",
-          series: []
-        }
-      ],
-      summaryNote: fallbackText(
-        report.twelve_week_summary_note,
-        "體能趨勢穩定回升中；高溫季節心率偏高時，請以配速與主課表表現交叉解讀。"
-      ),
+      metrics: metrics,
+      periodLabel: rawTrend.length
+        ? "近 12 週 · " + formatDateLabel(rawTrend[0].week_start) + " — " +
+          formatDateLabel((report.meta && report.meta.today) || rawTrend[rawTrend.length - 1].week_start)
+        : "",
+      summaryNote: fallbackText(report.twelve_week_summary_note, ""),
       temperature_note: fallbackText(report.temperature_adjustment_note, "")
     };
   }
