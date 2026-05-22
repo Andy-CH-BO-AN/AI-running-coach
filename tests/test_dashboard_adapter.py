@@ -438,6 +438,50 @@ def test_work_reps_include_all_interval_segments(tmp_path):
     assert [rep["avg_pace"] for rep in reps] == ["06:00", "04:00", "08:00"]
 
 
+def test_work_reps_ignore_null_interval_segments(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "interval",
+                        "segments": [
+                            None,
+                            {
+                                "segment_type": "main",
+                                "distance_km": 0.4,
+                                "avg_pace": "04:00",
+                            },
+                            None,
+                            {
+                                "segment_type": "recovery",
+                                "distance_km": 0.2,
+                                "avg_pace": "08:00",
+                            },
+                        ],
+                    }
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    setup = (
+        "var model = DashboardAdapter.buildDashboardModel("
+        + json.dumps(report, ensure_ascii=False)
+        + ");"
+    )
+    reps = json.loads(
+        run_adapter_expression(tmp_path, setup, "JSON.stringify(model.latest_activity.work_reps)", "null_work_reps_case.js")
+    )
+
+    assert [rep["segment_type"] for rep in reps] == ["main", "recovery"]
+    assert [rep["index"] for rep in reps] == [1, 2]
+    assert [rep["avg_pace"] for rep in reps] == ["04:00", "08:00"]
+
+
 def test_calendar_extracts_pace_interval_and_rest_from_description(tmp_path):
     report = {
         "next_week_plan": {

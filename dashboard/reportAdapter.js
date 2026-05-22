@@ -482,6 +482,9 @@
 
   function adaptWorkReps(session) {
     return safeArray(session && session.segments)
+      .filter(function keepSegment(segment) {
+        return Boolean(segment);
+      })
       .map(function adaptRep(segment, index) {
         var segmentType = fallbackText(segment && segment.segment_type, "lap");
         return {
