@@ -2029,17 +2029,39 @@ body.debug-mode .evidence-debug-path {
 }
 
 .evidence-session-header {
-  margin: 12px 0 6px;
+  margin: 10px 0 6px;
   font-size: 14px;
   font-weight: 800;
   color: var(--text);
 }
 
 .evidence-session-reason {
+  display: inline-block;
   margin: 0 0 8px;
-  color: #c5d4e8;
-  font-size: 13px;
-  font-weight: 600;
+  padding: 8px 10px;
+  max-width: min(100%, 760px);
+  border: 1px solid rgba(105, 125, 149, 0.26);
+  border-radius: 8px;
+  background: rgba(43, 53, 66, 0.72);
+  color: #dce6f5;
+  vertical-align: top;
+}
+
+.evidence-session-reason-label {
+  display: none;
+  margin-bottom: 5px;
+  color: #aebfd6;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.evidence-session-reason p {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
 }
 
 .evidence-splits-wrap {
@@ -2202,35 +2224,76 @@ body.debug-mode .evidence-debug-path {
 }
 
 .evidence-item {
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid var(--border);
 }
 
 .evidence-claim {
-  margin: 0 0 8px;
+  margin: 0 0 6px;
   font-weight: 700;
-}
-
-.evidence-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 8px;
-  font-size: 13px;
-}
-
-.evidence-table th,
-.evidence-table td {
-  border: 1px solid var(--border);
-  padding: 6px 8px;
-  text-align: left;
 }
 
 .evidence-narrative {
   margin: 8px 0;
   color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.evidence-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0 6px;
+}
+
+.evidence-metric-grid.single-metric {
+  display: block;
+}
+
+.evidence-metric-card {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(105, 125, 149, 0.26);
+  border-radius: 10px;
+  background: rgba(43, 53, 66, 0.72);
+}
+
+.evidence-metric-grid.single-metric .evidence-metric-card {
+  width: min(100%, 280px);
+}
+
+.evidence-metric-label {
+  margin: 0 0 6px;
+  color: #aebfd6;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.evidence-metric-value {
+  margin: 0;
+  color: var(--text);
+  font-size: 24px;
+  font-weight: 900;
+  line-height: 1.05;
+}
+
+.evidence-session-splits {
+  margin-top: 6px;
+}
+
+.evidence-session-splits > summary {
+  cursor: pointer;
+  color: #cfe0f5;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 800;
+}
+
+@media (max-width: 720px) {
+  .evidence-metric-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .evidence-session-list {

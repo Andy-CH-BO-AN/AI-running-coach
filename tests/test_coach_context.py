@@ -360,6 +360,165 @@ def test_enforce_repoints_evidence_source_paths_by_activity_id():
     assert supporting_session["reason"] == "保留原因"
 
 
+def test_enforce_repoints_evidence_metric_source_paths_by_activity_id():
+    context = {
+        "meta": {"today": "2026-05-23"},
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-18",
+                "sessions": [
+                    {
+                        "activity_id": 301,
+                        "date": "2026-05-18",
+                        "type": "bike",
+                        "distance_km": 2.19,
+                        "duration_min": 11.4,
+                        "avg_hr": 116,
+                        "avg_pace": "11.5 km/h",
+                    },
+                    {
+                        "activity_id": 302,
+                        "date": "2026-05-22",
+                        "type": "easy",
+                        "distance_km": 5.35,
+                        "duration_min": 34.7,
+                        "avg_hr": 150,
+                        "avg_pace": "6:29",
+                    },
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-25", "days": []},
+    }
+    ai_report = {
+        "meta": {"today": "2026-05-23"},
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-18",
+                "sessions": [
+                    {
+                        "activity_id": 302,
+                        "date": "2026-05-22",
+                        "type": "easy",
+                        "distance_km": 5.35,
+                        "duration_min": 34.7,
+                        "avg_hr": 150,
+                        "avg_pace": "6:29",
+                    },
+                    {
+                        "activity_id": 301,
+                        "date": "2026-05-18",
+                        "type": "bike",
+                        "distance_km": 2.19,
+                        "duration_min": 11.4,
+                        "avg_hr": 116,
+                        "avg_pace": "11.5 km/h",
+                    },
+                ],
+            }
+        ],
+        "evidence_links": [
+            {
+                "supporting_metrics": [
+                    {
+                        "label": "5/22 輕鬆跑平均心率",
+                        "value": 150,
+                        "unit": "bpm",
+                        "source_path": "weekly_analysis[0].sessions[0].avg_hr",
+                        "activity_id": 302,
+                    }
+                ]
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-25", "days": []},
+    }
+
+    report = enforce_deterministic_report_fields(ai_report, context)
+    supporting_metric = report["evidence_links"][0]["supporting_metrics"][0]
+
+    assert [session["activity_id"] for session in report["weekly_analysis"][0]["sessions"]] == [301, 302]
+    assert supporting_metric["source_path"] == "weekly_analysis[0].sessions[1].avg_hr"
+
+
+def test_enforce_repoints_evidence_metric_source_paths_by_session_identity_without_activity_id():
+    context = {
+        "meta": {"today": "2026-05-23"},
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-18",
+                "sessions": [
+                    {
+                        "activity_id": 401,
+                        "date": "2026-05-18",
+                        "type": "bike",
+                        "distance_km": 2.19,
+                        "duration_min": 11.4,
+                        "avg_hr": 116,
+                        "avg_pace": "11.5 km/h",
+                    },
+                    {
+                        "activity_id": 402,
+                        "date": "2026-05-22",
+                        "type": "easy",
+                        "distance_km": 5.35,
+                        "duration_min": 34.7,
+                        "avg_hr": 150,
+                        "avg_pace": "6:29",
+                    },
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-25", "days": []},
+    }
+    ai_report = {
+        "meta": {"today": "2026-05-23"},
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-18",
+                "sessions": [
+                    {
+                        "activity_id": 402,
+                        "date": "2026-05-22",
+                        "type": "easy",
+                        "distance_km": 5.35,
+                        "duration_min": 34.7,
+                        "avg_hr": 150,
+                        "avg_pace": "6:29",
+                    },
+                    {
+                        "activity_id": 401,
+                        "date": "2026-05-18",
+                        "type": "bike",
+                        "distance_km": 2.19,
+                        "duration_min": 11.4,
+                        "avg_hr": 116,
+                        "avg_pace": "11.5 km/h",
+                    },
+                ],
+            }
+        ],
+        "evidence_links": [
+            {
+                "supporting_metrics": [
+                    {
+                        "label": "5/22 輕鬆跑平均心率",
+                        "value": 150,
+                        "unit": "bpm",
+                        "source_path": "weekly_analysis[0].sessions[0].avg_hr",
+                    }
+                ]
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-25", "days": []},
+    }
+
+    report = enforce_deterministic_report_fields(ai_report, context)
+    supporting_metric = report["evidence_links"][0]["supporting_metrics"][0]
+
+    assert [session["activity_id"] for session in report["weekly_analysis"][0]["sessions"]] == [401, 402]
+    assert supporting_metric["source_path"] == "weekly_analysis[0].sessions[1].avg_hr"
+
+
 def test_weekly_session_counts_include_cross_training_distribution():
     processed_data = [
         {

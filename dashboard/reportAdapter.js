@@ -401,11 +401,6 @@
     return roundTo(1000 / ((paceSeconds / 60) * cadence), 2);
   }
 
-  function isRecoveryPace(paceValue) {
-    var seconds = parsePaceSeconds(paceValue);
-    return seconds !== null && seconds >= 480;
-  }
-
   function extractPlanWorkoutMeta(daySource) {
     var source = daySource || {};
     var description = fallbackText(source.description, "");
@@ -485,34 +480,14 @@
     return "";
   }
 
-  function isWorkRepSegment(segment) {
-    if (!segment) {
-      return false;
-    }
-
-    var segmentType = fallbackText(segment.segment_type, "lap");
-    if (segmentType === "cooldown" || segmentType === "recovery" || segmentType === "warmup") {
-      return false;
-    }
-
-    if (isRecoveryPace(segment.avg_pace)) {
-      return false;
-    }
-
-    var distance = toNumber(segment.distance_km);
-    if (distance > 0 && distance < 0.08) {
-      return false;
-    }
-
-    return segmentType === "main" || segmentType === "lap" || distance >= 0.08;
-  }
-
   function adaptWorkReps(session) {
     return safeArray(session && session.segments)
-      .filter(isWorkRepSegment)
       .map(function adaptRep(segment, index) {
+        var segmentType = fallbackText(segment && segment.segment_type, "lap");
         return {
           index: index + 1,
+          segment_type: segmentType,
+          segment_type_label: SEGMENT_TYPE_LABELS[segmentType] || humanizeIdentifier(segmentType),
           distance_km: isPresentNumber(segment.distance_km) ? roundTo(segment.distance_km, 2) : null,
           avg_pace: segment.avg_pace || null,
           avg_hr: isPresentNumber(segment.avg_hr) ? roundTo(segment.avg_hr, 1) : null,
@@ -1438,6 +1413,9 @@
           Object.keys(session || {}).forEach(function copyKey(key) {
             copy[key] = session[key];
           });
+          copy.date_label = copy.date ? formatDateLabel(copy.date) : "日期不詳";
+          copy.type_label = SESSION_TYPE_LABELS[copy.type] || copy.type || "訓練";
+          copy.distance_label = isPresentNumber(copy.distance_km) ? roundTo(copy.distance_km, 2) + " km" : "";
           copy.source_label = sessionSourceLabel(sourcePath, sourceSession);
           copy.source_path = sourcePath;
           copy.segments = safeArray(
