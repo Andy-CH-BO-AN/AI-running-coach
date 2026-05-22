@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date, datetime, timedelta
+import re
 from typing import Any, Dict, List, Optional, Sequence
 
 from src.preprocessing.coach_context_types import (
@@ -1076,6 +1077,25 @@ def _session_identity(session: Dict[str, Any]) -> tuple[Any, Any, Any, Any]:
     )
 
 
+def _read_path_value(payload: Dict[str, Any], path: str) -> Any:
+    current: Any = payload
+    for segment in path.split("."):
+        match = re.match(r"^([A-Za-z_]+)(?:\[(\d+)\])?$", segment)
+        if not match:
+            return None
+        if not isinstance(current, dict):
+            return None
+        current = current.get(match.group(1))
+        if match.group(2) is not None:
+            if not isinstance(current, list):
+                return None
+            index = int(match.group(2))
+            if index >= len(current):
+                return None
+            current = current[index]
+    return current
+
+
 def _weekly_session_references(report: Dict[str, Any]) -> tuple[Dict[str, tuple[str, Dict[str, Any]]], Dict[tuple[Any, Any, Any, Any], tuple[str, Dict[str, Any]]]]:
     by_activity_id: Dict[str, tuple[str, Dict[str, Any]]] = {}
     by_identity: Dict[tuple[Any, Any, Any, Any], tuple[str, Dict[str, Any]]] = {}
@@ -1127,6 +1147,51 @@ def _enforce_evidence_source_paths(report: Dict[str, Any]) -> None:
                 session[key] = deepcopy(source_session.get(key))
 
 
+def _split_weekly_session_source_path(source_path: Any) -> tuple[str, str] | None:
+    match = re.match(r"^(weekly_analysis\[\d+\]\.sessions\[\d+\])(?:\.(.+))?$", str(source_path or ""))
+    if not match:
+        return None
+    return match.group(1), match.group(2) or ""
+
+
+def _enforce_evidence_metric_source_paths(
+    report: Dict[str, Any],
+    original_report: Dict[str, Any] | None = None,
+) -> None:
+    by_activity_id, by_identity = _weekly_session_references(report)
+    original_payload = original_report if isinstance(original_report, dict) else report
+    for evidence in report.get("evidence_links") or []:
+        if not isinstance(evidence, dict):
+            continue
+        for metric in evidence.get("supporting_metrics") or []:
+            if not isinstance(metric, dict):
+                continue
+
+            source_path_parts = _split_weekly_session_source_path(metric.get("source_path"))
+            if source_path_parts is None:
+                continue
+
+            original_session_path, field_suffix = source_path_parts
+            reference = None
+
+            activity_id = metric.get("activity_id")
+            if activity_id is not None:
+                reference = by_activity_id.get(_normalize_activity_id(activity_id))
+
+            if reference is None:
+                original_session = deepcopy(_read_path_value(original_payload, original_session_path) or {})
+                if isinstance(original_session, dict):
+                    reference = by_identity.get(_session_identity(original_session))
+
+            if reference is None:
+                continue
+
+            session_source_path, _source_session = reference
+            metric["source_path"] = (
+                f"{session_source_path}.{field_suffix}" if field_suffix else session_source_path
+            )
+
+
 def enforce_deterministic_report_fields(
     report: Dict[str, Any],
     deterministic_context: Dict[str, Any],
@@ -1134,6 +1199,7 @@ def enforce_deterministic_report_fields(
     """Overlay deterministic source-of-truth fields after AI analysis."""
 
     result = deepcopy(report) if isinstance(report, dict) else {}
+    original_report = deepcopy(result)
     meta = deepcopy(result.get("meta") or {})
     context_meta = deterministic_context.get("meta") or {}
     for key in ("analysis_period_weeks", "today"):
@@ -1181,6 +1247,7 @@ def enforce_deterministic_report_fields(
 
     result["next_week_plan"] = _enforce_next_week_plan(result, deterministic_context)
     _enforce_evidence_source_paths(result)
+    _enforce_evidence_metric_source_paths(result, original_report=original_report)
     if deterministic_context.get("twelve_week_summary"):
         result["twelve_week_summary"] = deepcopy(deterministic_context["twelve_week_summary"])
     return result

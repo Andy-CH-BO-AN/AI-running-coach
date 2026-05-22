@@ -103,6 +103,14 @@ def test_dashboard_renderer_does_not_write_report_text_via_inner_html():
         assert fragment not in source
 
 
+def test_evidence_metrics_table_hides_source_context_column():
+    source = Path("dashboard/app.js").read_text(encoding="utf-8")
+
+    assert '資料脈絡' not in source
+    assert 'evidence-metric-grid' in source
+    assert 'renderEvidenceMetricCard' in source
+
+
 def test_dashboard_uses_local_font_stack_only():
     index_source = Path("dashboard/index.html").read_text(encoding="utf-8")
     style_source = Path("dashboard/styles.css").read_text(encoding="utf-8")
@@ -385,7 +393,7 @@ def test_cross_training_highlights_ignore_ai_text_when_focus_activity_id_misses(
     assert highlight["has_ai_analysis"] is False
 
 
-def test_work_reps_exclude_warmup_and_recovery_segments(tmp_path):
+def test_work_reps_include_all_interval_segments(tmp_path):
     report = {
         "weekly_analysis": [
             {
@@ -426,8 +434,52 @@ def test_work_reps_exclude_warmup_and_recovery_segments(tmp_path):
     reps = json.loads(
         run_adapter_expression(tmp_path, setup, "JSON.stringify(model.latest_activity.work_reps)", "work_reps_case.js")
     )
-    assert len(reps) == 1
-    assert reps[0]["avg_pace"] == "04:00"
+    assert [rep["segment_type"] for rep in reps] == ["warmup", "main", "recovery"]
+    assert [rep["avg_pace"] for rep in reps] == ["06:00", "04:00", "08:00"]
+
+
+def test_work_reps_ignore_null_interval_segments(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "interval",
+                        "segments": [
+                            None,
+                            {
+                                "segment_type": "main",
+                                "distance_km": 0.4,
+                                "avg_pace": "04:00",
+                            },
+                            None,
+                            {
+                                "segment_type": "recovery",
+                                "distance_km": 0.2,
+                                "avg_pace": "08:00",
+                            },
+                        ],
+                    }
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    setup = (
+        "var model = DashboardAdapter.buildDashboardModel("
+        + json.dumps(report, ensure_ascii=False)
+        + ");"
+    )
+    reps = json.loads(
+        run_adapter_expression(tmp_path, setup, "JSON.stringify(model.latest_activity.work_reps)", "null_work_reps_case.js")
+    )
+
+    assert [rep["segment_type"] for rep in reps] == ["main", "recovery"]
+    assert [rep["index"] for rep in reps] == [1, 2]
+    assert [rep["avg_pace"] for rep in reps] == ["04:00", "08:00"]
 
 
 def test_calendar_extracts_pace_interval_and_rest_from_description(tmp_path):
@@ -930,6 +982,45 @@ def test_evidence_sources_use_runner_language_for_session_fields(tmp_path):
     assert metrics[1]["source_label"] == "5/12 輕鬆跑 > 環境 > 氣溫"
 
 
+def test_evidence_supporting_sessions_include_localized_header_fields(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "easy",
+                        "distance_km": 2.05,
+                    }
+                ],
+            }
+        ],
+        "evidence_links": [
+            {
+                "insight_id": "low_volume",
+                "claim": "跑步訓練量不足。",
+                "supporting_sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "easy",
+                        "distance_km": 2.05,
+                        "source_path": "weekly_analysis[0].sessions[0]",
+                    }
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    session = payload["evidence"]["items"][0]["supporting_sessions"][0]
+
+    assert session["date_label"] == "5/12"
+    assert session["type_label"] == "輕鬆跑"
+    assert session["distance_label"] == "2.05 km"
+
+
 def test_evidence_metric_display_value_does_not_duplicate_units(tmp_path):
     report = {
         "evidence_links": [
@@ -1096,6 +1187,36 @@ def test_latest_activity_uses_real_coaching_note_as_conclusion(tmp_path):
 
     assert payload["latest"]["conclusion"] == "最後一趟仍能加速，速度儲備良好。"
     assert payload["latest"]["has_ai_conclusion"] is True
+
+
+def test_latest_interval_activity_keeps_all_lap_only_splits(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-18",
+                "sessions": [
+                    {
+                        "date": "2026-05-18",
+                        "type": "interval",
+                        "segments": [
+                            {"segment_type": "lap", "distance_km": 0.067, "avg_pace": "3:10", "avg_hr": 156, "cadence": 172.3, "stride_length_m": 1.73},
+                            {"segment_type": "lap", "distance_km": 0.099, "avg_pace": "5:10", "avg_hr": 172, "cadence": 183.8, "stride_length_m": 1.13},
+                            {"segment_type": "lap", "distance_km": 0.070, "avg_pace": "3:28", "avg_hr": 174, "cadence": 185.1, "stride_length_m": 1.24},
+                            {"segment_type": "lap", "distance_km": 0.087, "avg_pace": "6:17", "avg_hr": 184, "cadence": 177.6, "stride_length_m": 0.95},
+                        ],
+                    }
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-25", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    reps = payload["latest"]["work_reps"]
+
+    assert [rep["avg_pace"] for rep in reps] == ["3:10", "5:10", "3:28", "6:17"]
+    assert [rep["segment_type"] for rep in reps] == ["lap", "lap", "lap", "lap"]
+    assert [rep["segment_type_label"] for rep in reps] == ["分段", "分段", "分段", "分段"]
 
 
 def test_evidence_segments_estimate_stride_when_legacy_report_lacks_stride(tmp_path):

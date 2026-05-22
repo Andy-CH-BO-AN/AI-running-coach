@@ -29,6 +29,7 @@ The allowed `<TYPE>` values are:
 - `STYLE:` formatting-only changes such as linting or layout cleanup
 - `PERF:` performance improvement
 - `CHORE:` maintenance or miscellaneous housekeeping
+- `CI:` continuous integration configuration or scripts
 
 ## Branch format
 
@@ -54,6 +55,8 @@ Examples:
 5. If a change spans multiple categories, choose the prefix that best
    describes the primary user-facing outcome.
 6. Convert branch summaries to lowercase kebab-case.
+7. PR descriptions should contain why the change was needed, what was changed, and any important
+   implementation or validation notes.
 
 ## Commit message rules
 

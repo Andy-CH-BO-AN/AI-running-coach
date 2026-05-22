@@ -313,26 +313,13 @@
     stats.appendChild(renderActivityStat("氣溫", latest.temperature_c !== null ? latest.temperature_c : "--", "°C"));
     elements.latestActivity.appendChild(stats);
 
-    if (latest.layout === "interval" && latest.work_reps.length > 1) {
+    if (latest.layout === "interval" && latest.work_reps.length > 0) {
       var trend = document.createElement("details");
       trend.className = "rep-trend-details";
       trend.open = true;
       trend.appendChild(textElement("summary", "", "split 比較"));
 
-      var splitRows = latest.work_reps.map(function adaptRep(rep) {
-        return {
-          index: rep.index,
-          segment_type: "main",
-          segment_type_label: "主課表",
-          distance_km: rep.distance_km,
-          avg_pace: rep.avg_pace,
-          avg_hr: rep.avg_hr,
-          cadence: rep.cadence,
-          stride_length_m: rep.stride_length_m,
-          note: rep.note
-        };
-      });
-      var splitTable = renderSessionSplitsTable(splitRows, "主課表 splits");
+      var splitTable = renderSessionSplitsTable(latest.work_reps, "全部分段");
       if (splitTable) {
         trend.appendChild(splitTable);
         elements.latestActivity.appendChild(trend);
@@ -1174,6 +1161,23 @@
     return wrap;
   }
 
+  function renderEvidenceMetricCard(metric) {
+    var card = document.createElement("div");
+    card.className = "evidence-metric-card";
+
+    var label = document.createElement("p");
+    label.className = "evidence-metric-label";
+    label.textContent = metric.label || metric.metric || "指標";
+    card.appendChild(label);
+
+    var value = document.createElement("p");
+    value.className = "evidence-metric-value";
+    value.textContent = metric.display_value || metric.value || "資料不足";
+    card.appendChild(value);
+
+    return card;
+  }
+
   function renderRunningMechanics(model) {
     var mechanics = model.running_mechanics;
     clear(elements.runningMechanics);
@@ -1239,61 +1243,59 @@
       advanced.className = "evidence-advanced";
       advanced.appendChild(textElement("summary", "", "查看訓練數據"));
 
-      var narrative = document.createElement("p");
-      narrative.className = "evidence-narrative";
-      narrative.textContent = typeof Adapter.evidenceRunnerNarrative === "function"
-        ? Adapter.evidenceRunnerNarrative(item)
-        : "依據近期訓練與生理指標";
-      advanced.appendChild(narrative);
+      if (item.supporting_sessions.length === 0) {
+        var narrative = document.createElement("p");
+        narrative.className = "evidence-narrative";
+        narrative.textContent = typeof Adapter.evidenceRunnerNarrative === "function"
+          ? Adapter.evidenceRunnerNarrative(item)
+          : "依據近期訓練與生理指標";
+        advanced.appendChild(narrative);
+      }
 
       if (item.supporting_metrics.length > 0) {
-        var table = document.createElement("table");
-        table.className = "evidence-table";
-        table.innerHTML = "<thead><tr><th>指標</th><th>數值</th><th>資料脈絡</th></tr></thead>";
-        var tbody = document.createElement("tbody");
+        var metricGrid = document.createElement("div");
+        metricGrid.className = "evidence-metric-grid" + (item.supporting_metrics.length === 1 ? " single-metric" : "");
         item.supporting_metrics.forEach(function(metric) {
-          var row = document.createElement("tr");
-          var value = metric.display_value || metric.value || "資料不足";
-          appendTableCells(row, [
-            metric.label || metric.metric || "指標",
-            value,
-            metric.source_label || "資料來源"
-          ], 1);
-          tbody.appendChild(row);
+          metricGrid.appendChild(renderEvidenceMetricCard(metric));
           if (isDebugMode() && metric.source_path) {
-            var debugRow = document.createElement("tr");
-            debugRow.className = "evidence-debug-path";
-            var debugCell = document.createElement("td");
-            debugCell.colSpan = 3;
-            debugCell.textContent = "資料來源：" + (metric.source_label || "資料來源");
-            debugRow.appendChild(debugCell);
-            debugRow.title = metric.source_path;
-            tbody.appendChild(debugRow);
+            var debug = document.createElement("p");
+            debug.className = "evidence-debug-path";
+            debug.textContent = "資料來源：" + (metric.source_label || "資料來源");
+            debug.title = metric.source_path;
+            metricGrid.appendChild(debug);
           }
         });
-        table.appendChild(tbody);
-        advanced.appendChild(table);
+        advanced.appendChild(metricGrid);
       }
 
       if (item.supporting_sessions.length > 0) {
         item.supporting_sessions.forEach(function(session) {
           var header = document.createElement("p");
           header.className = "evidence-session-header";
-          header.textContent = (session.date || "日期不詳") + " · " +
-            (session.type || "訓練") +
-            (session.distance_km ? " · " + session.distance_km + "km" : "");
+          header.textContent = [
+            session.date_label || "日期不詳",
+            session.type_label || "訓練",
+            session.distance_label || ""
+          ].filter(Boolean).join(" · ");
           advanced.appendChild(header);
 
           if (session.reason) {
-            var reason = document.createElement("p");
+            var reason = document.createElement("div");
             reason.className = "evidence-session-reason";
-            reason.textContent = session.reason;
+            reason.appendChild(textElement("p", "", session.reason));
             advanced.appendChild(reason);
           }
 
-          var splits = renderSessionSplitsTable(session.segments);
-          if (splits) {
-            advanced.appendChild(splits);
+          var splitCount = session.segments ? session.segments.length : 0;
+          if (splitCount > 0) {
+            var splitDetails = document.createElement("details");
+            splitDetails.className = "evidence-session-splits";
+            splitDetails.appendChild(textElement("summary", "", "查看 " + splitCount + " 筆分段"));
+            var splits = renderSessionSplitsTable(session.segments, "全部分段");
+            if (splits) {
+              splitDetails.appendChild(splits);
+              advanced.appendChild(splitDetails);
+            }
           }
 
           if (isDebugMode() && session.source_path) {
