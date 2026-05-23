@@ -567,12 +567,42 @@
       return null;
     }
 
+    function compareActivityIdDesc(a, b) {
+      var left = fallbackText(a, "").trim();
+      var right = fallbackText(b, "").trim();
+      if (!left && !right) {
+        return 0;
+      }
+      if (!left) {
+        return 1;
+      }
+      if (!right) {
+        return -1;
+      }
+
+      var leftIsInteger = /^\d+$/.test(left);
+      var rightIsInteger = /^\d+$/.test(right);
+      if (leftIsInteger && rightIsInteger) {
+        var leftId = BigInt(left);
+        var rightId = BigInt(right);
+        if (leftId === rightId) {
+          return 0;
+        }
+        return leftId > rightId ? -1 : 1;
+      }
+
+      return right.localeCompare(left);
+    }
+
     sameDaySessions.sort(function sortByRepresentativeness(a, b) {
       var scoreDiff = sessionScoreForLatest(b) - sessionScoreForLatest(a);
       if (scoreDiff !== 0) {
         return scoreDiff;
       }
-      return String(b && b.activity_id || "").localeCompare(String(a && a.activity_id || ""));
+      return compareActivityIdDesc(
+        a && a.activity_id,
+        b && b.activity_id
+      );
     });
 
     return sameDaySessions[0];

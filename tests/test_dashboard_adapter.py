@@ -1375,6 +1375,35 @@ def test_latest_activity_groups_same_day_when_date_and_datetime_are_mixed(tmp_pa
     assert payload["latest"]["training_load"] == 323.2
 
 
+def test_latest_activity_tie_breaks_by_numeric_activity_id(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-18",
+                "sessions": [
+                    {
+                        "activity_id": "9",
+                        "date": "2026-05-23",
+                        "type": "easy",
+                        "avg_pace": "09:00",
+                    },
+                    {
+                        "activity_id": "10",
+                        "date": "2026-05-23",
+                        "type": "easy",
+                        "avg_pace": "05:00",
+                    },
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-25", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+
+    assert payload["latest"]["avg_pace"] == "05:00"
+
+
 def test_latest_activity_uses_real_coaching_note_as_conclusion(tmp_path):
     report = {
         "weekly_analysis": [
