@@ -50,7 +50,8 @@ def run_adapter_case(tmp_path, report):
         + "mechanics: model.running_mechanics,"
         + "latest: model.latest_activity,"
         + "summary: model.coaching_summary,"
-        + "trend: model.twelve_week_trend"
+        + "trend: model.twelve_week_trend,"
+        + "periodization: model.periodization"
         + "})"
     )
     return json.loads(run_adapter_expression(tmp_path, setup, expression))
@@ -732,6 +733,93 @@ def test_calendar_derives_weekday_from_date_and_normalizes_week_start(tmp_path):
     assert calendar["days"][1]["date"] == "2026-05-19"
     assert calendar["days"][1]["day_key"] == "Tue"
     assert calendar["days"][1]["day_label"] == "週二"
+
+
+def test_periodization_marks_current_phase_from_next_week_plan_start(tmp_path):
+    report = {
+        "periodization": {
+            "weeks_to_race": 16,
+            "phases": [
+                {
+                    "phase_name": "基礎建構期",
+                    "start_date": "2026-05-25",
+                    "end_date": "2026-07-05",
+                    "weeks": 6,
+                    "focus": "建立有氧耐力底蘊。",
+                    "weekly_structure": [
+                        {
+                            "day": "Mon",
+                            "session_type": "interval",
+                            "description": "400m x 8",
+                            "duration_min": 45,
+                            "intensity": "hard",
+                        },
+                        {
+                            "day": "Tue",
+                            "session_type": "swim",
+                            "description": "游泳閾值訓練",
+                            "duration_min": 60,
+                            "intensity": "moderate",
+                        },
+                    ],
+                },
+                {
+                    "phase_name": "減量期",
+                    "start_date": "2026-09-01",
+                    "end_date": "2026-09-13",
+                    "weeks": 2,
+                },
+            ],
+        },
+        "next_week_plan": {"week_start": "2026-05-25", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    periodization = payload["periodization"]
+
+    assert periodization["has_data"] is True
+    assert periodization["weeks_to_race_label"] == "距離目標賽 16 週"
+    assert periodization["reference_date"] == "2026-05-25"
+    assert periodization["current_phase"]["phase_name"] == "基礎建構期"
+    assert periodization["phases"][0]["is_current"] is True
+    assert periodization["phases"][1]["is_current"] is False
+    assert periodization["phases"][0]["date_range_label"] == "5/25-7/5"
+    assert periodization["phases"][0]["weekly_structure"][0]["day_label"] == "週一"
+    assert periodization["phases"][0]["weekly_structure"][0]["session_type_label"] == "間歇"
+    assert periodization["phases"][0]["weekly_structure"][0]["intensity_label"] == "高強度"
+
+
+def test_periodization_handles_missing_data_without_crashing(tmp_path):
+    report = {
+        "meta": {"today": "2026-05-23"},
+        "periodization": {
+            "phases": [
+                {
+                    "phase_name": "日期未定期",
+                    "weeks": 3,
+                    "focus": "維持規律訓練。",
+                }
+            ]
+        },
+        "next_week_plan": {"week_start": "2026-05-25", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    periodization = payload["periodization"]
+
+    assert periodization["has_data"] is True
+    assert periodization["weeks_to_race"] is None
+    assert periodization["current_phase"] is None
+    assert periodization["phases"][0]["date_range_label"] == "日期未設定"
+    assert periodization["phases"][0]["weeks_label"] == "3 週"
+
+
+def test_periodization_empty_state_is_explicit(tmp_path):
+    payload = run_adapter_case(tmp_path, {"next_week_plan": {"week_start": "2026-05-25", "days": []}})
+
+    assert payload["periodization"]["has_data"] is False
+    assert payload["periodization"]["phases"] == []
+    assert payload["periodization"]["current_phase"] is None
 
 
 def test_evidence_fallback_and_priority_sorting(tmp_path):

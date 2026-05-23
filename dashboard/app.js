@@ -25,6 +25,7 @@
     weeklyCalendar: document.getElementById("weeklyCalendar"),
     planSummary: document.getElementById("planSummary"),
     planAdjustment: document.getElementById("planAdjustment"),
+    periodizationOverview: document.getElementById("periodizationOverview"),
     hrZones: document.getElementById("hrZones"),
     intensityZones: document.getElementById("intensityZones"),
     physioMetrics: document.getElementById("physioMetrics"),
@@ -820,6 +821,91 @@
     }
   }
 
+  function buildPeriodizationStructureItem(item) {
+    var row = document.createElement("li");
+    row.className = "periodization-structure-item " + item.intensity_class;
+
+    row.appendChild(textElement("span", "periodization-structure-day", item.day_label));
+    row.appendChild(textElement("span", "periodization-structure-type", item.session_type_label));
+
+    if (item.duration_min) {
+      row.appendChild(textElement("span", "periodization-structure-duration", item.duration_min + "min"));
+    }
+
+    row.appendChild(textElement("span", "periodization-structure-intensity", item.intensity_label));
+
+    if (item.description) {
+      row.appendChild(textElement("span", "periodization-structure-copy", item.description));
+    }
+
+    return row;
+  }
+
+  function renderPeriodization(periodization) {
+    if (!elements.periodizationOverview) {
+      return;
+    }
+
+    clear(elements.periodizationOverview);
+    if (!periodization || !periodization.has_data) {
+      elements.periodizationOverview.hidden = true;
+      return;
+    }
+
+    elements.periodizationOverview.hidden = false;
+
+    var header = document.createElement("div");
+    header.className = "periodization-header";
+    var titleBlock = document.createElement("div");
+    titleBlock.appendChild(textElement("p", "eyebrow", "週期化"));
+    titleBlock.appendChild(textElement("h3", "periodization-title", "中長期訓練脈絡"));
+    header.appendChild(titleBlock);
+    header.appendChild(textElement("span", "periodization-race-label", periodization.weeks_to_race_label));
+    elements.periodizationOverview.appendChild(header);
+
+    var timeline = document.createElement("div");
+    timeline.className = "periodization-timeline";
+    periodization.phases.forEach(function appendPhase(phase) {
+      var phaseNode = document.createElement("article");
+      phaseNode.className = "periodization-phase" + (phase.is_current ? " is-current" : "");
+
+      var top = document.createElement("div");
+      top.className = "periodization-phase-top";
+      top.appendChild(textElement("h4", "", phase.phase_name));
+      top.appendChild(textElement("span", "", phase.date_range_label));
+      phaseNode.appendChild(top);
+
+      var meta = document.createElement("div");
+      meta.className = "periodization-phase-meta";
+      meta.appendChild(textElement("span", "", phase.weeks_label));
+      if (phase.is_current) {
+        meta.appendChild(textElement("span", "is-current-label", "目前階段"));
+      }
+      phaseNode.appendChild(meta);
+
+      if (phase.focus) {
+        phaseNode.appendChild(textElement("p", "periodization-focus", phase.focus));
+      }
+
+      timeline.appendChild(phaseNode);
+    });
+    elements.periodizationOverview.appendChild(timeline);
+
+    if (periodization.current_phase && periodization.current_phase.weekly_structure.length) {
+      var structure = document.createElement("div");
+      structure.className = "periodization-structure";
+      structure.appendChild(textElement("p", "plan-section-label", "目前階段週結構"));
+
+      var list = document.createElement("ul");
+      list.className = "periodization-structure-list";
+      periodization.current_phase.weekly_structure.forEach(function appendStructure(item) {
+        list.appendChild(buildPeriodizationStructureItem(item));
+      });
+      structure.appendChild(list);
+      elements.periodizationOverview.appendChild(structure);
+    }
+  }
+
   function buildPlanKeyCard(day) {
     var card = document.createElement("article");
     card.className = "plan-day-card key";
@@ -858,7 +944,9 @@
 
     var detail = document.createElement("p");
     detail.className = "plan-key-detail";
-    detail.textContent = detailParts.join(" · ");
+    detailParts.forEach(function appendDetailPart(part) {
+      detail.appendChild(textElement("span", "", part));
+    });
 
     var intensity = document.createElement("p");
     intensity.className = "plan-key-intensity";
@@ -1326,6 +1414,7 @@
     renderWeeklyNarratives(model);
     renderCrossTrainingHighlights(model);
     render12WeekTrend(model);
+    renderPeriodization(model.periodization);
     renderCalendar(model);
     renderIntensityZones(model);
     renderPhysioMetrics(model);
