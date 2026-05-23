@@ -1,7 +1,10 @@
 import json
+import threading
+from http.server import ThreadingHTTPServer
+from urllib.request import urlopen
 
 import src.dashboard.server as dashboard_server
-from src.dashboard.server import discover_reports, read_report, safe_report_path
+from src.dashboard.server import DashboardPaths, create_handler, discover_reports, read_report, safe_report_path
 
 
 def write_json(path, payload):
@@ -71,3 +74,24 @@ def test_read_report_handles_non_object_meta_with_db_trend_enabled(tmp_path, mon
 
     assert read_report(output_dir, "ai_report_20260513.json", include_db_fitness_trend=True) == payload
     assert seen["today"] is None
+
+
+def test_favicon_returns_no_content_without_console_404(tmp_path):
+    dashboard_dir = tmp_path / "dashboard"
+    output_dir = tmp_path / "output"
+    dashboard_dir.mkdir()
+    output_dir.mkdir()
+    (dashboard_dir / "index.html").write_text("<!doctype html><title>Dashboard</title>", encoding="utf-8")
+    paths = DashboardPaths(repo_root=tmp_path, dashboard_dir=dashboard_dir, output_dir=output_dir)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(paths))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        with urlopen(f"http://127.0.0.1:{server.server_port}/favicon.ico") as response:
+            assert response.status == 204
+            assert response.read() == b""
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

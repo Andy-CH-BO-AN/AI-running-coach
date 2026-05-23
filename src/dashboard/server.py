@@ -241,6 +241,12 @@ def create_handler(paths: DashboardPaths) -> type[BaseHTTPRequestHandler]:
             parsed = urlparse(self.path)
             request_path = parsed.path
 
+            if request_path == "/favicon.ico":
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+
             if request_path in {"", "/"}:
                 self._send_file(paths.dashboard_dir / "index.html")
                 return

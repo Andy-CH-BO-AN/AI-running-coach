@@ -9,9 +9,12 @@ garminconnect_stub = types.ModuleType("garminconnect")
 garminconnect_stub.Garmin = object
 sys.modules.setdefault("garminconnect", garminconnect_stub)
 
-dotenv_stub = types.ModuleType("dotenv")
-dotenv_stub.load_dotenv = lambda *args, **kwargs: None
-sys.modules.setdefault("dotenv", dotenv_stub)
+try:
+    import dotenv  # noqa: F401
+except ImportError:
+    dotenv_stub = types.ModuleType("dotenv")
+    dotenv_stub.load_dotenv = lambda *args, **kwargs: None
+    sys.modules.setdefault("dotenv", dotenv_stub)
 
 from datetime import date
 from unittest.mock import patch

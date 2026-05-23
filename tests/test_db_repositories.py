@@ -5,14 +5,17 @@ import pytest
 sqlalchemy = pytest.importorskip("sqlalchemy")
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from src.db.mappers import _activity_values, _user_profile_snapshot_values
-from src.db.models import AIReport, Activity, ActivityFeature, ActivitySplit, SwimmingLength
+from src.db.models import AIReport, Activity, ActivityFeature, ActivitySplit, SwimmingLength, User
 from src.db.repositories import (
+    get_activity_with_splits,
     get_latest_resting_heart_rate,
     get_latest_user_profile,
     get_or_create_default_user,
     get_profile_history,
+    get_recent_activities,
     get_recent_max_heart_rate,
     insert_user_profile_snapshot,
     save_activity_features,
@@ -136,6 +139,44 @@ def test_upsert_activity_updates_by_garmin_activity_id(db_session):
     assert second.raw_json["raw_data"]["hr_zone_2"] == 1800
 
 
+def test_activity_required_fields_are_enforced_and_rollback_keeps_db_clean(db_session):
+    user = get_or_create_default_user(db_session)
+    invalid_activity = Activity(
+        user_id=user.id,
+        garmin_activity_id=777,
+        started_at=datetime(2026, 5, 10, tzinfo=timezone.utc),
+        raw_json={"activity_id": 777},
+    )
+
+    db_session.add(invalid_activity)
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+    assert db_session.scalar(select(func.count()).select_from(Activity)) == 0
+
+
+def test_get_recent_activities_returns_multiple_records_sorted_newest_first(db_session):
+    user = get_or_create_default_user(db_session)
+    for activity_id, activity_date in (
+        (501, "2026-05-08"),
+        (502, "2026-05-10"),
+        (503, "2026-05-09"),
+    ):
+        upsert_activity(
+            db_session,
+            user.id,
+            {
+                **_activity_payload(activity_id=activity_id),
+                "date": activity_date,
+            },
+        )
+
+    activities = get_recent_activities(db_session, user.id, limit=2)
+
+    assert [activity.garmin_activity_id for activity in activities] == [502, 503]
+
+
 def test_activity_splits_and_swimming_lengths_are_idempotent(db_session):
     user = get_or_create_default_user(db_session)
     activity = upsert_activity(db_session, user.id, _activity_payload())
@@ -162,6 +203,62 @@ def test_activity_splits_and_swimming_lengths_are_idempotent(db_session):
     assert float(length.duration_sec) == 36.0
 
 
+def test_activity_delete_cascades_children_and_preserves_ai_report_with_null_activity(db_session):
+    user = get_or_create_default_user(db_session)
+    activity = upsert_activity(db_session, user.id, _activity_payload())
+    split = upsert_activity_splits(
+        db_session,
+        activity.id,
+        [{"split_index": 1, "distance": 1.0, "duration": 5.0, "pace": 5.0}],
+    )[0]
+    upsert_swimming_lengths(db_session, split.id, [{"length_index": 1, "distance": 25.0, "duration": 35.0}])
+    save_activity_features(db_session, activity.id, "v1", {"classification": {"workout_type": "easy"}})
+    report = save_ai_report(
+        db_session,
+        user.id,
+        report_scope="activity",
+        report_text="report",
+        input_json={"activity_id": 123},
+        activity_id=activity.id,
+    )
+
+    db_session.delete(activity)
+    db_session.flush()
+
+    assert db_session.scalar(select(func.count()).select_from(Activity)) == 0
+    assert db_session.scalar(select(func.count()).select_from(ActivitySplit)) == 0
+    assert db_session.scalar(select(func.count()).select_from(SwimmingLength)) == 0
+    assert db_session.scalar(select(func.count()).select_from(ActivityFeature)) == 0
+    db_session.refresh(report)
+    assert report.activity_id is None
+
+
+def test_user_delete_cascades_profile_activities_and_ai_reports(db_session):
+    user = get_or_create_default_user(db_session)
+    activity = upsert_activity(db_session, user.id, _activity_payload())
+    insert_user_profile_snapshot(
+        db_session,
+        user.id,
+        {"resting_heart_rate": 48},
+        datetime(2026, 5, 10, tzinfo=timezone.utc),
+    )
+    save_ai_report(
+        db_session,
+        user.id,
+        report_scope="activity",
+        report_text="report",
+        input_json={"activity_id": 123},
+        activity_id=activity.id,
+    )
+
+    db_session.delete(user)
+    db_session.flush()
+
+    assert db_session.scalar(select(func.count()).select_from(User)) == 0
+    assert db_session.scalar(select(func.count()).select_from(Activity)) == 0
+    assert db_session.scalar(select(func.count()).select_from(AIReport)) == 0
+
+
 def test_cycling_speed_values_are_persisted_without_polluting_pace_columns(db_session):
     user = get_or_create_default_user(db_session)
     cycling_payload = {
@@ -186,6 +283,23 @@ def test_cycling_speed_values_are_persisted_without_polluting_pace_columns(db_se
     assert float(activity.average_speed_kmh) == 20.0
     assert float(split.speed_kmh) == 20.0
     assert split.raw_json["pace"] == 20.0
+
+
+def test_get_activity_with_splits_reads_nested_swimming_lengths(db_session):
+    user = get_or_create_default_user(db_session)
+    activity = upsert_activity(db_session, user.id, _activity_payload())
+    split = upsert_activity_splits(
+        db_session,
+        activity.id,
+        [{"split_index": 1, "distance": 1.0, "duration": 5.0, "pace": 5.0}],
+    )[0]
+    upsert_swimming_lengths(db_session, split.id, [{"length_index": 1, "distance": 25.0, "duration": 35.0}])
+
+    loaded = get_activity_with_splits(db_session, activity.id)
+
+    assert loaded.id == activity.id
+    assert len(loaded.splits) == 1
+    assert len(loaded.splits[0].swimming_lengths) == 1
 
 
 def test_profile_snapshots_preserve_daily_vo2max_and_lactate_threshold_history(db_session):

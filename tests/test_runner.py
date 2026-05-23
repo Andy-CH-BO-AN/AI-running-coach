@@ -12,9 +12,12 @@ from sqlalchemy.exc import SQLAlchemyError
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-dotenv_stub = types.ModuleType("dotenv")
-dotenv_stub.load_dotenv = lambda *args, **kwargs: None
-sys.modules.setdefault("dotenv", dotenv_stub)
+try:
+    import dotenv  # noqa: F401
+except ImportError:
+    dotenv_stub = types.ModuleType("dotenv")
+    dotenv_stub.load_dotenv = lambda *args, **kwargs: None
+    sys.modules.setdefault("dotenv", dotenv_stub)
 
 google_stub = types.ModuleType("google")
 genai_stub = types.ModuleType("google.genai")
@@ -239,6 +242,25 @@ class RunnerTests(unittest.TestCase):
                 fetch_limit=75,
                 timestamp="20260510",
             )
+
+    def test_run_pipeline_stops_before_processing_when_no_activities_loaded(self):
+        with patch.object(runner, "_build_timestamp", return_value="20260510"), patch.object(
+            runner,
+            "_load_or_fetch_activity_payloads",
+            return_value=([], {"max_heart_rate": 190}),
+        ) as load_payloads, patch.object(runner, "preprocess_data") as preprocess_mock, patch.object(
+            runner, "_persist_pipeline_artifacts"
+        ) as persist_mock:
+            report = runner.run_pipeline()
+
+        self.assertIsNone(report)
+        load_payloads.assert_called_once_with(
+            activity_limit=75,
+            fetch_limit=75,
+            timestamp="20260510",
+        )
+        preprocess_mock.assert_not_called()
+        persist_mock.assert_not_called()
 
     def test_run_pipeline_defaults_fetch_limit_to_activity_limit(self):
         raw_activities = [{"activity_id": 1, "type": "running", "distance": 10.0, "duration": 50.0}]
