@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.db.models import Activity
+from src.preprocessing.data_processor import should_skip_short_cycling
 from src.db.repositories import (
     insert_user_profile_snapshot,
     save_activity_features,
@@ -52,9 +53,17 @@ def import_garmin_raw_file(session: Session, user_id, path: str | Path) -> dict[
     if not isinstance(activities, list):
         raise ValueError(f"Expected Garmin raw JSON list in {path}")
 
-    counts = {"activities": 0, "splits": 0, "swimming_lengths": 0}
+    counts = {"activities": 0, "splits": 0, "swimming_lengths": 0, "skipped_short_cycling": 0}
     for activity_data in activities:
         if not isinstance(activity_data, dict) or activity_data.get("activity_id") is None:
+            continue
+
+        activity_type = activity_data.get("type") or activity_data.get("activity_type")
+        distance_km = activity_data.get("distance")
+        if distance_km is None:
+            distance_km = activity_data.get("distance_km")
+        if should_skip_short_cycling(activity_type, distance_km):
+            counts["skipped_short_cycling"] += 1
             continue
 
         activity = upsert_activity(session, user_id=user_id, activity_data=activity_data, source_file=str(path))

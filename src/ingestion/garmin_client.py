@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 from garminconnect import Garmin
 from dotenv import load_dotenv
 from datetime import date as date_cls, datetime, timedelta
-from src.preprocessing.data_processor import calculate_pace
+from src.preprocessing.data_processor import calculate_pace, should_skip_short_cycling
 
 load_dotenv()
 
@@ -523,6 +523,16 @@ def get_garmin_activities(
                 act_id = activity.get('activityId')
                 act_type = target_types[type_key]
                 dist_m, dur_s = activity.get('distance', 0), activity.get('duration', 0)
+                distance_km = dist_m / 1000 if dist_m is not None else None
+                if should_skip_short_cycling(act_type, distance_km):
+                    if progress:
+                        print(
+                            f"  ↳ Skipping short cycling activity={act_id} "
+                            f"distance={distance_km:.2f}km",
+                            flush=True,
+                        )
+                    continue
+
                 performance_value = calculate_pace(dur_s * 1000, dist_m, act_type)
                 raw_details = get_activity_details(client, act_id, act_type)
                 if act_type == 'cycling':
@@ -537,7 +547,7 @@ def get_garmin_activities(
                 collected_activities.append({
                     'type': act_type,
                     'date': activity.get('startTimeLocal', '')[:10],
-                    'distance': dist_m / 1000,
+                    'distance': distance_km,
                     'duration': dur_s / 60,
                     'average_pace': None if act_type == 'cycling' else performance_value,
                     'average_heart_rate': activity.get('averageHR'),

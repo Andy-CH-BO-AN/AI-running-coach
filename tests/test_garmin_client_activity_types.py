@@ -114,6 +114,71 @@ class GarminClientActivityTypeTests(unittest.TestCase):
         self.assertIsNone(payload["activities"][1]["average_pace"])
         self.assertEqual(payload["activities"][1]["raw_data"]["average_speed_kmh"], 20.0)
 
+    def test_short_cycling_activities_are_skipped_before_detail_fetch(self):
+        class FakeGarminClient:
+            detail_calls = []
+
+            def __init__(self, *args, **kwargs):
+                FakeGarminClient.detail_calls = []
+
+            def login(self):
+                pass
+
+            def get_rhr_day(self, _date):
+                return {}
+
+            def get_user_profile(self):
+                return {}
+
+            def get_personal_record(self):
+                return []
+
+            def get_activities(self, _start, _limit):
+                return [
+                    {
+                        "activityId": 10,
+                        "activityType": {"typeKey": "cycling"},
+                        "startTimeLocal": "2026-05-10 08:00:00",
+                        "distance": 3000,
+                        "duration": 600,
+                    },
+                    {
+                        "activityId": 11,
+                        "activityType": {"typeKey": "cycling"},
+                        "startTimeLocal": "2026-05-10 09:00:00",
+                        "distance": 3001,
+                        "duration": 600,
+                    },
+                ]
+
+            def get_activity_splits(self, activity_id):
+                self.detail_calls.append(("splits", activity_id))
+                return {"lapDTOs": []}
+
+            def get_activity(self, activity_id):
+                self.detail_calls.append(("activity", activity_id))
+                return {}
+
+            def get_activity_hr_in_timezones(self, activity_id):
+                self.detail_calls.append(("hr", activity_id))
+                return []
+
+            def get_activity_power_in_timezones(self, activity_id):
+                self.detail_calls.append(("power", activity_id))
+                return []
+
+        with patch.dict(os.environ, {"GARMIN_ACCOUNT": "user@example.com", "GARMIN_PASSWORD": "secret"}), patch(
+            "ingestion.garmin_client.Garmin", FakeGarminClient
+        ):
+            payload = get_garmin_activities(n=2)
+
+        self.assertEqual([item["activity_id"] for item in payload["activities"]], [11])
+        self.assertEqual(payload["activities"][0]["distance"], 3.001)
+        self.assertEqual(
+            FakeGarminClient.detail_calls,
+            [("activity", 11), ("splits", 11)],
+        )
+
     def test_fallback_max_heart_rate_seeds_user_data_when_profile_is_missing(self):
         class FakeGarminClient:
             def __init__(self, *args, **kwargs):

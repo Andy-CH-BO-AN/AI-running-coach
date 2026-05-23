@@ -83,7 +83,7 @@ class DataProcessorTests(unittest.TestCase):
 
     def test_preprocess_filters_short_cycling_activities(self):
         raw_activities = [
-            {"activity_id": 3, "type": "cycling", "distance": 0.5, "duration": 2.0, "raw_data": {}},
+            {"activity_id": 3, "type": "cycling", "distance": 3.0, "duration": 12.0, "raw_data": {}},
             {
                 "activity_id": 4,
                 "type": "cycling",
