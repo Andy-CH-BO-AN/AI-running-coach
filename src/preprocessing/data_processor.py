@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-CYCLING_MIN_DISTANCE_KM = 1.0
+SHORT_CYCLING_MAX_DISTANCE_KM = 3.0
 ZONE_RANGE = range(1, 6)
 
 
@@ -252,8 +252,12 @@ def _build_activity_type_details(activity_type: str, raw_data: Dict[str, Any]) -
     return {}
 
 
+def should_skip_short_cycling(activity_type: str | None, distance_km: Optional[float]) -> bool:
+    return activity_type == "cycling" and distance_km is not None and distance_km <= SHORT_CYCLING_MAX_DISTANCE_KM
+
+
 def _should_skip_activity(item: Dict[str, Any]) -> bool:
-    return item.get("type") == "cycling" and item.get("distance", 0) < CYCLING_MIN_DISTANCE_KM
+    return should_skip_short_cycling(item.get("type"), item.get("distance"))
 
 
 def preprocess_data(raw_activities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
