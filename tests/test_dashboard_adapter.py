@@ -236,7 +236,7 @@ def test_weekly_intensity_focuses_fall_back_from_sessions_and_risks(tmp_path):
 
     assert len(focuses) == 2
     assert focuses[0]["dimension"] == "heat"
-    assert focuses[1]["headline"] == "代表課 1：5/12 間歇"
+    assert focuses[1]["headline"] == "代表課 1：5/12 跑步"
     assert "無氧 TE 3.8" in focuses[1]["analysis"]
 
 
@@ -1066,8 +1066,8 @@ def test_evidence_sources_use_runner_language_for_session_fields(tmp_path):
     payload = run_adapter_case(tmp_path, report)
     metrics = payload["evidence"]["items"][0]["supporting_metrics"]
 
-    assert metrics[0]["source_label"] == "5/12 輕鬆跑 > 距離"
-    assert metrics[1]["source_label"] == "5/12 輕鬆跑 > 環境 > 氣溫"
+    assert metrics[0]["source_label"] == "5/12 跑步 > 距離"
+    assert metrics[1]["source_label"] == "5/12 跑步 > 環境 > 氣溫"
 
 
 def test_evidence_supporting_sessions_include_localized_header_fields(tmp_path):
@@ -1105,8 +1105,45 @@ def test_evidence_supporting_sessions_include_localized_header_fields(tmp_path):
     session = payload["evidence"]["items"][0]["supporting_sessions"][0]
 
     assert session["date_label"] == "5/12"
-    assert session["type_label"] == "輕鬆跑"
+    assert session["type_label"] == "跑步"
     assert session["distance_label"] == "2.05 km"
+
+
+def test_evidence_supporting_session_unknown_source_activity_type_uses_generic_label(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "easy",
+                        "source_activity_type": "strength_training",
+                    }
+                ],
+            }
+        ],
+        "evidence_links": [
+            {
+                "insight_id": "generic_source_type",
+                "claim": "交叉訓練補充。",
+                "supporting_sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "easy",
+                        "source_activity_type": "strength_training",
+                        "source_path": "weekly_analysis[0].sessions[0]",
+                    }
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    session = payload["evidence"]["items"][0]["supporting_sessions"][0]
+
+    assert session["type_label"] == "訓練"
 
 
 def test_evidence_metric_display_value_does_not_duplicate_units(tmp_path):
@@ -1249,7 +1286,7 @@ def test_latest_activity_uses_most_recent_session_day(tmp_path):
     payload = run_adapter_case(tmp_path, report)
 
     assert payload["latest"]["date_label"] == "5/16"
-    assert payload["latest"]["type_label"] == "輕鬆跑"
+    assert payload["latest"]["type_label"] == "跑步"
     assert payload["latest"]["conclusion"] == ""
     assert payload["latest"]["has_ai_conclusion"] is False
 
@@ -1286,6 +1323,44 @@ def test_latest_activity_prefers_representative_session_within_same_day(tmp_path
                         "duration_min": 5.7,
                         "training_load": 15.4,
                         "avg_pace": "06:40",
+                    },
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-25", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+
+    assert payload["latest"]["date_label"] == "5/23"
+    assert payload["latest"]["type_label"] == "跑步"
+    assert payload["latest"]["distance_km"] == 5.06
+    assert payload["latest"]["training_load"] == 323.2
+
+
+def test_latest_activity_groups_same_day_when_date_and_datetime_are_mixed(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-18",
+                "sessions": [
+                    {
+                        "activity_id": 21,
+                        "date": "2026-05-23T06:00:00+08:00",
+                        "type": "interval",
+                        "distance_km": 0.85,
+                        "duration_min": 5.7,
+                        "training_load": 15.4,
+                        "avg_pace": "06:40",
+                    },
+                    {
+                        "activity_id": 22,
+                        "date": "2026-05-23",
+                        "type": "easy",
+                        "distance_km": 5.06,
+                        "duration_min": 33.4,
+                        "training_load": 323.2,
+                        "avg_pace": "06:35",
                     },
                 ],
             }

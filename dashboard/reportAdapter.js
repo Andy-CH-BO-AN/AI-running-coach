@@ -322,11 +322,14 @@
 
   function displaySessionTypeLabel(session) {
     var sourceType = fallbackText(session && session.source_activity_type, "");
-    if (sourceType && SOURCE_ACTIVITY_TYPE_LABELS[sourceType]) {
-      return SOURCE_ACTIVITY_TYPE_LABELS[sourceType];
+    if (sourceType) {
+      return SOURCE_ACTIVITY_TYPE_LABELS[sourceType] || "訓練";
     }
 
     var type = fallbackText(session && session.type, "");
+    if (type === "easy" || type === "tempo" || type === "interval" || type === "long" || type === "race") {
+      return "跑步";
+    }
     return SESSION_TYPE_LABELS[type] || type || "訓練";
   }
 
@@ -531,12 +534,21 @@
     );
   }
 
+  function normalizeSessionDateKey(value) {
+    var raw = fallbackText(value, "").trim();
+    if (!raw) {
+      return "";
+    }
+    var match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+    return match ? match[1] : raw;
+  }
+
   function findLatestSession(report) {
     var latestDate = "";
     var sameDaySessions = [];
     safeArray(report.weekly_analysis).forEach(function scanWeek(week) {
       safeArray(week && week.sessions).forEach(function scanSession(session) {
-        var sessionDate = fallbackText(session && session.date, "");
+        var sessionDate = normalizeSessionDateKey(session && session.date);
         if (!sessionDate) {
           return;
         }
