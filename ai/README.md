@@ -14,6 +14,29 @@ only contain thin adapters that point here.
 | `ai/shared/frontend-dashboard.agent.md` | Dashboard design and implementation |
 | `ai/skills/*/SKILL.md` | Shared skills and communication overlays |
 
+## Local developer tools
+
+For smoother AI-assisted frontend and dashboard work, configure a Chrome
+DevTools MCP server in the local agent runtime when available. This lets agents
+open the dashboard, inspect DOM/accessibility snapshots, read console and
+network errors, and capture screenshots without leaving the coding loop.
+
+Codex example:
+
+```toml
+[mcp_servers.chrome-devtools]
+command = "npx"
+args = ["-y", "chrome-devtools-mcp@latest", "--channel", "stable", "--no-usage-statistics", "--no-performance-crux"]
+```
+
+Notes:
+
+- This is a local developer-machine setting, not repository source code.
+- Prefer an isolated Chrome profile for AI browser work; do not expose personal
+  browsing sessions or sensitive pages to MCP tools.
+- If Chrome MCP is unavailable, fall back to the headless Chrome screenshot
+  commands documented in `ai/shared/frontend-dashboard.agent.md`.
+
 ## Platform adapters
 
 | Tool | Adapter path | Notes |
