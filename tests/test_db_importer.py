@@ -96,7 +96,7 @@ def test_import_garmin_raw_file_skips_short_cycling_records(db_session, tmp_path
                 "activity_id": 601,
                 "type": "cycling",
                 "date": "2026-05-10",
-                "distance": 0.0,
+                "distance": "2.8",
                 "duration": 12.0,
             },
             {
