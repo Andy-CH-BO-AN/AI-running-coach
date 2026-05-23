@@ -32,6 +32,20 @@ touch `src/`, `tests/`, or Python files.
 8. When both approve, run the full test suite one final time and
    summarize the commands and results.
 
+## Browser DX
+
+- When work touches `dashboard/`, `src/dashboard/`, `docs/dashboard.md`, or
+  other browser-visible behavior, prefer Chrome DevTools MCP if configured.
+- Use it to open `http://127.0.0.1:8765/`, inspect accessibility/DOM snapshots,
+  check console errors, review network failures, and capture screenshots.
+- Keep screenshot and trace artifacts under `tests/reports/` with descriptive
+  names when they support review or QA.
+- Do not inspect sensitive personal browsing sessions with MCP tools. Use the
+  MCP server's isolated profile/default automation profile unless the user
+  explicitly asks otherwise.
+- If Chrome MCP is unavailable, use local headless Google Chrome commands from
+  `ai/shared/frontend-dashboard.agent.md` as the fallback.
+
 ## Interaction Rules
 
 - Keep patches minimal and incremental so each review cycle stays small.

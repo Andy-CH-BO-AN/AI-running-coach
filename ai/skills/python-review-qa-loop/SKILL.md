@@ -61,11 +61,29 @@ them clearly as separate stages.
 8. Summarize what changed, what was tested, and any remaining risk from
    reviewer, QA, and security checks.
 
+## Browser-assisted QA
+
+If the task touches dashboard UI, browser-visible output, static assets, or
+frontend adapter behavior:
+
+1. Prefer Chrome DevTools MCP when available.
+2. Start the local dashboard server, usually with
+   `python3 -m src.dashboard.server`.
+3. Open `http://127.0.0.1:8765/` through the browser tool.
+4. Check the rendered page, console messages, network requests, and responsive
+   desktop/mobile layout.
+5. Save useful screenshots or reports under `tests/reports/`.
+
+If Chrome MCP is unavailable, use the headless Google Chrome commands in
+`ai/shared/frontend-dashboard.agent.md`.
+
 ## Output expectations
 
 - Keep fixes minimal and incremental.
 - Lead review feedback with findings when doing review-only work.
 - Call out exact test commands used.
+- For dashboard/browser work, state whether Chrome MCP or headless Chrome was
+  used and where artifacts were saved.
 - State clearly when tests were not run or when Garmin API calls were
   intentionally avoided.
 - When you do reviewer / QA / security passes in one run, label them

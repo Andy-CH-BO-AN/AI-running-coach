@@ -134,7 +134,10 @@
 
 ## Dashboard QA
 
-- 前端變更後，優先用瀏覽器驗證實際畫面；若互動式 browser tool 不可用，使用本機 Google Chrome headless 產生 actual dashboard screenshot。
+- 前端變更後，優先用瀏覽器驗證實際畫面。
+- 若 Chrome DevTools MCP 可用，優先用它開啟 `http://127.0.0.1:8765/`，檢查 DOM/accessibility snapshot、console messages、network requests、desktop/mobile viewport 與 screenshot。
+- Chrome MCP 應使用隔離或 automation profile；不要檢查使用者私人 Chrome session 或敏感頁面，除非使用者明確要求。
+- 若互動式 browser tool 或 Chrome MCP 不可用，使用本機 Google Chrome headless 產生 actual dashboard screenshot。
 - 截圖輸出放在 `tests/reports/`，檔名包含功能與日期，方便 reviewer / QA 追蹤。
 - Desktop 範例：
 

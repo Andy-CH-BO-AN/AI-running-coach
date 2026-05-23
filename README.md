@@ -365,6 +365,24 @@ Canonical 文件：`ai/shared/instructions.md`（workflow）、
 `ai/skills/` 下的 `python-review-qa-loop`、`git-change-conventions`、
 `readme-pm-review`。
 
+### 選用：Chrome DevTools MCP
+
+若要讓 AI agent 更順地檢查 dashboard UI，可在本機 agent runtime
+設定 Chrome DevTools MCP。這是 contributor DX 工具，不是執行主流程的必要條件。
+
+Codex 範例設定：
+
+```toml
+[mcp_servers.chrome-devtools]
+command = "npx"
+args = ["-y", "chrome-devtools-mcp@latest", "--channel", "stable", "--no-usage-statistics", "--no-performance-crux"]
+```
+
+設定後，AI agent 可用瀏覽器工具開啟 `http://127.0.0.1:8765/`、檢查
+console/network、截圖並輔助 dashboard QA。建議使用隔離或 automation
+profile，不要讓 MCP 工具檢查私人 Chrome session。更多 AI workflow
+細節見 [`ai/README.md`](ai/README.md)。
+
 ## 注意事項
 
 - `.env`、`.venv/`、`data/`、`output/` 與 `.DS_Store` 已被 git ignore。
