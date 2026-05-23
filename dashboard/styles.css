@@ -1125,6 +1125,7 @@ select {
   .calendar-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
 }
 
 @media (max-width: 720px) {
@@ -1795,12 +1796,215 @@ select {
   display: none;
 }
 
+.periodization-overview {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.periodization-overview[hidden] {
+  display: none;
+}
+
+.periodization-header,
+.periodization-phase-top,
+.periodization-phase-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.periodization-title {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.2;
+}
+
+.periodization-race-label,
+.periodization-phase-meta span,
+.periodization-structure-item span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.periodization-race-label {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  border: 1px solid rgba(85, 168, 255, 0.36);
+  border-radius: 999px;
+  background: rgba(85, 168, 255, 0.1);
+  color: #d8e9ff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.periodization-timeline {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+.periodization-phase {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.periodization-phase.is-current {
+  border-color: rgba(50, 196, 141, 0.72);
+  background: rgba(50, 196, 141, 0.08);
+}
+
+.periodization-phase-top h4 {
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.periodization-phase-top span,
+.periodization-phase-meta {
+  color: #b8c7dc;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.periodization-phase-meta {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.periodization-phase-meta .is-current-label {
+  color: var(--green);
+}
+
+.periodization-focus {
+  margin: 8px 0 0;
+  color: #d5deea;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.periodization-structure {
+  display: grid;
+  gap: 8px;
+}
+
+.periodization-structure-list {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.periodization-structure-item {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  min-height: 116px;
+  align-content: start;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.periodization-structure-item.intensity-easy {
+  border-color: rgba(50, 196, 141, 0.36);
+  background: rgba(50, 196, 141, 0.08);
+}
+
+.periodization-structure-item.intensity-moderate {
+  border-color: rgba(255, 191, 71, 0.38);
+  background: rgba(255, 191, 71, 0.09);
+}
+
+.periodization-structure-item.intensity-hard {
+  border-color: rgba(255, 100, 100, 0.42);
+  background: rgba(255, 100, 100, 0.09);
+}
+
+.periodization-structure-item.intensity-rest {
+  border-color: rgba(85, 168, 255, 0.3);
+  background: rgba(85, 168, 255, 0.07);
+}
+
+.periodization-structure-day {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.periodization-structure-type {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.periodization-structure-duration,
+.periodization-structure-intensity {
+  color: #c5d4e8;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.periodization-structure-copy {
+  color: #d5deea;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+@media (max-width: 1080px) {
+  .periodization-structure-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .periodization-timeline,
+  .periodization-structure-list {
+    grid-template-columns: 1fr;
+  }
+
+  .periodization-header,
+  .periodization-phase-top {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .periodization-race-label {
+    flex: 1 1 auto;
+  }
+
+  .plan-key-grid,
+  .plan-support-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .plan-day-card {
+  min-width: 0;
+  max-width: 100%;
   border: 2px solid var(--blue);
   border-radius: 10px;
   background: rgba(85, 168, 255, 0.12);
   padding: 14px;
   color: var(--text);
+  overflow-wrap: anywhere;
 }
 
 .plan-day-card.support {
@@ -1850,11 +2054,15 @@ select {
 }
 
 .plan-key-detail {
+  display: grid;
+  gap: 2px;
   margin: 0 0 8px;
   font-size: 15px;
   font-weight: 700;
   color: #e8eef7;
   line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .plan-key-intensity {
@@ -1889,6 +2097,8 @@ select {
   font-size: 13px;
   font-weight: 650;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .plan-day-note {
@@ -2349,5 +2559,10 @@ body.debug-mode .evidence-debug-path {
   .plan-summary-bar {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .plan-key-grid,
+  .plan-support-grid {
+    grid-template-columns: 1fr;
   }
 }

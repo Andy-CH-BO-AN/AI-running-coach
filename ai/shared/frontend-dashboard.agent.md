@@ -132,6 +132,36 @@
 - 手機與桌機都要能閱讀，文字不能溢出容器。
 - 圖表要有空資料、`null`、欄位缺漏時的 fallback 狀態。
 
+## Dashboard QA
+
+- 前端變更後，優先用瀏覽器驗證實際畫面；若互動式 browser tool 不可用，使用本機 Google Chrome headless 產生 actual dashboard screenshot。
+- 截圖輸出放在 `tests/reports/`，檔名包含功能與日期，方便 reviewer / QA 追蹤。
+- Desktop 範例：
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --headless --disable-gpu --hide-scrollbars \
+  --run-all-compositor-stages-before-draw \
+  --virtual-time-budget=5000 \
+  --window-size=1440,4200 \
+  --screenshot=tests/reports/dashboard_desktop_YYYYMMDD.png \
+  http://127.0.0.1:8765/
+```
+
+- Mobile 範例：
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --headless --disable-gpu --hide-scrollbars \
+  --run-all-compositor-stages-before-draw \
+  --virtual-time-budget=5000 \
+  --window-size=390,5200 \
+  --screenshot=tests/reports/dashboard_mobile_YYYYMMDD.png \
+  http://127.0.0.1:8765/
+```
+
+- QA 檢查重點：目標區塊有渲染、文字不溢出、不被截斷、不遮蓋後續區塊、desktop/mobile 版面都可掃讀。
+
 ## 資料處理要求
 
 - score 類欄位範圍為 0-100。

@@ -693,6 +693,28 @@
     return String(date.getUTCMonth() + 1) + "/" + String(date.getUTCDate());
   }
 
+  function formatDateRangeLabel(startDate, endDate) {
+    var startLabel = startDate ? formatDateLabel(startDate) : "";
+    var endLabel = endDate ? formatDateLabel(endDate) : "";
+
+    if (startLabel && endLabel) {
+      return startLabel + "-" + endLabel;
+    }
+
+    return startLabel || endLabel || "日期未設定";
+  }
+
+  function isoDateWithin(isoDate, startDate, endDate) {
+    var date = parseIsoDate(isoDate);
+    var start = parseIsoDate(startDate);
+    var end = parseIsoDate(endDate);
+    if (!date || !start || !end) {
+      return false;
+    }
+
+    return date.getTime() >= start.getTime() && date.getTime() <= end.getTime();
+  }
+
   function nextMondayAfter(isoDate) {
     var date = parseIsoDate(isoDate);
     if (!date) {
@@ -1343,18 +1365,56 @@
 
   function buildPeriodization(report) {
     var periodization = report.periodization || {};
+    var referenceDate = getPlanStartDate(report) || (report.meta && report.meta.today) || null;
+    var phases = safeArray(periodization.phases).map(function adaptPhase(phase) {
+      var startDate = phase.start_date || null;
+      var endDate = phase.end_date || null;
+      var isCurrent = referenceDate ? isoDateWithin(referenceDate, startDate, endDate) : false;
+      var weeklyStructure = safeArray(phase.weekly_structure).map(function adaptStructure(session) {
+        var intensity = fallbackText(session.intensity, "rest");
+        var intensityMeta = INTENSITY_META[intensity] || { label: intensity, className: "intensity-unknown" };
+        var sessionType = fallbackText(session.session_type, intensity === "rest" ? "rest" : "easy");
+        var dayKey = normalizeDayKey(session.day, null);
+
+        return {
+          day_key: dayKey,
+          day_label: DAY_LABELS_ZH[dayKey] || fallbackText(dayKey, "日期"),
+          session_type: sessionType,
+          session_type_label: SESSION_TYPE_LABELS[sessionType] || sessionType,
+          description: fallbackText(session.description, ""),
+          duration_min: isPresentNumber(session.duration_min) ? roundTo(session.duration_min, 1) : null,
+          intensity: intensity,
+          intensity_label: intensityMeta.label,
+          intensity_class: intensityMeta.className
+        };
+      });
+
+      return {
+        phase_name: fallbackText(phase.phase_name, "未命名週期"),
+        start_date: startDate,
+        end_date: endDate,
+        date_range_label: formatDateRangeLabel(startDate, endDate),
+        weeks: isPresentNumber(phase.weeks) ? phase.weeks : null,
+        weeks_label: isPresentNumber(phase.weeks) ? String(phase.weeks) + " 週" : "週數未設定",
+        focus: fallbackText(phase.focus, ""),
+        weekly_structure: weeklyStructure,
+        is_current: isCurrent
+      };
+    });
+    var currentPhase = phases.filter(function findCurrent(phase) {
+      return phase.is_current;
+    })[0] || null;
+
     return {
       weeks_to_race: isPresentNumber(periodization.weeks_to_race) ? periodization.weeks_to_race : null,
-      phases: safeArray(periodization.phases).map(function adaptPhase(phase) {
-        return {
-          phase_name: fallbackText(phase.phase_name, "未命名週期"),
-          start_date: phase.start_date || null,
-          end_date: phase.end_date || null,
-          weeks: isPresentNumber(phase.weeks) ? phase.weeks : null,
-          focus: fallbackText(phase.focus, ""),
-          weekly_structure: safeArray(phase.weekly_structure)
-        };
-      })
+      weeks_to_race_label: isPresentNumber(periodization.weeks_to_race)
+        ? "距離目標賽 " + periodization.weeks_to_race + " 週"
+        : "目標賽週數未設定",
+      reference_date: referenceDate,
+      reference_date_label: referenceDate ? formatDateLabel(referenceDate) : "",
+      phases: phases,
+      current_phase: currentPhase,
+      has_data: phases.length > 0
     };
   }
 
