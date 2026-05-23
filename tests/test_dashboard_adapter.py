@@ -1218,7 +1218,7 @@ def test_evidence_sessions_are_enriched_with_source_segments(tmp_path):
     ]
 
 
-def test_latest_activity_prefers_recent_focus_session_over_easy_run(tmp_path):
+def test_latest_activity_uses_most_recent_session_day(tmp_path):
     report = {
         "weekly_analysis": [
             {
@@ -1248,10 +1248,56 @@ def test_latest_activity_prefers_recent_focus_session_over_easy_run(tmp_path):
 
     payload = run_adapter_case(tmp_path, report)
 
-    assert payload["latest"]["date_label"] == "5/15"
-    assert payload["latest"]["type_label"] == "間歇"
+    assert payload["latest"]["date_label"] == "5/16"
+    assert payload["latest"]["type_label"] == "輕鬆跑"
     assert payload["latest"]["conclusion"] == ""
     assert payload["latest"]["has_ai_conclusion"] is False
+
+
+def test_latest_activity_prefers_representative_session_within_same_day(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-18",
+                "sessions": [
+                    {
+                        "activity_id": 10,
+                        "date": "2026-05-23",
+                        "type": "easy",
+                        "distance_km": 2.5,
+                        "duration_min": 15,
+                        "training_load": 42,
+                        "avg_pace": "06:00",
+                    },
+                    {
+                        "activity_id": 11,
+                        "date": "2026-05-23",
+                        "type": "easy",
+                        "distance_km": 5.06,
+                        "duration_min": 33.4,
+                        "training_load": 323.2,
+                        "avg_pace": "06:35",
+                    },
+                    {
+                        "activity_id": 12,
+                        "date": "2026-05-23",
+                        "type": "interval",
+                        "distance_km": 0.85,
+                        "duration_min": 5.7,
+                        "training_load": 15.4,
+                        "avg_pace": "06:40",
+                    },
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-25", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+
+    assert payload["latest"]["date_label"] == "5/23"
+    assert payload["latest"]["distance_km"] == 5.06
+    assert payload["latest"]["training_load"] == 323.2
 
 
 def test_latest_activity_uses_real_coaching_note_as_conclusion(tmp_path):

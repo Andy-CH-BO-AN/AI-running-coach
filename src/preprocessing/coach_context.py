@@ -69,6 +69,7 @@ SESSION_OUTPUT_KEYS = (
     "activity_id",
     "date",
     "type",
+    "source_activity_type",
     "distance_km",
     "duration_min",
     "training_load",
@@ -1136,6 +1137,7 @@ def _enforce_evidence_source_paths(report: Dict[str, Any]) -> None:
             for key in (
                 "date",
                 "type",
+                "source_activity_type",
                 "distance_km",
                 "duration_min",
                 "avg_hr",
