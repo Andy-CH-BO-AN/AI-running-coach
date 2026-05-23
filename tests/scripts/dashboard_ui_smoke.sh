@@ -12,6 +12,8 @@ CHROME_BIN="${CHROME_BIN:-}"
 if [[ -z "$CHROME_BIN" ]]; then
   if [[ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]]; then
     CHROME_BIN="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  elif command -v google-chrome-stable >/dev/null 2>&1; then
+    CHROME_BIN="$(command -v google-chrome-stable)"
   elif command -v google-chrome >/dev/null 2>&1; then
     CHROME_BIN="$(command -v google-chrome)"
   elif command -v chromium >/dev/null 2>&1; then
