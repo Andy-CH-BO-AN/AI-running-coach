@@ -52,6 +52,12 @@
     bike: "自行車",
     rest: "恢復"
   };
+  var SOURCE_ACTIVITY_TYPE_LABELS = {
+    running: "跑步",
+    swimming: "游泳",
+    lap_swimming: "游泳",
+    cycling: "自行車"
+  };
   var SEGMENT_TYPE_LABELS = {
     warmup: "熱身",
     main: "主課表",
@@ -289,8 +295,7 @@
       return sourcePathLabel(sourcePath);
     }
 
-    var type = sourceSession && sourceSession.type;
-    var typeLabel = SESSION_TYPE_LABELS[type] || "";
+    var typeLabel = sourceSession ? displaySessionTypeLabel(sourceSession) : "";
     var dateLabel = sourceSession && sourceSession.date ? formatDateLabel(sourceSession.date) : "";
     if (dateLabel || typeLabel) {
       return [dateLabel, typeLabel].filter(Boolean).join(" ");
@@ -313,6 +318,19 @@
 
     var fieldLabel = sourcePathLabel(sessionMatch[2]);
     return base + " > " + fieldLabel;
+  }
+
+  function displaySessionTypeLabel(session) {
+    var sourceType = fallbackText(session && session.source_activity_type, "");
+    if (sourceType) {
+      return SOURCE_ACTIVITY_TYPE_LABELS[sourceType] || "訓練";
+    }
+
+    var type = fallbackText(session && session.type, "");
+    if (type === "easy" || type === "tempo" || type === "interval" || type === "long" || type === "race") {
+      return "跑步";
+    }
+    return SESSION_TYPE_LABELS[type] || type || "訓練";
   }
 
   function readJsonPath(root, path) {
@@ -506,25 +524,88 @@
     return type === "interval" || type === "tempo" || type === "race" || type === "long";
   }
 
+  function sessionScoreForLatest(session) {
+    return (
+      toNumber(session && session.training_load) * 1000
+      + toNumber(session && session.training_effect_anaerobic) * 120
+      + toNumber(session && session.training_effect_aerobic) * 60
+      + toNumber(session && session.duration_min) * 2
+      + toNumber(session && session.distance_km)
+    );
+  }
+
+  function normalizeSessionDateKey(value) {
+    var raw = fallbackText(value, "").trim();
+    if (!raw) {
+      return "";
+    }
+    var match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+    return match ? match[1] : raw;
+  }
+
   function findLatestSession(report) {
-    var latest = null;
-    var latestFocus = null;
+    var latestDate = "";
+    var sameDaySessions = [];
     safeArray(report.weekly_analysis).forEach(function scanWeek(week) {
       safeArray(week && week.sessions).forEach(function scanSession(session) {
-        if (!session || !session.date) {
+        var sessionDate = normalizeSessionDateKey(session && session.date);
+        if (!sessionDate) {
           return;
         }
 
-        if (!latest || fallbackText(session.date, "").localeCompare(fallbackText(latest.date, "")) > 0) {
-          latest = session;
+        if (sessionDate.localeCompare(latestDate) > 0) {
+          latestDate = sessionDate;
+          sameDaySessions = [session];
+          return;
         }
-
-        if (isFocusSession(session) && (!latestFocus || fallbackText(session.date, "").localeCompare(fallbackText(latestFocus.date, "")) > 0)) {
-          latestFocus = session;
+        if (sessionDate === latestDate) {
+          sameDaySessions.push(session);
         }
       });
     });
-    return latestFocus || latest;
+    if (!sameDaySessions.length) {
+      return null;
+    }
+
+    function compareActivityIdDesc(a, b) {
+      var left = fallbackText(a, "").trim();
+      var right = fallbackText(b, "").trim();
+      if (!left && !right) {
+        return 0;
+      }
+      if (!left) {
+        return 1;
+      }
+      if (!right) {
+        return -1;
+      }
+
+      var leftIsInteger = /^\d+$/.test(left);
+      var rightIsInteger = /^\d+$/.test(right);
+      if (leftIsInteger && rightIsInteger) {
+        var leftId = BigInt(left);
+        var rightId = BigInt(right);
+        if (leftId === rightId) {
+          return 0;
+        }
+        return leftId > rightId ? -1 : 1;
+      }
+
+      return right.localeCompare(left);
+    }
+
+    sameDaySessions.sort(function sortByRepresentativeness(a, b) {
+      var scoreDiff = sessionScoreForLatest(b) - sessionScoreForLatest(a);
+      if (scoreDiff !== 0) {
+        return scoreDiff;
+      }
+      return compareActivityIdDesc(
+        a && a.activity_id,
+        b && b.activity_id
+      );
+    });
+
+    return sameDaySessions[0];
   }
 
   function buildLatestActivity(report) {
@@ -595,7 +676,7 @@
   function evidenceRunnerNarrative(item) {
     var session = safeArray(item.supporting_sessions)[0];
     if (session && session.date) {
-      var typeLabel = SESSION_TYPE_LABELS[session.type] || session.type || "訓練";
+      var typeLabel = displaySessionTypeLabel(session);
       return "來自 " + formatDateLabel(session.date) + " " + typeLabel + " 的分段與環境資料";
     }
 
@@ -891,7 +972,8 @@
       activity_id: session ? session.activity_id : null,
       date: session ? session.date : null,
       type: type,
-      type_label: SESSION_TYPE_LABELS[type] || type,
+      source_activity_type: fallbackText(session && session.source_activity_type, ""),
+      type_label: displaySessionTypeLabel(session),
       distance_km: isPresentNumber(session && session.distance_km) ? roundTo(session.distance_km, 2) : null,
       duration_min: isPresentNumber(session && session.duration_min) ? roundTo(session.duration_min, 1) : null,
       training_load: isPresentNumber(session && session.training_load) ? roundTo(session.training_load, 1) : null,
@@ -1004,7 +1086,7 @@
 
     rankedSessions.slice(0, 2).forEach(function addRepresentativeSession(item, index) {
       var session = item.session;
-      var typeLabel = SESSION_TYPE_LABELS[session.type] || session.type || "訓練";
+      var typeLabel = displaySessionTypeLabel(session);
       var teParts = [];
       if (isPresentNumber(session.training_effect_anaerobic) && toNumber(session.training_effect_anaerobic) > 0) {
         teParts.push("無氧 TE " + roundTo(session.training_effect_anaerobic, 1));
@@ -1052,7 +1134,7 @@
 
   function crossTrainingAnalysis(session) {
     var sessionType = fallbackText(session && session.type, "");
-    var sessionTypeLabel = SESSION_TYPE_LABELS[sessionType] || sessionType || "交叉訓練";
+    var sessionTypeLabel = displaySessionTypeLabel(session) || sessionType || "交叉訓練";
     var load = roundTo(session && session.training_load, 1);
     var aerobic = roundTo(session && session.training_effect_aerobic, 1);
     var anaerobic = roundTo(session && session.training_effect_anaerobic, 1);
@@ -1477,7 +1559,7 @@
             copy[key] = session[key];
           });
           copy.date_label = copy.date ? formatDateLabel(copy.date) : "日期不詳";
-          copy.type_label = SESSION_TYPE_LABELS[copy.type] || copy.type || "訓練";
+          copy.type_label = displaySessionTypeLabel(copy);
           copy.distance_label = isPresentNumber(copy.distance_km) ? roundTo(copy.distance_km, 2) + " km" : "";
           copy.source_label = sessionSourceLabel(sourcePath, sourceSession);
           copy.source_path = sourcePath;

@@ -14,6 +14,7 @@ SESSION_OUTPUT_KEYS = {
     "activity_id",
     "date",
     "type",
+    "source_activity_type",
     "distance_km",
     "duration_min",
     "training_load",
