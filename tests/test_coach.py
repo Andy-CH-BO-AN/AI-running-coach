@@ -268,6 +268,24 @@ class CoachTests(unittest.TestCase):
             http_options={"api_version": "v1"},
         )
 
+    def test_build_genai_client_uses_legacy_gemini_key_without_vertexai_flag(self):
+        fake_client = object()
+
+        with patch.dict(
+            os.environ,
+            {
+                "GEMINI_KEY": "legacy-key",
+            },
+            clear=True,
+        ), patch.object(coach.genai, "Client", return_value=fake_client) as client_mock:
+            built_client = coach._build_genai_client()
+
+        self.assertIs(built_client, fake_client)
+        client_mock.assert_called_once_with(
+            api_key="legacy-key",
+            http_options={"api_version": "v1"},
+        )
+
     def test_build_genai_client_omits_project_location_for_vertexai_api_key(self):
         fake_client = object()
 
