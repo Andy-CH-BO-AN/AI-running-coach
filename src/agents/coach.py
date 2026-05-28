@@ -16,7 +16,7 @@ PROMPT_PATH = Path("prompts/coach.md")
 DEFAULT_GOAL_PATH = Path("prompts/goal.md")
 OUTPUT_DIR = Path("output")
 MODEL_FALLBACKS = (
-    "gemini-flash-latest",
+    "gemini-3.5-flash",
     "gemini-3-flash-preview",
     "gemini-3.1-flash-lite",
     "gemini-2.5-flash",
@@ -24,7 +24,39 @@ MODEL_FALLBACKS = (
 MAX_RETRIES_PER_MODEL = 3
 RETRY_BACKOFF_SECONDS = 1
 
-client = genai.Client(api_key=os.getenv("GEMINI_KEY"))
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _build_genai_client(*, vertexai: bool | None = None) -> genai.Client:
+    api_key = (
+        os.getenv("GOOGLE_API_KEY")
+        or os.getenv("GEMINI_KEY")
+        or os.getenv("GEMINI_API_KEY")
+    )
+    if vertexai is None:
+        vertexai = _env_flag("GOOGLE_GENAI_USE_VERTEXAI") or _env_flag("GEMINI_USE_VERTEXAI")
+
+    client_kwargs: Dict[str, Any] = {
+        "api_key": api_key,
+        "http_options": {"api_version": "v1"},
+    }
+
+    if vertexai:
+        client_kwargs["vertexai"] = True
+        if not api_key:
+            project = os.getenv("GOOGLE_CLOUD_PROJECT")
+            location = os.getenv("GOOGLE_CLOUD_LOCATION")
+            if project:
+                client_kwargs["project"] = project
+            if location:
+                client_kwargs["location"] = location
+
+    return genai.Client(**client_kwargs)
+
+
+client = _build_genai_client()
 
 
 class ReportParseError(ValueError):
@@ -92,6 +124,14 @@ def _retry_delay_seconds(exc: Exception) -> Optional[float]:
     return float(retry_delay_match.group(1))
 
 
+def _is_vertexai_payload_mismatch(exc: Exception) -> bool:
+    error_message = str(exc)
+    return (
+        "responseMimeType" in error_message
+        and "generation_config" in error_message
+    )
+
+
 def _extract_json_document(text: str) -> str:
     cleaned = text.strip()
     if cleaned.startswith("```"):
@@ -144,7 +184,7 @@ def _generate_content_with_retries(model_name: str, full_prompt: str) -> Dict[st
                 model=model_name,
                 contents=full_prompt,
                 config={
-                    "responseMimeType": "application/json",
+                    "response_mime_type": "application/json",
                     "temperature": 0,
                 },
             )
@@ -181,13 +221,27 @@ def coach(
     goal_path: str = "",
     goal_text: Optional[str] = None,
 ) -> Dict[str, Any]:
+    global client
     system_prompt = _read_text_file(PROMPT_PATH)
     full_prompt = f"{system_prompt}\n\n{_build_context(data, user_data, goal_path, goal_text=goal_text, deterministic_context=deterministic_context)}"
+    switched_to_vertexai = False
 
     for model_name in MODEL_FALLBACKS:
         try:
             return _generate_content_with_retries(model_name, full_prompt)
         except Exception as exc:
+            if (
+                not switched_to_vertexai
+                and not getattr(client, "vertexai", False)
+                and _is_vertexai_payload_mismatch(exc)
+            ):
+                print("偵測到 GCP API key 需走 Vertex AI 模式，切換後重試同一模型...")
+                client = _build_genai_client(vertexai=True)
+                switched_to_vertexai = True
+                try:
+                    return _generate_content_with_retries(model_name, full_prompt)
+                except Exception as vertex_exc:
+                    exc = vertex_exc
             if model_name == MODEL_FALLBACKS[-1]:
                 print(f"所有模型皆調用失敗: {exc}")
                 return _build_failure_report(str(exc))

@@ -53,8 +53,14 @@ cp .env.example .env
 ```text
 GARMIN_ACCOUNT=your_garmin_email
 GARMIN_PASSWORD=your_garmin_password
-GEMINI_KEY=your_gemini_api_key
+GOOGLE_API_KEY=your_gcp_api_key
+GOOGLE_GENAI_USE_VERTEXAI=true
 ```
+
+`GOOGLE_API_KEY` 會優先於舊的 `GEMINI_KEY`。使用 GCP / Vertex AI API key
+時，建議設定 `GOOGLE_GENAI_USE_VERTEXAI=true`；如果改用 ADC / OAuth2
+憑證而非 API key，再設定 `GOOGLE_CLOUD_PROJECT` 與
+`GOOGLE_CLOUD_LOCATION`。
 
 PostgreSQL 只有在要匯入 DB、跑 migration 或 DB tests 時才需要：
 

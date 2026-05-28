@@ -64,7 +64,7 @@ class CoachTests(unittest.TestCase):
         self.assertEqual(
             coach.MODEL_FALLBACKS,
             (
-                "gemini-flash-latest",
+                "gemini-3.5-flash",
                 "gemini-3-flash-preview",
                 "gemini-3.1-flash-lite",
                 "gemini-2.5-flash",
@@ -226,6 +226,96 @@ class CoachTests(unittest.TestCase):
         self.assertEqual(call_counts["model-a"], 1)
         self.assertEqual(call_counts["model-b"], 1)
         sleep_mock.assert_not_called()
+
+    def test_build_genai_client_uses_vertexai_when_flag_enabled(self):
+        fake_client = object()
+
+        with patch.dict(
+            os.environ,
+            {
+                "GEMINI_KEY": "gcp-key",
+                "GOOGLE_GENAI_USE_VERTEXAI": "true",
+                "GOOGLE_CLOUD_PROJECT": "demo-project",
+                "GOOGLE_CLOUD_LOCATION": "global",
+            },
+            clear=True,
+        ), patch.object(coach.genai, "Client", return_value=fake_client) as client_mock:
+            built_client = coach._build_genai_client()
+
+        self.assertIs(built_client, fake_client)
+        client_mock.assert_called_once_with(
+            api_key="gcp-key",
+            http_options={"api_version": "v1"},
+            vertexai=True,
+        )
+
+    def test_build_genai_client_prefers_google_api_key_over_legacy_gemini_key(self):
+        fake_client = object()
+
+        with patch.dict(
+            os.environ,
+            {
+                "GOOGLE_API_KEY": "new-gcp-key",
+                "GEMINI_KEY": "legacy-key",
+            },
+            clear=True,
+        ), patch.object(coach.genai, "Client", return_value=fake_client) as client_mock:
+            built_client = coach._build_genai_client()
+
+        self.assertIs(built_client, fake_client)
+        client_mock.assert_called_once_with(
+            api_key="new-gcp-key",
+            http_options={"api_version": "v1"},
+        )
+
+    def test_build_genai_client_omits_project_location_for_vertexai_api_key(self):
+        fake_client = object()
+
+        with patch.dict(
+            os.environ,
+            {
+                "GOOGLE_API_KEY": "gcp-key",
+                "GOOGLE_GENAI_USE_VERTEXAI": "true",
+                "GOOGLE_CLOUD_PROJECT": "demo-project",
+                "GOOGLE_CLOUD_LOCATION": "global",
+            },
+            clear=True,
+        ), patch.object(coach.genai, "Client", return_value=fake_client) as client_mock:
+            built_client = coach._build_genai_client()
+
+        self.assertIs(built_client, fake_client)
+        client_mock.assert_called_once_with(
+            api_key="gcp-key",
+            http_options={"api_version": "v1"},
+            vertexai=True,
+        )
+
+    def test_coach_switches_to_vertexai_after_payload_mismatch(self):
+        mismatch_error = Exception(
+            "400 INVALID_ARGUMENT. {'error': {'code': 400, 'message': "
+            "\"Invalid JSON payload received. Unknown name \\\"responseMimeType\\\" "
+            "at 'generation_config': Cannot find field.\"}}"
+        )
+        developer_generate = Mock(side_effect=[mismatch_error])
+        vertex_generate = Mock(return_value=types.SimpleNamespace(text='{"headline": "vertex report"}'))
+        developer_client = types.SimpleNamespace(
+            models=types.SimpleNamespace(generate_content=developer_generate),
+            vertexai=False,
+        )
+        vertex_client = types.SimpleNamespace(
+            models=types.SimpleNamespace(generate_content=vertex_generate),
+            vertexai=True,
+        )
+
+        with patch.object(coach, "client", developer_client), patch.object(
+            coach, "MODEL_FALLBACKS", ("model-a",)
+        ), patch.object(coach, "_build_genai_client", return_value=vertex_client) as build_client:
+            report = coach.coach(data=[{"activity_id": 1}])
+
+        self.assertEqual(report, {"headline": "vertex report"})
+        build_client.assert_called_once_with(vertexai=True)
+        developer_generate.assert_called_once()
+        vertex_generate.assert_called_once()
 
 
 if __name__ == "__main__":
