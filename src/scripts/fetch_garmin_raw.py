@@ -6,9 +6,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.db.mirror import sync_shadow_database, validate_shadow_parity
 from src.db.repositories import get_or_create_default_user
 from src.db.session import SessionLocal
-from src.services.db_importer import import_garmin_raw_file, import_garmin_user_file
+from src.services.db_importer import import_artifact_bundle
 
 RAW_DATA_DIR = Path("data/raw")
 
@@ -64,14 +65,23 @@ def import_raw_files(user_path: Path, raw_path: Path) -> dict[str, Any]:
     print("Importing fetched raw files into PostgreSQL", flush=True)
     with SessionLocal() as session:
         user = get_or_create_default_user(session)
-        snapshot = import_garmin_user_file(session, user.id, user_path)
-        raw_counts = import_garmin_raw_file(session, user.id, raw_path)
+        results = import_artifact_bundle(
+            session,
+            user.id,
+            user_files=[user_path],
+            raw_file=raw_path,
+        )
         session.commit()
 
-    return {
-        "user_snapshot_id": str(snapshot.id),
-        "raw_import": raw_counts,
-    }
+    shadow_import = sync_shadow_database()
+    if shadow_import is not None:
+        results["shadow_import"] = shadow_import
+        results["shadow_parity"] = validate_shadow_parity()
+
+    user_snapshot_ids = results.pop("user_snapshot_ids", [])
+    if user_snapshot_ids:
+        results["user_snapshot_id"] = user_snapshot_ids[0]
+    return results
 
 
 def parse_args() -> argparse.Namespace:

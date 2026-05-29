@@ -7,3 +7,4 @@ sqlalchemy
 alembic
 psycopg[binary]
 pydantic
+pytest

@@ -70,11 +70,23 @@ GCP / Vertex AI API key 使用 `GOOGLE_API_KEY` 搭配
 PostgreSQL 只有在要匯入 DB、跑 migration 或 DB tests 時才需要：
 
 ```text
+DATABASE_MODE=local
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=your_local_postgres_password
 DATABASE_URL=postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@localhost:5432/ai_running_coach
+LOCAL_DATABASE_URL=postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@localhost:5432/ai_running_coach
+NEON_DATABASE_URL=postgresql+psycopg://<user>:<password>@<project>-pooler.<region>.aws.neon.tech/<db>?sslmode=require
+NEON_DATABASE_DIRECT_URL=postgresql+psycopg://<user>:<password>@<project>.<region>.aws.neon.tech/<db>?sslmode=require
 TEST_DATABASE_URL=postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@localhost:5432/ai_running_coach_test
 ```
+
+`DATABASE_MODE` 支援三種：
+
+- `local`: app / pipeline / dashboard 走本機 PostgreSQL。
+- `mirror`: app 仍走本機 PostgreSQL，但 `run_pipeline.py`、`src.scripts.import_garmin_files`、`src.scripts.fetch_garmin_raw --import-db` 會在 local commit 後把 mirror tables sync 到 Neon，並做 parity check。
+- `cloud`: app 改走 `NEON_DATABASE_URL`；Alembic migration 會改走 `NEON_DATABASE_DIRECT_URL`。
+
+建議 Neon app 連線用 pooler URL，migration / bulk sync / parity validation 用 direct URL。
 
 ### 3. 跑主流程
 
@@ -256,6 +268,12 @@ docker compose up -d postgres
 alembic upgrade head
 ```
 
+若要對 Neon 跑 migration，改用：
+
+```bash
+DATABASE_MIGRATION_TARGET=cloud alembic upgrade head
+```
+
 匯入既有本機 Garmin artifacts：
 
 ```bash
@@ -270,6 +288,48 @@ python -m src.scripts.import_garmin_files \
 - 穩定且常查詢的欄位放 SQL columns，例如距離、時間、配速、速度、心率、功率與訓練負荷。
 - Garmin 可能變動或不固定的 metrics 放 JSONB，例如 `raw_metrics`、split `metrics` 與 `raw_profile`。
 - 完整 raw payload 保留在 `activities.raw_json` 與 `user_profile_snapshots.raw_profile`，方便重跑 feature engineering。
+
+### Local → Neon 並行 → Cloud 切換
+
+推薦流程：
+
+1. 先維持本地為主：
+
+```text
+DATABASE_MODE=local
+```
+
+2. 對 Neon 建 schema，並把既有本地資料同步到雲端：
+
+```bash
+DATABASE_MIGRATION_TARGET=cloud alembic upgrade head
+python -m src.scripts.sync_database_targets --source local --target cloud
+```
+
+如果 Neon 先前已經被手動匯入、而且 primary keys 可能和 local 不一致，請先清掉那批 divergent data 或重建空的 branch / database，再做第一次 sync。同步前置檢查會在 `users`、`activities` 偵測到同 logical key 但不同 PK 時直接拒絕繼續，避免 half-broken merge。
+
+3. 驗證沒問題後切成並行模式。此時 pipeline / import scripts 會先寫 local，再把 mirror tables sync 到 Neon，並輸出 `shadow_parity`：
+
+```text
+DATABASE_MODE=mirror
+```
+
+4. 觀察一段時間後正式 cutover：
+
+```text
+DATABASE_MODE=cloud
+```
+
+切到 `cloud` 後：
+
+- app / pipeline / dashboard 讀寫走 `NEON_DATABASE_URL`
+- Alembic 仍建議用 `DATABASE_MIGRATION_TARGET=cloud`，讓 migration 走 `NEON_DATABASE_DIRECT_URL`
+- parity 會比對 table row count 與 full-row content digest，避免只看筆數造成假陽性
+- 如需再次比對，可跑：
+
+```bash
+python -m src.scripts.sync_database_targets --source local --target cloud --validate-only
+```
 
 建立 test database 後可以跑 DB tests：
 
