@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.agents.coach import coach
+from src.db.mirror import sync_shadow_database, validate_shadow_parity
 from src.db.models import Activity
 from src.db.repositories import get_latest_resting_heart_rate, get_latest_user_profile, get_or_create_default_user, get_recent_activities
 from src.db.repositories import get_recent_max_heart_rate
@@ -19,7 +20,7 @@ from src.preprocessing.coach_context import (
     enforce_deterministic_report_fields,
 )
 from src.preprocessing.data_processor import preprocess_data
-from src.services.db_importer import import_garmin_raw_file, import_garmin_user_file
+from src.services.db_importer import import_artifact_bundle
 
 RAW_DATA_DIR = Path("data/raw")
 PROCESSED_DATA_DIR = Path("data/processed")
@@ -155,13 +156,14 @@ def _sync_garmin_to_db(
     )
 
     snapshot_saved = False
-    if user_data:
-        import_garmin_user_file(session, user_id, user_path)
-        snapshot_saved = True
-
-    counts = {"activities": 0, "splits": 0, "swimming_lengths": 0}
-    if raw_activities:
-        counts = import_garmin_raw_file(session, user_id, raw_path)
+    import_results = import_artifact_bundle(
+        session,
+        user_id,
+        user_files=[user_path] if user_data else None,
+        raw_file=raw_path if raw_activities else None,
+    )
+    snapshot_saved = bool(import_results.get("user_snapshot_ids"))
+    counts = dict(import_results.get("raw_import") or {"activities": 0, "splits": 0, "swimming_lengths": 0})
 
     session.commit()
     counts["user_snapshot"] = snapshot_saved
@@ -170,6 +172,17 @@ def _sync_garmin_to_db(
         f"{counts['activities']} activities, {counts['splits']} splits, "
         f"{counts['swimming_lengths']} swimming lengths."
     )
+
+    shadow_import = sync_shadow_database()
+    if shadow_import is not None:
+        counts["shadow_import"] = shadow_import
+        parity = validate_shadow_parity()
+        counts["shadow_parity"] = parity
+        if parity and parity["ok"]:
+            print("☁️ Shadow DB parity check passed.", flush=True)
+        elif parity:
+            print(f"⚠️ Shadow DB parity mismatch: {len(parity['mismatches'])} table(s).", flush=True)
+
     return counts
 
 

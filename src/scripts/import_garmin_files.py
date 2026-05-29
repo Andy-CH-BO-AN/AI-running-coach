@@ -4,13 +4,10 @@ import argparse
 import glob
 from pathlib import Path
 
+from src.db.mirror import sync_shadow_database, validate_shadow_parity
 from src.db.repositories import get_or_create_default_user
 from src.db.session import SessionLocal
-from src.services.db_importer import (
-    import_garmin_raw_file,
-    import_garmin_user_file,
-    import_processed_csv_file,
-)
+from src.services.db_importer import import_artifact_bundle
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,8 +26,6 @@ def main() -> None:
 
     with SessionLocal() as session:
         user = get_or_create_default_user(session)
-        results = {}
-
         user_files = []
         if args.user_file:
             user_files.append(Path(args.user_file))
@@ -38,18 +33,20 @@ def main() -> None:
             user_files.extend(Path(path) for path in sorted(glob.glob(args.user_glob)))
         if args.user_glob and not user_files:
             raise SystemExit(f"No files matched --user-glob: {args.user_glob}")
-        if user_files:
-            snapshot_ids = []
-            for user_file in user_files:
-                snapshot = import_garmin_user_file(session, user.id, user_file)
-                snapshot_ids.append(str(snapshot.id))
-            results["user_snapshot_ids"] = snapshot_ids
-        if args.raw_file:
-            results["raw_import"] = import_garmin_raw_file(session, user.id, args.raw_file)
-        if args.processed_file:
-            results["processed_import"] = import_processed_csv_file(session, user.id, args.processed_file)
+        results = import_artifact_bundle(
+            session,
+            user.id,
+            user_files=user_files or None,
+            raw_file=args.raw_file,
+            processed_file=args.processed_file,
+        )
 
         session.commit()
+
+    shadow_import = sync_shadow_database()
+    if shadow_import is not None:
+        results["shadow_import"] = shadow_import
+        results["shadow_parity"] = validate_shadow_parity()
 
     for key, value in results.items():
         print(f"{key}: {value}")

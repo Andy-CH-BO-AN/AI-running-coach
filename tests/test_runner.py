@@ -95,10 +95,13 @@ class RunnerTests(unittest.TestCase):
             }
 
             with patch.object(runner, "RAW_DATA_DIR", raw_dir), patch.object(
-                runner, "import_garmin_user_file"
-            ) as import_user, patch.object(
-                runner, "import_garmin_raw_file", return_value={"activities": 1, "splits": 0, "swimming_lengths": 0}
-            ) as import_raw:
+                runner,
+                "import_artifact_bundle",
+                return_value={
+                    "user_snapshot_ids": ["snapshot-1"],
+                    "raw_import": {"activities": 1, "splits": 0, "swimming_lengths": 0},
+                },
+            ) as import_bundle:
                 counts = runner._sync_garmin_to_db(
                     session=session,
                     user_id="user-1",
@@ -106,12 +109,42 @@ class RunnerTests(unittest.TestCase):
                     garmin_data=garmin_data,
                 )
 
-            import_user.assert_called_once()
-            import_raw.assert_called_once()
+            import_bundle.assert_called_once()
             session.commit.assert_called_once()
             self.assertEqual(counts["activities"], 1)
             self.assertTrue((raw_dir / "garmin_raw_20260510.json").exists())
             self.assertTrue((raw_dir / "garmin_user_20260510.json").exists())
+
+    def test_sync_garmin_to_db_runs_shadow_sync_and_parity_when_enabled(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            raw_dir = base / "raw"
+            session = Mock()
+            garmin_data = {
+                "activities": [{"activity_id": 1, "type": "cycling", "date": "2026-05-10"}],
+                "user_data": {"max_heart_rate": 190},
+            }
+
+            with patch.object(runner, "RAW_DATA_DIR", raw_dir), patch.object(
+                runner,
+                "sync_shadow_database",
+                return_value={"rows_copied": 10},
+            ) as shadow_sync, patch.object(
+                runner,
+                "validate_shadow_parity",
+                return_value={"ok": True, "mismatches": []},
+            ) as validate_shadow:
+                counts = runner._sync_garmin_to_db(
+                    session=session,
+                    user_id="user-1",
+                    timestamp="20260510",
+                    garmin_data=garmin_data,
+                )
+
+            shadow_sync.assert_called_once()
+            validate_shadow.assert_called_once()
+            self.assertIn("shadow_import", counts)
+            self.assertEqual(counts["shadow_parity"]["ok"], True)
 
     def test_load_or_fetch_reads_existing_db_payloads_when_db_import_fails_after_fetch(self):
         class FakeSessionContext:

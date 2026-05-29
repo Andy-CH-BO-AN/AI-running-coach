@@ -124,3 +124,35 @@ def import_processed_csv_file(
             )
             counts["features_saved"] += 1
     return counts
+
+
+def import_artifact_bundle(
+    session: Session,
+    user_id,
+    *,
+    user_files: list[str | Path] | None = None,
+    raw_file: str | Path | None = None,
+    processed_file: str | Path | None = None,
+    feature_version: str = "processed_csv:v1",
+) -> dict[str, Any]:
+    results: dict[str, Any] = {}
+
+    if user_files:
+        snapshot_ids = []
+        for user_file in user_files:
+            snapshot = import_garmin_user_file(session, user_id, user_file)
+            snapshot_ids.append(str(snapshot.id))
+        results["user_snapshot_ids"] = snapshot_ids
+
+    if raw_file:
+        results["raw_import"] = import_garmin_raw_file(session, user_id, raw_file)
+
+    if processed_file:
+        results["processed_import"] = import_processed_csv_file(
+            session,
+            user_id,
+            processed_file,
+            feature_version=feature_version,
+        )
+
+    return results
