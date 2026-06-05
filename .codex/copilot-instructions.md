@@ -39,9 +39,9 @@ instructions: |
   [`ai/skills/git-change-conventions/SKILL.md`](../ai/skills/git-change-conventions/SKILL.md)
   whenever creating a branch, naming a PR, or writing commit messages.
 
-  Frontend dashboard guidance: use
-  [`ai/shared/frontend-dashboard.agent.md`](../ai/shared/frontend-dashboard.agent.md)
-  when designing or implementing the AI running coach dashboard,
-  visualization adapters, weekly derived metrics, or evidence-link UI.
+  Dashboard UI/UX audit guidance: use
+  [`ai/shared/uiux.agent.md`](../ai/shared/uiux.agent.md)
+  when reviewing the AI running coach dashboard for UX, accessibility,
+  responsiveness, or data correctness.
 
   Keep this adapter thin so the shared docs stay the single source of truth.

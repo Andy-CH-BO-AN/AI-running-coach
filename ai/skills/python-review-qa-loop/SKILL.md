@@ -75,7 +75,7 @@ frontend adapter behavior:
 5. Save useful screenshots or reports under `tests/reports/`.
 
 If Chrome MCP is unavailable, use the headless Google Chrome commands in
-`ai/shared/frontend-dashboard.agent.md`.
+`ai/shared/uiux.agent.md`.
 
 ## Output expectations
 

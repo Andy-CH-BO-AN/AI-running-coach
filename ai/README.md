@@ -11,7 +11,7 @@ only contain thin adapters that point here.
 | `ai/shared/reviewer.agent.md` | Code review |
 | `ai/shared/qa.agent.md` | QA and testing |
 | `ai/shared/security.agent.md` | Security review |
-| `ai/shared/frontend-dashboard.agent.md` | Dashboard design and implementation |
+| `ai/shared/uiux.agent.md` | Dashboard UI/UX review and audit |
 | `ai/skills/*/SKILL.md` | Shared skills and communication overlays |
 
 ## Local developer tools
@@ -35,7 +35,7 @@ Notes:
 - Prefer an isolated Chrome profile for AI browser work; do not expose personal
   browsing sessions or sensitive pages to MCP tools.
 - If Chrome MCP is unavailable, fall back to the headless Chrome screenshot
-  commands documented in `ai/shared/frontend-dashboard.agent.md`.
+  commands documented in `ai/shared/uiux.agent.md`.
 
 ## Platform adapters
 

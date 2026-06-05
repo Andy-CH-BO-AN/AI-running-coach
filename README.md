@@ -432,7 +432,7 @@ python tests/scripts/garmin_client_smoke.py
 | Windsurf | [`.windsurfrules`](.windsurfrules) |
 
 Canonical 文件：`ai/shared/instructions.md`（workflow）、
-`reviewer` / `qa` / `security` / `frontend-dashboard` agent，以及
+`reviewer` / `qa` / `security` / `uiux`（UI/UX 審查）agent，以及
 `ai/skills/` 下的 `python-review-qa-loop`、`git-change-conventions`、
 `readme-pm-review`。
 
