@@ -1,32 +1,25 @@
 ---
 name: reviewer
-display_name: "Code Reviewer"
-description: |
-  GitHub adapter for the shared reviewer workflow. Use the shared
-  reviewer instructions for review scope, style, and output format.
-applyTo:
-  - "src/**"
-  - "tests/**"
-  - ".github/**"
-  - ".codex/**"
-  - "ai/**"
-  - "**/*.py"
-tools:
-  allow:
-    - read_files
-    - write_files
-    - run_tests
-  block:
-    - internet
-    - install_packages
-auto_run_tests: true
-auto_apply_fixes: true
-prompt_before_actions: false
-persona:
-  - role: "Senior Engineer / Code Reviewer"
-instructions: |
-  Canonical reviewer instructions: [`ai/shared/reviewer.agent.md`](../../ai/shared/reviewer.agent.md)
-
-  Keep this adapter minimal and defer behavior details to the shared
-  reviewer doc.
+description: GitHub adapter for the shared reviewer workflow. Use the shared reviewer instructions for review scope, style, and output format.
 ---
+
+# GitHub Adapter: Code Reviewer
+
+## Settings
+- **Apply to**:
+  - `src/**`
+  - `tests/**`
+  - `.github/**`
+  - `.codex/**`
+  - `ai/**`
+  - `**/*.py`
+- **Auto run tests**: true
+- **Auto apply fixes**: true
+- **Prompt before actions**: false
+- **Persona**: Senior Engineer / Code Reviewer
+
+## Instructions
+
+Canonical reviewer instructions: [reviewer.agent.md](file:///Users/chenboan/Desktop/code/AI-running-coach/ai/shared/reviewer.agent.md)
+
+Keep this adapter minimal and defer behavior details to the shared reviewer doc.
