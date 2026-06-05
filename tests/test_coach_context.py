@@ -562,6 +562,59 @@ def test_weekly_session_counts_include_cross_training_distribution():
     }
 
 
+def test_cross_training_segments_do_not_emit_running_mechanics():
+    processed_data = [
+        {
+            "activity_id": 208,
+            "type": "cycling",
+            "date": "2026-05-12",
+            "distance_km": 10,
+            "splits": [
+                {
+                    "split_index": 1,
+                    "distance": 10,
+                    "duration": 25,
+                    "average_heart_rate": 132,
+                    "avg_cadence": 88,
+                    "stride_length": 350,
+                }
+            ],
+        },
+        {
+            "activity_id": 209,
+            "type": "swimming",
+            "date": "2026-05-13",
+            "distance_km": 1,
+            "splits": [
+                {
+                    "split_index": 1,
+                    "distance": 0.1,
+                    "duration": 2,
+                    "average_heart_rate": 128,
+                    "avg_cadence": 22,
+                    "stride_length": 3000,
+                }
+            ],
+        },
+    ]
+
+    context = build_deterministic_coach_context(
+        processed_data=processed_data,
+        user_data=_sample_user_data(),
+        raw_activities=[
+            {"activity_id": 208, "duration": 25},
+            {"activity_id": 209, "duration": 20},
+        ],
+        today="2026-05-14",
+    )
+
+    sessions = {session["type"]: session for session in context["weekly_analysis"][0]["sessions"]}
+    for session_type in ("bike", "swim"):
+        segment = sessions[session_type]["segments"][0]
+        assert "cadence" not in segment
+        assert "stride_length_m" not in segment
+
+
 def test_physio_seed_preserves_runner_pace_format_and_open_ended_z5():
     context = build_deterministic_coach_context(
         processed_data=[],

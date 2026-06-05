@@ -59,7 +59,7 @@ model。原始 JSON schema 不需要修改。
 - `WeeklyTrendPanel` / `TwelveWeekPanel`：趨勢圖與敘事。
 - `PlanSummaryBar` + `NextWeekCalendar`：主題、跑量、Key/Support 課表。
 - `ZoneEPanel`：`<details>` 收合心率/功率/配速/跑姿。
-- `EvidenceLayer`：metrics 表 + session 分段明細表（配速、心率、步頻、步幅）。
+- `EvidenceLayer`：metrics 表 + session 分段明細表（配速、心率；跑步分段才顯示步頻、步幅）。
 
 目前實作在 `dashboard/index.html`、`dashboard/styles.css`、
 `dashboard/app.js` 與 `dashboard/reportAdapter.js`。
@@ -69,7 +69,7 @@ model。原始 JSON schema 不需要修改。
 `buildEvidence()` 會：
 
 - 依 `source_path` 回查 `weekly_analysis[].sessions[]`，帶入完整 `segments[]`。
-- 展開「查看依據數據」時，若有 segments，渲染分段明細表（含 warmup / main / recovery，並顯示步幅）。
+- 展開「查看依據數據」時，若有 segments，渲染分段明細表（含 warmup / main / recovery；跑步分段才顯示步頻與步幅）。
 - 主畫面只顯示跑者語言 claim；來源列顯示 human-readable `source_label`。
 
 ## Derived Weekly Metrics

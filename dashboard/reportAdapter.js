@@ -65,6 +65,13 @@
     recovery: "恢復",
     lap: "分段"
   };
+  var RUNNING_SESSION_TYPES = {
+    easy: true,
+    tempo: true,
+    interval: true,
+    long: true,
+    race: true
+  };
   var HR_ZONE_COLORS = ["#2f9e44", "#0ca678", "#f59f00", "#f76707", "#e03131"];
   var POWER_ZONE_COLORS = ["#4dabf7", "#339af0", "#228be6", "#1c7ed6", "#1864ab"];
   var SOURCE_SECTION_LABELS = {
@@ -404,7 +411,26 @@
     return roundTo(number > 10 ? number / 100 : number, 2);
   }
 
-  function segmentStrideLength(segment) {
+  function isRunningSessionType(type) {
+    return Boolean(RUNNING_SESSION_TYPES[fallbackText(type, "")]);
+  }
+
+  function includesRunningMechanics(session, sourceSession) {
+    var canonical = sourceSession || session;
+    var sourceType = fallbackText(canonical && canonical.source_activity_type, "");
+    if (sourceType) {
+      return sourceType === "running";
+    }
+
+    var type = fallbackText(canonical && canonical.type, "");
+    return isRunningSessionType(type);
+  }
+
+  function segmentStrideLength(segment, includeRunningMetrics) {
+    if (!includeRunningMetrics) {
+      return null;
+    }
+
     var direct = normalizeStrideLength(segment && (segment.stride_length_m || segment.stride_length));
     if (direct !== null) {
       return direct;
@@ -499,6 +525,7 @@
   }
 
   function adaptWorkReps(session) {
+    var includeRunningMetrics = includesRunningMechanics(session);
     return safeArray(session && session.segments)
       .filter(function keepSegment(segment) {
         return Boolean(segment);
@@ -512,8 +539,8 @@
           distance_km: isPresentNumber(segment.distance_km) ? roundTo(segment.distance_km, 2) : null,
           avg_pace: segment.avg_pace || null,
           avg_hr: isPresentNumber(segment.avg_hr) ? roundTo(segment.avg_hr, 1) : null,
-          cadence: isPresentNumber(segment.cadence) ? roundTo(segment.cadence, 1) : null,
-          stride_length_m: segmentStrideLength(segment),
+          cadence: includeRunningMetrics && isPresentNumber(segment.cadence) ? roundTo(segment.cadence, 1) : null,
+          stride_length_m: segmentStrideLength(segment, includeRunningMetrics),
           note: fallbackText(segment.note, "")
         };
       });
@@ -1558,13 +1585,24 @@
           Object.keys(session || {}).forEach(function copyKey(key) {
             copy[key] = session[key];
           });
-          copy.date_label = copy.date ? formatDateLabel(copy.date) : "日期不詳";
-          copy.type_label = displaySessionTypeLabel(copy);
-          copy.distance_label = isPresentNumber(copy.distance_km) ? roundTo(copy.distance_km, 2) + " km" : "";
+          var canonicalSession = sourceSession || copy;
+          if (sourceSession) {
+            copy.activity_id = sourceSession.activity_id;
+            copy.date = sourceSession.date;
+            copy.type = sourceSession.type;
+            copy.source_activity_type = sourceSession.source_activity_type;
+            copy.distance_km = sourceSession.distance_km;
+          }
+          copy.date_label = canonicalSession && canonicalSession.date ? formatDateLabel(canonicalSession.date) : "日期不詳";
+          copy.type_label = displaySessionTypeLabel(canonicalSession);
+          copy.distance_label = isPresentNumber(canonicalSession && canonicalSession.distance_km)
+            ? roundTo(canonicalSession.distance_km, 2) + " km"
+            : "";
           copy.source_label = sessionSourceLabel(sourcePath, sourceSession);
           copy.source_path = sourcePath;
+          var includeRunningMetrics = includesRunningMechanics(copy, sourceSession);
           copy.segments = safeArray(
-            copy.segments && copy.segments.length ? copy.segments : sourceSession && sourceSession.segments
+            sourceSession ? sourceSession.segments : copy.segments
           ).map(function adaptSegment(segment, segmentIndex) {
             var segmentType = fallbackText(segment && segment.segment_type, "lap");
             return {
@@ -1574,8 +1612,8 @@
               distance_km: isPresentNumber(segment && segment.distance_km) ? roundTo(segment.distance_km, 2) : null,
               avg_pace: segment ? segment.avg_pace : null,
               avg_hr: isPresentNumber(segment && segment.avg_hr) ? roundTo(segment.avg_hr, 1) : null,
-              cadence: isPresentNumber(segment && segment.cadence) ? roundTo(segment.cadence, 1) : null,
-              stride_length_m: segmentStrideLength(segment),
+              cadence: includeRunningMetrics && isPresentNumber(segment && segment.cadence) ? roundTo(segment.cadence, 1) : null,
+              stride_length_m: segmentStrideLength(segment, includeRunningMetrics),
               note: fallbackText(segment && segment.note, "")
             };
           });

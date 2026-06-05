@@ -90,6 +90,7 @@ SEGMENT_OUTPUT_KEYS = (
     "stride_length_m",
     "note",
 )
+RUNNING_SESSION_TYPES = {"easy", "tempo", "interval", "long", "race"}
 
 
 def _nested_get(payload: Dict[str, Any], path: Sequence[str]) -> Any:
@@ -176,26 +177,37 @@ def _training_effect(processed: Dict[str, Any], metric: str) -> Optional[float]:
     )
 
 
-def _segment_from_split(split: Dict[str, Any]) -> CoachSegment:
-    return {
+def _is_running_session_type(session_type: Optional[str]) -> bool:
+    return (session_type or "") in RUNNING_SESSION_TYPES
+
+
+def _segment_from_split(split: Dict[str, Any], *, include_running_metrics: bool) -> CoachSegment:
+    segment: CoachSegment = {
         "segment_type": "lap",
         "split_index": split.get("split_index"),
         "distance_km": _round_or_none(split.get("distance"), 3),
         "duration_min": _round_or_none(split.get("duration"), 2),
         "avg_pace": _format_pace_minutes(split.get("pace")),
         "avg_hr": _round_or_none(split.get("average_heart_rate"), 0),
-        "cadence": _round_or_none(split.get("avg_cadence"), 1),
-        "stride_length_m": _round_or_none(_stride_length_to_meters(_safe_float(split.get("stride_length"))), 2),
         "temperature_c": _round_or_none(split.get("temperature"), 1),
         "note": None,
     }
+    if include_running_metrics:
+        segment["cadence"] = _round_or_none(split.get("avg_cadence"), 1)
+        segment["stride_length_m"] = _round_or_none(_stride_length_to_meters(_safe_float(split.get("stride_length"))), 2)
+    return segment
 
 
-def _build_segments(processed: Dict[str, Any]) -> List[CoachSegment]:
+def _build_segments(processed: Dict[str, Any], session_type: Optional[str]) -> List[CoachSegment]:
     splits = processed.get("splits")
     if not isinstance(splits, list):
         return []
-    return [_segment_from_split(split) for split in splits if isinstance(split, dict)]
+    include_running_metrics = _is_running_session_type(session_type)
+    return [
+        _segment_from_split(split, include_running_metrics=include_running_metrics)
+        for split in splits
+        if isinstance(split, dict)
+    ]
 
 
 def _temperature_values(processed: Dict[str, Any], raw: Dict[str, Any]) -> List[float]:
@@ -250,7 +262,7 @@ def _build_session(
     ]
 
     session_type = _session_type(processed, raw, max_hr)
-    segments = _build_segments(processed)
+    segments = _build_segments(processed, session_type)
 
     return {
         "activity_id": activity_id,
@@ -948,11 +960,20 @@ def _output_session(
     if not isinstance(ai_segments, list):
         ai_segments = []
     context_segments = context_session.get("segments") or []
-    session["segments"] = [
-        _output_segment(segment, ai_segments[index] if index < len(ai_segments) and isinstance(ai_segments[index], dict) else None)
-        for index, segment in enumerate(context_segments)
-        if isinstance(segment, dict)
-    ]
+    include_running_metrics = _is_running_session_type(context_session.get("type"))
+    output_segments: List[Dict[str, Any]] = []
+    for index, segment in enumerate(context_segments):
+        if not isinstance(segment, dict):
+            continue
+        output_segment = _output_segment(
+            segment,
+            ai_segments[index] if index < len(ai_segments) and isinstance(ai_segments[index], dict) else None,
+        )
+        if not include_running_metrics:
+            output_segment.pop("cadence", None)
+            output_segment.pop("stride_length_m", None)
+        output_segments.append(output_segment)
+    session["segments"] = output_segments
     return session
 
 

@@ -112,6 +112,14 @@ def test_evidence_metrics_table_hides_source_context_column():
     assert 'renderEvidenceMetricCard' in source
 
 
+def test_splits_table_hides_running_mechanics_columns_when_missing():
+    source = Path("dashboard/app.js").read_text(encoding="utf-8")
+
+    assert '<th>步頻</th><th>步幅</th>' not in source
+    assert 'var showCadence' in source
+    assert 'var showStrideLength' in source
+
+
 def test_dashboard_uses_local_font_stack_only():
     index_source = Path("dashboard/index.html").read_text(encoding="utf-8")
     style_source = Path("dashboard/styles.css").read_text(encoding="utf-8")
@@ -1253,6 +1261,311 @@ def test_evidence_sessions_are_enriched_with_source_segments(tmp_path):
             "note": "400m",
         },
     ]
+
+
+def test_evidence_cross_training_segments_strip_running_mechanics(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "swim",
+                        "segments": [
+                            {
+                                "segment_type": "lap",
+                                "distance_km": 0.1,
+                                "avg_pace": "02:00",
+                                "avg_hr": 128,
+                                "cadence": 22,
+                                "stride_length_m": 30.4,
+                            }
+                        ],
+                    },
+                    {
+                        "date": "2026-05-13",
+                        "type": "bike",
+                        "segments": [
+                            {
+                                "segment_type": "lap",
+                                "distance_km": 10,
+                                "avg_pace": None,
+                                "avg_hr": 132,
+                                "cadence": 88,
+                                "stride_length_m": 3.5,
+                            }
+                        ],
+                    },
+                ],
+            }
+        ],
+        "evidence_links": [
+            {
+                "insight_id": "cross_training_load",
+                "claim": "交叉訓練分擔跑步衝擊。",
+                "source_sections": ["weekly_analysis"],
+                "supporting_sessions": [
+                    {"type": "swim", "source_path": "weekly_analysis[0].sessions[0]"},
+                    {"type": "bike", "source_path": "weekly_analysis[0].sessions[1]"},
+                ],
+                "confidence": 90,
+                "visualization_hint": "session_list",
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    sessions = payload["evidence"]["items"][0]["supporting_sessions"]
+
+    assert [session["type_label"] for session in sessions] == ["游泳", "自行車"]
+    for session in sessions:
+        segment = session["segments"][0]
+        assert segment["cadence"] is None
+        assert segment["stride_length_m"] is None
+
+
+def test_evidence_source_activity_type_overrides_running_like_session_type(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "easy",
+                        "source_activity_type": "cycling",
+                        "segments": [
+                            {
+                                "segment_type": "lap",
+                                "distance_km": 3.31,
+                                "avg_hr": 100,
+                                "cadence": 88,
+                                "stride_length_m": 3.5,
+                            }
+                        ],
+                    },
+                    {
+                        "date": "2026-05-13",
+                        "type": "interval",
+                        "source_activity_type": "swimming",
+                        "segments": [
+                            {
+                                "segment_type": "lap",
+                                "distance_km": 0.1,
+                                "avg_pace": "02:00",
+                                "avg_hr": 128,
+                                "cadence": 22,
+                                "stride_length_m": 30.4,
+                            }
+                        ],
+                    },
+                ],
+            }
+        ],
+        "evidence_links": [
+            {
+                "insight_id": "legacy_cross_training",
+                "claim": "舊報告 normalized type 可能仍像跑步。",
+                "supporting_sessions": [
+                    {"type": "easy", "source_path": "weekly_analysis[0].sessions[0]"},
+                    {"type": "interval", "source_path": "weekly_analysis[0].sessions[1]"},
+                ],
+                "confidence": 90,
+                "visualization_hint": "session_list",
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    sessions = payload["evidence"]["items"][0]["supporting_sessions"]
+
+    assert [session["type_label"] for session in sessions] == ["自行車", "游泳"]
+    for session in sessions:
+        segment = session["segments"][0]
+        assert segment["cadence"] is None
+        assert segment["stride_length_m"] is None
+
+
+def test_evidence_source_session_overrides_stale_supporting_session_type(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "easy",
+                        "source_activity_type": "cycling",
+                        "segments": [
+                            {
+                                "segment_type": "lap",
+                                "distance_km": 3.31,
+                                "avg_hr": 100,
+                                "cadence": 88,
+                                "stride_length_m": 3.5,
+                            }
+                        ],
+                    },
+                    {
+                        "date": "2026-05-13",
+                        "type": "interval",
+                        "source_activity_type": "swimming",
+                        "segments": [
+                            {
+                                "segment_type": "lap",
+                                "distance_km": 0.1,
+                                "avg_pace": "02:00",
+                                "avg_hr": 128,
+                                "cadence": 22,
+                                "stride_length_m": 30.4,
+                            }
+                        ],
+                    },
+                ],
+            }
+        ],
+        "evidence_links": [
+            {
+                "insight_id": "stale_supporting_session",
+                "claim": "supporting session copy 可能與 source_path 指向的 canonical session 不一致。",
+                "supporting_sessions": [
+                    {
+                        "type": "interval",
+                        "source_activity_type": "running",
+                        "source_path": "weekly_analysis[0].sessions[0]",
+                    },
+                    {
+                        "type": "interval",
+                        "source_activity_type": "running",
+                        "source_path": "weekly_analysis[0].sessions[1]",
+                    },
+                ],
+                "confidence": 90,
+                "visualization_hint": "session_list",
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    sessions = payload["evidence"]["items"][0]["supporting_sessions"]
+
+    assert [session["type_label"] for session in sessions] == ["自行車", "游泳"]
+    for session in sessions:
+        segment = session["segments"][0]
+        assert segment["cadence"] is None
+        assert segment["stride_length_m"] is None
+
+
+def test_evidence_source_session_overrides_stale_supporting_session_segments(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "easy",
+                        "distance_km": 1.0,
+                        "segments": [
+                            {
+                                "segment_type": "lap",
+                                "distance_km": 1.0,
+                                "avg_pace": "05:00",
+                                "avg_hr": 148,
+                                "cadence": 176,
+                                "stride_length_m": 1.12,
+                            }
+                        ],
+                    },
+                ],
+            }
+        ],
+        "evidence_links": [
+            {
+                "insight_id": "stale_supporting_segments",
+                "claim": "supporting session copy 的 segments 不可覆蓋 source_path canonical segments。",
+                "supporting_sessions": [
+                    {
+                        "date": "2099-01-01",
+                        "type": "easy",
+                        "distance_km": 99,
+                        "source_path": "weekly_analysis[0].sessions[0]",
+                        "segments": [
+                            {
+                                "segment_type": "lap",
+                                "distance_km": 99,
+                                "avg_pace": "99:99",
+                                "avg_hr": 999,
+                                "cadence": 999,
+                                "stride_length_m": 9.99,
+                            }
+                        ],
+                    }
+                ],
+                "confidence": 90,
+                "visualization_hint": "session_list",
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    session = payload["evidence"]["items"][0]["supporting_sessions"][0]
+    segment = session["segments"][0]
+
+    assert session["date"] == "2026-05-12"
+    assert session["date_label"] == "5/12"
+    assert session["distance_km"] == 1.0
+    assert session["distance_label"] == "1 km"
+    assert segment == {
+        "index": 1,
+        "segment_type": "lap",
+        "segment_type_label": "分段",
+        "distance_km": 1,
+        "avg_pace": "05:00",
+        "avg_hr": 148,
+        "cadence": 176,
+        "stride_length_m": 1.12,
+        "note": "",
+    }
+
+
+def test_latest_activity_source_activity_type_overrides_running_like_session_type(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "interval",
+                        "source_activity_type": "cycling",
+                        "segments": [
+                            {
+                                "segment_type": "lap",
+                                "distance_km": 3.31,
+                                "avg_hr": 100,
+                                "cadence": 88,
+                                "stride_length_m": 3.5,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    segment = payload["latest"]["work_reps"][0]
+
+    assert payload["latest"]["type_label"] == "自行車"
+    assert segment["cadence"] is None
+    assert segment["stride_length_m"] is None
 
 
 def test_latest_activity_uses_most_recent_session_day(tmp_path):
