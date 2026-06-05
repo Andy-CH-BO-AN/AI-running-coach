@@ -37,6 +37,7 @@
 【角色分工】
 
 - 程式端已計算資料 `deterministic_context` 是日期、週 bucket、活動 sessions、週總量、心率區間、跑姿平均、生理 profile seed、負荷 seed、下週日期 seed 的 source of truth。
+- `weekly_analysis[].sessions[]` 與其中的 `segments[]` 是程式端產生的 deterministic payload；請直接沿用，不要自行補算距離、配速、心率、步頻、步幅、踏頻或划頻。
 - `deterministic_context.running_mechanics` 的步頻、步幅、觸地時間與垂直振幅已優先使用有效跑步分圈計算，排除間歇中的休息、走動與極低步頻段；請不要再用整段 interval 平均值推翻它。
 - 你是分析器與教練，不是加總器。不得重新計算或覆寫 deterministic_context 已提供的 deterministic numbers；你的工作是根據這些事實補上評估、風險解讀、訓練建議、賽事準備度、週期化與 evidence claims。
 - 如果 deterministic_context 與 raw/CSV reference 有衝突，除非 deterministic_context 明確標示 `data_quality.status = "partial"` 或欄位為 null，否則以 deterministic_context 為準。
@@ -208,8 +209,8 @@
               "distance_km": number,
               "avg_pace": "MM:SS",
               "avg_hr": number,
-              "cadence": number,
-              "stride_length_m": number,
+              "cadence": number,          // deterministic_context 提供的跑步步頻；游泳/自行車不得填入
+              "stride_length_m": number,  // deterministic_context 提供的跑步步幅；游泳/自行車不得填入
               "note": "string"
             }
           ],

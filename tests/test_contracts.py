@@ -247,6 +247,8 @@ def test_enforced_report_preserves_dashboard_json_contract():
     assert [session["activity_id"] for session in current_week["sessions"]] == [9001, 9002]
     assert set(current_week["sessions"][0]) == SESSION_OUTPUT_KEYS
     assert current_week["sessions"][1]["coaching_note"] == "Keep bike note"
+    assert "cadence" not in current_week["sessions"][1]["segments"][0]
+    assert "stride_length_m" not in current_week["sessions"][1]["segments"][0]
 
     assert report["hr_zone_distribution"]["assessment"] == "Keep HR assessment"
     assert report["hr_zone_distribution"]["zones"] == context["hr_zone_distribution"]["zones"]

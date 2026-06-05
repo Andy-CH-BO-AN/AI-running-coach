@@ -1210,6 +1210,12 @@
     if (!segments || !segments.length) {
       return null;
     }
+    var showCadence = segments.some(function hasCadence(segment) {
+      return segment && segment.cadence !== null && segment.cadence !== undefined;
+    });
+    var showStrideLength = segments.some(function hasStrideLength(segment) {
+      return segment && segment.stride_length_m !== null && segment.stride_length_m !== undefined;
+    });
 
     var wrap = document.createElement("div");
     wrap.className = "evidence-splits-wrap";
@@ -1221,7 +1227,20 @@
 
     var table = document.createElement("table");
     table.className = "evidence-splits-table";
-    table.innerHTML = "<thead><tr><th>#</th><th>類型</th><th>距離</th><th>配速</th><th>心率</th><th>步頻</th><th>步幅</th><th>備註</th></tr></thead>";
+    var thead = document.createElement("thead");
+    var headerRow = document.createElement("tr");
+    ["#", "類型", "距離", "配速", "心率"].forEach(function addHeader(label) {
+      headerRow.appendChild(textElement("th", "", label));
+    });
+    if (showCadence) {
+      headerRow.appendChild(textElement("th", "", "步頻"));
+    }
+    if (showStrideLength) {
+      headerRow.appendChild(textElement("th", "", "步幅"));
+    }
+    headerRow.appendChild(textElement("th", "", "備註"));
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
     var tbody = document.createElement("tbody");
 
     segments.forEach(function(segment) {
@@ -1231,11 +1250,15 @@
         segment.segment_type_label || segment.segment_type || "—",
         segment.distance_km !== null ? segment.distance_km + " km" : "—",
         segment.avg_pace || "—",
-        segment.avg_hr !== null ? String(segment.avg_hr) + " bpm" : "—",
-        segment.cadence !== null ? String(segment.cadence) + " spm" : "—",
-        segment.stride_length_m !== null ? String(segment.stride_length_m) + " m" : "—",
-        segment.note || "—"
+        segment.avg_hr !== null ? String(segment.avg_hr) + " bpm" : "—"
       ];
+      if (showCadence) {
+        cells.push(segment.cadence !== null && segment.cadence !== undefined ? String(segment.cadence) + " spm" : "—");
+      }
+      if (showStrideLength) {
+        cells.push(segment.stride_length_m !== null && segment.stride_length_m !== undefined ? String(segment.stride_length_m) + " m" : "—");
+      }
+      cells.push(segment.note || "—");
       cells.forEach(function(value) {
         var cell = document.createElement("td");
         cell.textContent = value;
