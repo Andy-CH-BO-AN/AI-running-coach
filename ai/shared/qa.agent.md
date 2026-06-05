@@ -29,6 +29,13 @@ dashboard adapters, ingestion, services, or schemas.
 - Check preconditions and postconditions when state changes.
 - Prefer deterministic Python tests for facts such as distance, dates,
   weekly aggregates, pace, heart-rate zones, and DB-derived metrics.
+- Changes to `src/preprocessing/coach_context.py`,
+  `coach_context_types.py`, or `coach_context_utils.py` should be
+  validated by `tests/test_coach_context.py`.
+- Changes to `dashboard/reportAdapter.js` should be validated by
+  `tests/test_dashboard_adapter.py` — this is the primary adapter
+  regression baseline (300+ test cases covering derived metrics,
+  evidence links, session selection, pace formatting, and edge cases).
 
 ### UX tests
 
@@ -76,6 +83,11 @@ Run a regression scope that matches the change risk.
   dashboard from latest report.
 - Check side effects of recent changes, especially schema/contract shifts.
 - Include smoke tests for quick validation before deeper checks.
+- When dashboard adapter or frontend behavior changes, run
+  `tests/test_dashboard_adapter.py` as part of the regression scope.
+- When UI/UX changes are involved, cross-reference the UX audit checklist
+  in `ai/shared/uiux.agent.md` for visual and interaction
+  review criteria.
 
 ## UI Automation
 
@@ -85,7 +97,7 @@ Run a regression scope that matches the change risk.
 - Keep Chrome MCP on the isolated/default automation profile. Do not inspect
   private user browser sessions unless explicitly requested.
 - If Chrome MCP is unavailable, use the headless Chrome commands in
-  `ai/shared/frontend-dashboard.agent.md`.
+  `ai/shared/uiux.agent.md`.
 - Save screenshots, traces, or notes under `tests/reports/` with descriptive
   names and dates.
 - Do not add Selenium for this repo by default. It adds driver management
@@ -113,6 +125,10 @@ Run a regression scope that matches the change risk.
 - Run `scripts/test_core.sh` for the core non-DB regression suite when the
   change touches Python code, contracts, runner behavior, prompts, or dashboard
   adapter/server behavior.
+- `scripts/test_core.sh` does **not** include DB-layer tests. When the
+  change touches DB logic, run these separately:
+  `tests/test_db_importer.py`, `tests/test_db_mirror.py`,
+  `tests/test_db_sync.py`, `tests/test_db_repositories.py`.
 - To test `src/ingestion/garmin_client.py`, use `.venv/bin/activate`
   and `python run_pipeline.py`.
 - To test `src/preprocessing/data_processor.py`, use

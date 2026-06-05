@@ -11,7 +11,7 @@ behavior.
 - [`ai/shared/reviewer.agent.md`](../ai/shared/reviewer.agent.md)
 - [`ai/shared/qa.agent.md`](../ai/shared/qa.agent.md)
 - [`ai/shared/security.agent.md`](../ai/shared/security.agent.md)
-- [`ai/shared/frontend-dashboard.agent.md`](../ai/shared/frontend-dashboard.agent.md)
+- [`ai/shared/uiux.agent.md`](../ai/shared/uiux.agent.md)
 - [`ai/skills/python-review-qa-loop/SKILL.md`](../ai/skills/python-review-qa-loop/SKILL.md)
 - [`ai/skills/python-review-qa-loop/agents/openai.yaml`](../ai/skills/python-review-qa-loop/agents/openai.yaml)
 - [`ai/skills/readme-pm-review/SKILL.md`](../ai/skills/readme-pm-review/SKILL.md)
@@ -34,7 +34,7 @@ behavior.
 - [`agents/reviewer.agent.md`](agents/reviewer.agent.md)
 - [`agents/qa.agent.md`](agents/qa.agent.md)
 - [`agents/security.agent.md`](agents/security.agent.md)
-- [`agents/frontend-dashboard.agent.md`](agents/frontend-dashboard.agent.md)
+- [`agents/uiux.agent.md`](agents/uiux.agent.md)
 - [`.github/skills/python-review-qa-loop/SKILL.md`](skills/python-review-qa-loop/SKILL.md)
 - [`.github/skills/python-review-qa-loop/agents/openai.yaml`](skills/python-review-qa-loop/agents/openai.yaml)
 - [`.github/skills/readme-pm-review/SKILL.md`](skills/readme-pm-review/SKILL.md)
@@ -59,8 +59,9 @@ Keep the adapters thin so the shared docs stay authoritative.
   only when explicitly asking for a product-manager style README review.
 - Use [`ai/skills/git-change-conventions/SKILL.md`](../ai/skills/git-change-conventions/SKILL.md)
   when creating a branch, naming a PR, or writing commit messages.
-- Use [`ai/shared/frontend-dashboard.agent.md`](../ai/shared/frontend-dashboard.agent.md)
-  when designing or implementing the AI running coach dashboard.
+- Use [`ai/shared/uiux.agent.md`](../ai/shared/uiux.agent.md)
+  when reviewing the AI running coach dashboard for UX, accessibility, and
+  visual quality issues.
 - These GitHub-side skill adapters only reference the canonical skill
   definitions in `ai/skills/`, including `git-change-conventions` and
   `token-decrease`.

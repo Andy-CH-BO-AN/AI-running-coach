@@ -10,7 +10,7 @@ Files under `.cursor/` are thin Cursor adapters only.
 - [`ai/shared/reviewer.agent.md`](../ai/shared/reviewer.agent.md)
 - [`ai/shared/qa.agent.md`](../ai/shared/qa.agent.md)
 - [`ai/shared/security.agent.md`](../ai/shared/security.agent.md)
-- [`ai/shared/frontend-dashboard.agent.md`](../ai/shared/frontend-dashboard.agent.md)
+- [`ai/shared/uiux.agent.md`](../ai/shared/uiux.agent.md)
 - [`ai/skills/python-review-qa-loop/SKILL.md`](../ai/skills/python-review-qa-loop/SKILL.md)
 - [`ai/skills/readme-pm-review/SKILL.md`](../ai/skills/readme-pm-review/SKILL.md)
 - [`ai/skills/git-change-conventions/SKILL.md`](../ai/skills/git-change-conventions/SKILL.md)
@@ -41,5 +41,5 @@ pattern as `.codex/` and `.github/` skill adapters).
 - **`git-change-conventions`:** branches, PR titles, commit messages.
 - **`readme-pm-review`:** only when explicitly asked for a PM-style README
   review.
-- **`frontend-dashboard`:** dashboard UI, adapters, weekly metrics, evidence
-  links.
+- **`uiux`:** dashboard UI/UX review, accessibility, responsiveness, data
+  correctness.

@@ -16,7 +16,7 @@ This file is a thin pointer so Claude Code does not need a separate copy.
 
 ## Optional agents
 
-- [`ai/shared/frontend-dashboard.agent.md`](ai/shared/frontend-dashboard.agent.md)
+- [`ai/shared/uiux.agent.md`](ai/shared/uiux.agent.md) — Dashboard UI/UX audit
   for dashboard work
 
 Codex/GitHub/Cursor adapters: [`.codex/README-agents.md`](.codex/README-agents.md),

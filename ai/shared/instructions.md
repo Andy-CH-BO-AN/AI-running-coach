@@ -44,7 +44,7 @@ touch `src/`, `tests/`, or Python files.
   MCP server's isolated profile/default automation profile unless the user
   explicitly asks otherwise.
 - If Chrome MCP is unavailable, use local headless Google Chrome commands from
-  `ai/shared/frontend-dashboard.agent.md` as the fallback.
+  `ai/shared/uiux.agent.md` as the fallback.
 
 ## Interaction Rules
 
