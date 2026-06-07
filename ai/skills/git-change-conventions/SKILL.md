@@ -109,15 +109,15 @@ gh pr create \
 
 | Branch prefix | PR title TYPE |
 |---------------|---------------|
-| `feat`        | `FEATURE:`    |
-| `fix`         | `FIX:`        |
-| `refactor`    | `REFACTOR:`   |
-| `docs`        | `DOCS:`       |
-| `test`        | `TEST:`       |
-| `style`       | `STYLE:`      |
-| `perf`        | `PERF:`       |
-| `chore`       | `CHORE:`      |
-| `ci`          | `CI:`         |
+| `feat`        | `FEATURE`     |
+| `fix`         | `FIX`         |
+| `refactor`    | `REFACTOR`    |
+| `docs`        | `DOCS`        |
+| `test`        | `TEST`        |
+| `style`       | `STYLE`       |
+| `perf`        | `PERF`        |
+| `chore`       | `CHORE`       |
+| `ci`          | `CI`          |
 
 ## Output expectations
 
