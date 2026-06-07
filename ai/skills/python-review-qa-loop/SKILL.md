@@ -35,7 +35,15 @@ Instead, apply the repo's review loop explicitly:
 
 1. Read the relevant shared guidance files.
 2. Perform one reviewer pass using `ai/shared/reviewer.agent.md`.
+   Reviewer scope is changed-code review: inspect the diff and affected
+   context for correctness, regressions, maintainability, and security-adjacent
+   risks. Do not ask reviewer to rerun broad or full regression suites.
+   Reviewer may run only tiny targeted checks when needed to confirm a
+   suspected issue.
 3. Perform one QA pass using `ai/shared/qa.agent.md`.
+   QA scope is test coverage and regression validation: use the test commands
+   already run by the implementer/reviewer to avoid duplicate work, then fill
+   the remaining coverage gaps and run broader regression only when needed.
 4. If the task touches DB, secrets, `.env`, credentials, or Garmin
    password/account flows, perform one security pass using
    `ai/shared/security.agent.md`.
@@ -58,9 +66,13 @@ clearly.
    commands before broader suites.
 4. Capture failures, stack traces, and reproduction steps when tests do
    not pass.
-5. Run a reviewer pass using `ai/shared/reviewer.agent.md`.
-6. Run a QA pass using `ai/shared/qa.agent.md` and save durable artifacts in
-   `tests/reports/` or `tests/scripts/` when helpful.
+5. Run a reviewer pass using `ai/shared/reviewer.agent.md`; tell the reviewer
+   which tests have already run and ask them to focus on changed code instead
+   of repeating QA's regression work.
+6. Run a QA pass using `ai/shared/qa.agent.md`; tell QA which tests have
+   already run so QA can target unvalidated behavior, missing scenarios, and
+   final regression instead of duplicating reviewer checks.
+   Save durable artifacts in `tests/reports/` or `tests/scripts/` when helpful.
 7. If security review was triggered, run a separate security pass and
    report those checks explicitly.
 8. Summarize what changed, what was tested, and any remaining risk from
