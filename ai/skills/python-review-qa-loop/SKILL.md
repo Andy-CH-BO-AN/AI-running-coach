@@ -41,9 +41,14 @@ Instead, apply the repo's review loop explicitly:
    `ai/shared/security.agent.md`.
 
 If the runtime supports explicit delegation and the user asked for it,
-you may delegate those passes to separate reviewer / QA / security
-agents. Otherwise, execute the passes in a single Codex run and report
-them clearly as separate stages.
+you must delegate those passes to separate reviewer / QA / security
+agents instead of only simulating those roles yourself. If the user
+also asks for UI/UX review and the runtime supports delegation, spawn a
+separate UI/UX agent too.
+
+Only execute the passes in a single Codex run when sub-agent tooling is
+actually unavailable. In that fallback case, report the limitation
+clearly.
 
 ## Workflow
 
@@ -67,9 +72,12 @@ If the task touches dashboard UI, browser-visible output, static assets, or
 frontend adapter behavior:
 
 1. Prefer Chrome DevTools MCP when available.
-2. Start the local dashboard server, usually with
-   `python3 -m src.dashboard.server`.
-3. Open `http://127.0.0.1:8765/` through the browser tool.
+2. Start the local dashboard server on the role-specific port.
+   - QA uses `python3 -m src.dashboard.server --port 8765`
+   - UI/UX review uses `python3 -m src.dashboard.server --port 8766`
+3. Open the matching URL through the browser tool.
+   - QA uses `http://127.0.0.1:8765/`
+   - UI/UX review uses `http://127.0.0.1:8766/`
 4. Check the rendered page, console messages, network requests, and responsive
    desktop/mobile layout.
 5. Save useful screenshots or reports under `tests/reports/`.

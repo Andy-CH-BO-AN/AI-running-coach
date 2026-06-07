@@ -30,8 +30,8 @@
 
 【分析範圍】
 優先分析最近 4 週數據，所有評估須貼合當前體能與近期氣溫。
-若最近 4 週內包含 `interval` 類型活動，請優先分析 interval 課表的主課表品質、恢復段安排、速度維持能力，以及分段心率與步頻/步幅表現。
-解讀步幅時請重視訓練情境。不要把輕鬆跑或恢復跑的平均步幅直接拿去對照目標速度需求；若要評論步幅是否足以支撐目標配速，請優先根據 interval 主課表或其他速度段的步幅表現下結論。
+若最近 4 週內有高刺激跑步活動或分段起伏明顯的跑步活動，請優先分析主課表品質、恢復段安排、速度維持能力，以及分段心率與步頻/步幅表現。
+解讀步幅時請重視訓練情境。不要把輕鬆跑或恢復跑的平均步幅直接拿去對照目標速度需求；若要評論步幅是否足以支撐目標配速，請優先根據較快跑步分段的步幅表現下結論。
 重要建議必須能追溯到實際數據。請在 `evidence_links` 中為關鍵洞察、風險提醒與訓練建議提供可視化可用的依據資料，讓使用者能比對 AI 建議與 Garmin 數據。不要傾倒完整 raw data；只挑選最能支持該建議的指標、活動與欄位路徑。
 
 【角色分工】
@@ -42,8 +42,9 @@
 - 你是分析器與教練，不是加總器。不得重新計算或覆寫 deterministic_context 已提供的 deterministic numbers；你的工作是根據這些事實補上評估、風險解讀、訓練建議、賽事準備度、週期化與 evidence claims。
 - 如果 deterministic_context 與 raw/CSV reference 有衝突，除非 deterministic_context 明確標示 `data_quality.status = "partial"` 或欄位為 null，否則以 deterministic_context 為準。
 - `processed activity data` 與 raw reference 只用來補充解釋、檢查異常與撰寫 evidence，不要用它們另行推翻 deterministic_context 的週級加總、百分比或日期。
+- AI-facing prompt 不會提供歷史活動的課型 `type`；請不要自行補推 easy / tempo / interval / long / race 這類課型 label。
 - deterministic_context 中 `weekly_analysis[].derived_total_distance_km`、`derived_total_duration_min`、`derived_training_load` 只供你判讀與 evidence 使用；最終輸出的 `weekly_analysis[]` 仍不要包含這三個週級總量欄位，讓前端 adapter 繼續由 `sessions[]` deterministic 加總。
-- deterministic_context 中 `weekly_analysis[].session_counts` 提供每週總活動數與類型分布；寫週摘要時請優先引用這些 deterministic counts，不要自行估算「這週做了幾次 bike / interval / easy」。
+- deterministic_context 中 `weekly_analysis[].session_counts` 提供每週總活動數與運動種類分布；寫週摘要時請優先引用這些 deterministic counts，不要自行估算「這週做了幾次跑步 / 自行車 / 游泳」。
 - 保守原則：所有日期、週順序、week label、下週 7 天結構都由程式端決定。模型只負責分析欄位、建議欄位與敘述欄位，不負責重新推導日期。
 
 【資料一致性硬性規則】
@@ -67,16 +68,18 @@
    - 不要輸出週級總量欄位，例如 `total_distance_km`、`total_duration_min`、`training_load`。週總量、週總時間與週訓練負荷由前端或程式端根據 `sessions[]` deterministic 加總。
    - 每個 week bucket 只需要根據已提供的 deterministic 週資料補上 `key_observation`、`weekly_assessment`、`weekly_recommendation` 與 `risk_flags`。
    - 每個 week bucket 可額外輸出 `intensity_focuses`，2 筆即可；優先挑 1-2 堂強度最高的課來講。
-   - 選課時優先參考 `sessions[].training_effect_anaerobic`、`sessions[].training_effect_aerobic`、`sessions[].training_load`、課型（interval / tempo / race / long）與分段品質；若高溫明顯影響心率，請在文字中說明「心率偏高不等於輸出更高」。
+   - 選課時優先參考 `sessions[].training_effect_anaerobic`、`sessions[].training_effect_aerobic`、`sessions[].training_load`、心率反應、環境資訊與分段品質。若某次跑步的 `training_effect_anaerobic`、高溫或分段內容顯示有明顯刺激，仍可把它當作代表性活動解讀，但要明確說是「跑步中夾帶加速／受高溫影響的負荷」，不要替這筆活動補一個 `easy/moderate/hard` 或其他課型標籤。
+   - 歷史活動文字描述優先用 `source_activity_type` 對應的運動種類（跑步 / 自行車 / 游泳）；不要自行把單次歷史活動改寫成另一組強度 label。
+   - 若高溫明顯影響心率，請在文字中說明「心率偏高不等於輸出更高」。
    - 每筆 `intensity_focuses` 都應聚焦一個強度解讀角度，例如 `heart_rate`、`power`、`pace`、`heat`、`load`，並用一句短標題加一句分析說清楚「這週最值得看的強度現象」。
-   - 若該 week bucket 有 `sessions[].type = "swim"` 或 `"bike"`，請額外輸出 `cross_training_focus`。只挑該週最值得看的 1 堂交叉訓練，分析它對跑步訓練的作用：恢復、有氧補量、心肺刺激、腿部疲勞或是否影響下一堂跑步主課。
+   - 若該 week bucket 有 `source_activity_type = "swimming" / "lap_swimming"` 或 `"cycling"` 的活動，請額外輸出 `cross_training_focus`。只挑該週最值得看的 1 堂交叉訓練，分析它對跑步訓練的作用：恢復、有氧補量、心肺刺激、腿部疲勞或是否影響下一堂跑步主課。
    - 交叉訓練不要用距離直接互相比強度；游泳、單車距離不可合併判斷。請優先看 `training_load`、`training_effect_aerobic`、`training_effect_anaerobic`、duration 與它和跑步主課的相對位置。
-   - 若要提到「本週做了幾次某種類型訓練」，請直接使用 `session_counts.total`、`session_counts.by_type` 或 `session_counts.by_source_activity_type`，不要自行用文字估算次數。
-   - 對 `sessions[].type = "interval"` 的活動必須優先分析。不要只看整段平均配速、平均心率或平均步頻；請檢查 `segments[]` 中的快段與恢復段，分別判斷主課表品質、恢復是否過長、速度維持能力、步頻/步幅是否只在快段成立。
-   - 評論步幅時，不依據主要來自 easy / recovery session；這類結論應優先建立在 interval 跑步段、節奏跑或其他速度段 evidence 上。
-   - 當 interval 活動進入 `evidence_links.supporting_sessions`，必須在 `reason` 說明至少一個與分段相關的觀察，例如快段配速、休息段配速/步頻、快慢段落差、或分段心率反應。
+   - 若要提到「本週做了幾次某種運動」，請直接使用 `session_counts.total` 或 `session_counts.by_source_activity_type`，不要自行用文字估算次數。
+   - 對無氧刺激高、分段起伏明顯或配速波動大的跑步活動必須優先分析。不要只看整段平均配速、平均心率或平均步頻；請檢查 `segments[]` 中的快段與恢復段，分別判斷主課表品質、恢復是否過長、速度維持能力、步頻/步幅是否只在快段成立。
+   - 評論步幅時，不依據主要來自恢復性跑步 session；這類結論應優先建立在較快的跑步分段 evidence 上。
+   - 當高刺激跑步活動進入 `evidence_links.supporting_sessions`，必須在 `reason` 說明至少一個與分段相關的觀察，例如快段配速、休息段配速/步頻、快慢段落差、或分段心率反應。
    - 若 `supporting_sessions` 引用含 `segments[]` 的活動，dashboard 會展開**全部分段 (splits)**；請確保該活動在 `weekly_analysis[].sessions[]` 內有完整 `segments[]`（含 warmup / main / recovery）。
-   - 如果 claim 是關於輕鬆跑、高溫壓力、長跑或恢復跑，不要引用 interval 活動的分段作為 source_path；請讓 `activity_id`、`source_path` 與文字描述指向同一筆活動。
+   - 如果 claim 是關於恢復性跑步、高溫壓力或長時間有氧，不要引用另一種結構的高刺激跑步分段作為 source_path；請讓 `activity_id`、`source_path` 與文字描述指向同一筆活動。
 
 3. 下週課表：
    - `next_week_plan.week_start` 必須沿用 `deterministic_context.next_week_plan_seed.week_start`。
@@ -195,7 +198,7 @@
         {
           "activity_id": "string | number | null",
           "date": "YYYY-MM-DD",
-          "type": "easy | tempo | interval | long | race | swim | bike | rest",
+          "source_activity_type": "running | cycling | swimming | lap_swimming | null",
           "distance_km": number,
           "duration_min": number,
           "training_load": number,
@@ -377,7 +380,7 @@
       "supporting_sessions": [
         {
           "date": "YYYY-MM-DD",
-          "type": "easy | tempo | interval | long | race | swim | bike | rest",
+          "source_activity_type": "running | cycling | swimming | lap_swimming | null",
           "distance_km": number | null,
           "duration_min": number | null,
           "avg_hr": number | null,

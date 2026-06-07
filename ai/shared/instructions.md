@@ -32,12 +32,29 @@ touch `src/`, `tests/`, or Python files.
 8. When both approve, run the full test suite one final time and
    summarize the commands and results.
 
+## Explicit Agent Delegation
+
+- If the user explicitly asks to spawn, delegate, or use separate
+  reviewer / QA / UIUX / security agents, and the runtime supports
+  sub-agents, you must actually spawn those agents instead of only
+  simulating their roles in a single run.
+- When the user explicitly asks for agent delegation, treat that as a
+  workflow requirement, not an optional preference.
+- In that case, collect real agent outputs, address their findings,
+  and repeat the requested agent loop until the blocking findings are
+  resolved or the user chooses to stop.
+- Only fall back to a single-run self-review if sub-agent tooling is
+  genuinely unavailable in the current runtime; if so, state that
+  limitation clearly.
+
 ## Browser DX
 
 - When work touches `dashboard/`, `src/dashboard/`, `docs/dashboard.md`, or
   other browser-visible behavior, prefer Chrome DevTools MCP if configured.
-- Use it to open `http://127.0.0.1:8765/`, inspect accessibility/DOM snapshots,
-  check console errors, review network failures, and capture screenshots.
+- Port split rule: QA uses `http://127.0.0.1:8765/`; UI/UX review uses
+  `http://127.0.0.1:8766/`.
+- Use the matching port to inspect accessibility/DOM snapshots, check
+  console errors, review network failures, and capture screenshots.
 - Keep screenshot and trace artifacts under `tests/reports/` with descriptive
   names when they support review or QA.
 - Do not inspect sensitive personal browsing sessions with MCP tools. Use the

@@ -65,10 +65,10 @@ def test_weekly_metrics_are_derived_from_sessions_and_mark_partial_data(tmp_path
                 "total_distance_km": 999,
                 "training_load": 999,
                 "sessions": [
-                    {"type": "easy", "distance_km": 5.125, "duration_min": 30.04, "training_load": 44.44},
-                    {"type": "bike", "distance_km": 12, "duration_min": 35, "training_load": 24},
-                    {"type": "swim", "distance_km": 1.2, "duration_min": 28, "training_load": 18},
-                    {"type": "easy", "distance_km": 3, "duration_min": None},
+                    {"type": "easy", "source_activity_type": "running", "distance_km": 5.125, "duration_min": 30.04, "training_load": 44.44},
+                    {"type": "bike", "source_activity_type": "cycling", "distance_km": 12, "duration_min": 35, "training_load": 24},
+                    {"type": "swim", "source_activity_type": "swimming", "distance_km": 1.2, "duration_min": 28, "training_load": 18},
+                    {"type": "easy", "source_activity_type": "running", "distance_km": 3, "duration_min": None},
                 ],
             }
         ],
@@ -220,6 +220,7 @@ def test_weekly_intensity_focuses_fall_back_from_sessions_and_risks(tmp_path):
                     {
                         "date": "2026-05-12",
                         "type": "interval",
+                        "source_activity_type": "running",
                         "training_load": 42,
                         "avg_hr": 182,
                         "training_effect_anaerobic": 3.8,
@@ -248,6 +249,76 @@ def test_weekly_intensity_focuses_fall_back_from_sessions_and_risks(tmp_path):
     assert "無氧 TE 3.8" in focuses[1]["analysis"]
 
 
+def test_weekly_intensity_focuses_can_pick_easy_run_with_real_load_signals(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "risk_flags": ["heat_stress"],
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "easy",
+                        "source_activity_type": "running",
+                        "training_load": 41,
+                        "avg_hr": 178,
+                        "training_effect_anaerobic": 3.4,
+                        "training_effect_aerobic": 3.1,
+                        "environment": {"estimated_temp_c": 31.2},
+                    }
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    focuses = payload["weekly"][0]["intensity_focuses"]
+
+    assert len(focuses) == 2
+    assert focuses[0]["dimension"] == "heat"
+    assert focuses[1]["headline"] == "代表課 1：5/12 跑步"
+    assert "無氧 TE 3.4" in focuses[1]["analysis"]
+    assert "不要再替這筆活動補一個" not in focuses[1]["analysis"]
+    assert "高溫" in focuses[1]["analysis"] or "實際負荷" in focuses[1]["analysis"]
+
+
+def test_weekly_intensity_focuses_do_not_pick_plain_easy_run_from_avg_hr_alone(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "type": "easy",
+                        "source_activity_type": "running",
+                        "training_load": 22,
+                        "avg_hr": 148,
+                        "avg_pace": "06:20",
+                        "training_effect_anaerobic": 0.0,
+                        "training_effect_aerobic": 2.1,
+                    },
+                    {
+                        "date": "2026-05-13",
+                        "type": "bike",
+                        "source_activity_type": "cycling",
+                        "training_load": 52,
+                        "training_effect_aerobic": 3.1,
+                    }
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    focuses = payload["weekly"][0]["intensity_focuses"]
+
+    assert len(focuses) == 1
+    assert focuses[0]["headline"] == "代表課 1：5/13 自行車"
+
+
 def test_cross_training_highlights_pick_highest_load_session_per_week(tmp_path):
     report = {
         "weekly_analysis": [
@@ -258,6 +329,7 @@ def test_cross_training_highlights_pick_highest_load_session_per_week(tmp_path):
                     {
                         "date": "2026-05-12",
                         "type": "swim",
+                        "source_activity_type": "swimming",
                         "distance_km": 1.2,
                         "duration_min": 42,
                         "training_load": 38,
@@ -266,6 +338,7 @@ def test_cross_training_highlights_pick_highest_load_session_per_week(tmp_path):
                     {
                         "date": "2026-05-14",
                         "type": "bike",
+                        "source_activity_type": "cycling",
                         "distance_km": 18,
                         "duration_min": 54,
                         "training_load": 72,
@@ -301,6 +374,7 @@ def test_cross_training_highlights_prefer_ai_analysis_when_present(tmp_path):
                         "activity_id": 22,
                         "date": "2026-05-14",
                         "type": "bike",
+                        "source_activity_type": "cycling",
                         "distance_km": 18,
                         "duration_min": 54,
                         "training_load": 72,
@@ -336,6 +410,7 @@ def test_cross_training_highlights_match_ai_focus_activity_id_before_load(tmp_pa
                         "activity_id": 11,
                         "date": "2026-05-12",
                         "type": "swim",
+                        "source_activity_type": "swimming",
                         "distance_km": 1.2,
                         "duration_min": 42,
                         "training_load": 38,
@@ -344,6 +419,7 @@ def test_cross_training_highlights_match_ai_focus_activity_id_before_load(tmp_pa
                         "activity_id": 22,
                         "date": "2026-05-14",
                         "type": "bike",
+                        "source_activity_type": "cycling",
                         "distance_km": 18,
                         "duration_min": 54,
                         "training_load": 72,
@@ -380,6 +456,7 @@ def test_cross_training_highlights_ignore_ai_text_when_focus_activity_id_misses(
                         "activity_id": 22,
                         "date": "2026-05-14",
                         "type": "bike",
+                        "source_activity_type": "cycling",
                         "distance_km": 18,
                         "duration_min": 54,
                         "training_load": 72,
@@ -411,6 +488,7 @@ def test_work_reps_include_all_interval_segments(tmp_path):
                     {
                         "date": "2026-05-12",
                         "type": "interval",
+                        "source_activity_type": "running",
                         "segments": [
                             {
                                 "segment_type": "warmup",
@@ -456,6 +534,7 @@ def test_work_reps_ignore_null_interval_segments(tmp_path):
                     {
                         "date": "2026-05-12",
                         "type": "interval",
+                        "source_activity_type": "running",
                         "segments": [
                             None,
                             {
@@ -1042,6 +1121,7 @@ def test_evidence_sources_use_runner_language_for_session_fields(tmp_path):
                     {
                         "date": "2026-05-12",
                         "type": "easy",
+                        "source_activity_type": "running",
                         "distance_km": 2.05,
                         "environment": {"estimated_temp_c": 27.9},
                     }
@@ -1087,6 +1167,7 @@ def test_evidence_supporting_sessions_include_localized_header_fields(tmp_path):
                     {
                         "date": "2026-05-12",
                         "type": "easy",
+                        "source_activity_type": "running",
                         "distance_km": 2.05,
                     }
                 ],
@@ -1100,6 +1181,7 @@ def test_evidence_supporting_sessions_include_localized_header_fields(tmp_path):
                     {
                         "date": "2026-05-12",
                         "type": "easy",
+                        "source_activity_type": "running",
                         "distance_km": 2.05,
                         "source_path": "weekly_analysis[0].sessions[0]",
                     }
@@ -1189,6 +1271,7 @@ def test_evidence_sessions_are_enriched_with_source_segments(tmp_path):
                     {
                         "date": "2026-05-12",
                         "type": "interval",
+                        "source_activity_type": "running",
                         "segments": [
                             {
                                 "segment_type": "warmup",
@@ -1272,6 +1355,7 @@ def test_evidence_cross_training_segments_strip_running_mechanics(tmp_path):
                     {
                         "date": "2026-05-12",
                         "type": "swim",
+                        "source_activity_type": "swimming",
                         "segments": [
                             {
                                 "segment_type": "lap",
@@ -1286,6 +1370,7 @@ def test_evidence_cross_training_segments_strip_running_mechanics(tmp_path):
                     {
                         "date": "2026-05-13",
                         "type": "bike",
+                        "source_activity_type": "cycling",
                         "segments": [
                             {
                                 "segment_type": "lap",
@@ -1469,6 +1554,7 @@ def test_evidence_source_session_overrides_stale_supporting_session_segments(tmp
                     {
                         "date": "2026-05-12",
                         "type": "easy",
+                        "source_activity_type": "running",
                         "distance_km": 1.0,
                         "segments": [
                             {
@@ -1577,6 +1663,7 @@ def test_latest_activity_uses_most_recent_session_day(tmp_path):
                     {
                         "date": "2026-05-15",
                         "type": "interval",
+                        "source_activity_type": "running",
                         "distance_km": 6,
                         "duration_min": 40,
                         "avg_pace": "04:10",
@@ -1585,6 +1672,7 @@ def test_latest_activity_uses_most_recent_session_day(tmp_path):
                     {
                         "date": "2026-05-16",
                         "type": "easy",
+                        "source_activity_type": "running",
                         "distance_km": 4,
                         "duration_min": 32,
                         "avg_pace": "08:00",
@@ -1614,6 +1702,7 @@ def test_latest_activity_prefers_representative_session_within_same_day(tmp_path
                         "activity_id": 10,
                         "date": "2026-05-23",
                         "type": "easy",
+                        "source_activity_type": "running",
                         "distance_km": 2.5,
                         "duration_min": 15,
                         "training_load": 42,
@@ -1623,6 +1712,7 @@ def test_latest_activity_prefers_representative_session_within_same_day(tmp_path
                         "activity_id": 11,
                         "date": "2026-05-23",
                         "type": "easy",
+                        "source_activity_type": "running",
                         "distance_km": 5.06,
                         "duration_min": 33.4,
                         "training_load": 323.2,
@@ -1632,6 +1722,7 @@ def test_latest_activity_prefers_representative_session_within_same_day(tmp_path
                         "activity_id": 12,
                         "date": "2026-05-23",
                         "type": "interval",
+                        "source_activity_type": "running",
                         "distance_km": 0.85,
                         "duration_min": 5.7,
                         "training_load": 15.4,
@@ -1649,6 +1740,96 @@ def test_latest_activity_prefers_representative_session_within_same_day(tmp_path
     assert payload["latest"]["type_label"] == "跑步"
     assert payload["latest"]["distance_km"] == 5.06
     assert payload["latest"]["training_load"] == 323.2
+
+
+def test_latest_activity_can_prefer_previous_day_key_workout_over_latest_recovery_run(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-06-01",
+                "sessions": [
+                    {
+                        "activity_id": 31,
+                        "date": "2026-06-05",
+                        "type": "easy",
+                        "source_activity_type": "running",
+                        "distance_km": 5.03,
+                        "duration_min": 31,
+                        "training_load": 48,
+                        "avg_pace": "06:10",
+                        "avg_hr": 178,
+                        "training_effect_aerobic": 3.2,
+                        "training_effect_anaerobic": 3.4,
+                        "segments": [{"segment_type": "main", "distance_km": 0.2, "avg_pace": "03:20"}],
+                    },
+                    {
+                        "activity_id": 32,
+                        "date": "2026-06-06",
+                        "type": "easy",
+                        "source_activity_type": "running",
+                        "distance_km": 4.0,
+                        "duration_min": 30,
+                        "training_load": 18,
+                        "avg_pace": "07:00",
+                        "avg_hr": 132,
+                        "training_effect_aerobic": 1.5,
+                        "training_effect_anaerobic": 0.0,
+                    },
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-06-08", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+
+    assert payload["latest"]["date_label"] == "6/5"
+    assert payload["latest"]["distance_km"] == 5.03
+    assert payload["latest"]["avg_hr"] == 178
+
+
+def test_latest_activity_keeps_true_latest_when_previous_day_only_slightly_stronger(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-06-01",
+                "sessions": [
+                    {
+                        "activity_id": 41,
+                        "date": "2026-06-05",
+                        "type": "easy",
+                        "source_activity_type": "running",
+                        "distance_km": 5.0,
+                        "duration_min": 33,
+                        "training_load": 31,
+                        "avg_pace": "06:05",
+                        "avg_hr": 146,
+                        "training_effect_aerobic": 2.4,
+                        "training_effect_anaerobic": 0.0,
+                    },
+                    {
+                        "activity_id": 42,
+                        "date": "2026-06-06",
+                        "type": "easy",
+                        "source_activity_type": "running",
+                        "distance_km": 4.8,
+                        "duration_min": 31,
+                        "training_load": 30,
+                        "avg_pace": "06:15",
+                        "avg_hr": 144,
+                        "training_effect_aerobic": 2.3,
+                        "training_effect_anaerobic": 0.0,
+                    },
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-06-08", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+
+    assert payload["latest"]["date_label"] == "6/6"
+    assert payload["latest"]["distance_km"] == 4.8
 
 
 def test_latest_activity_groups_same_day_when_date_and_datetime_are_mixed(tmp_path):
@@ -1779,6 +1960,7 @@ def test_evidence_segments_estimate_stride_when_legacy_report_lacks_stride(tmp_p
                     {
                         "date": "2026-05-12",
                         "type": "interval",
+                        "source_activity_type": "running",
                         "segments": [
                             {
                                 "segment_type": "main",

@@ -65,13 +65,6 @@
     recovery: "恢復",
     lap: "分段"
   };
-  var RUNNING_SESSION_TYPES = {
-    easy: true,
-    tempo: true,
-    interval: true,
-    long: true,
-    race: true
-  };
   var HR_ZONE_COLORS = ["#2f9e44", "#0ca678", "#f59f00", "#f76707", "#e03131"];
   var POWER_ZONE_COLORS = ["#4dabf7", "#339af0", "#228be6", "#1c7ed6", "#1864ab"];
   var SOURCE_SECTION_LABELS = {
@@ -332,12 +325,7 @@
     if (sourceType) {
       return SOURCE_ACTIVITY_TYPE_LABELS[sourceType] || "訓練";
     }
-
-    var type = fallbackText(session && session.type, "");
-    if (type === "easy" || type === "tempo" || type === "interval" || type === "long" || type === "race") {
-      return "跑步";
-    }
-    return SESSION_TYPE_LABELS[type] || type || "訓練";
+    return "訓練";
   }
 
   function readJsonPath(root, path) {
@@ -411,19 +399,10 @@
     return roundTo(number > 10 ? number / 100 : number, 2);
   }
 
-  function isRunningSessionType(type) {
-    return Boolean(RUNNING_SESSION_TYPES[fallbackText(type, "")]);
-  }
-
   function includesRunningMechanics(session, sourceSession) {
     var canonical = sourceSession || session;
     var sourceType = fallbackText(canonical && canonical.source_activity_type, "");
-    if (sourceType) {
-      return sourceType === "running";
-    }
-
-    var type = fallbackText(canonical && canonical.type, "");
-    return isRunningSessionType(type);
+    return sourceType === "running";
   }
 
   function segmentStrideLength(segment, includeRunningMetrics) {
@@ -546,9 +525,28 @@
       });
   }
 
+  function normalizedSourceActivityType(session) {
+    return fallbackText(session && session.source_activity_type, "").toLowerCase();
+  }
+
+  function isRunningSourceSession(session) {
+    return normalizedSourceActivityType(session) === "running";
+  }
+
   function isFocusSession(session) {
-    var type = fallbackText(session && session.type, "");
-    return type === "interval" || type === "tempo" || type === "race" || type === "long";
+    var runningSource = isRunningSourceSession(session);
+    var anaerobic = toNumber(session && session.training_effect_anaerobic);
+    var aerobic = toNumber(session && session.training_effect_aerobic);
+    var load = toNumber(session && session.training_load);
+    var hasHeat = isPresentNumber(session && session.environment && session.environment.estimated_temp_c);
+    var hasPace = fallbackText(session && session.avg_pace, "").trim() !== "";
+    return (
+      anaerobic >= 1
+      || aerobic >= 3.2
+      || load >= 45
+      || (runningSource && hasHeat && (anaerobic >= 0.5 || aerobic >= 2.5 || load >= 35))
+      || (runningSource && hasPace && anaerobic >= 0.8)
+    );
   }
 
   function sessionScoreForLatest(session) {
@@ -570,9 +568,54 @@
     return match ? match[1] : raw;
   }
 
+  function parseIsoDateUtc(value) {
+    var normalized = normalizeSessionDateKey(value);
+    if (!normalized) {
+      return null;
+    }
+    var parsed = new Date(normalized + "T00:00:00Z");
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  function dayDiffFromLatest(sessionDate, latestDate) {
+    var sessionTime = parseIsoDateUtc(sessionDate);
+    var latestTime = parseIsoDateUtc(latestDate);
+    if (!sessionTime || !latestTime) {
+      return 0;
+    }
+    return Math.round((latestTime.getTime() - sessionTime.getTime()) / 86400000);
+  }
+
+  function hasStructuredSegments(session) {
+    return safeArray(session && session.segments).length > 0;
+  }
+
+  function shouldPreferOlderRepresentativeSession(candidate, latestSameDaySession) {
+    if (!candidate || !latestSameDaySession) {
+      return false;
+    }
+    var candidateLoad = toNumber(candidate.training_load);
+    var latestLoad = toNumber(latestSameDaySession.training_load);
+    var candidateAnaerobic = toNumber(candidate.training_effect_anaerobic);
+    var latestAnaerobic = toNumber(latestSameDaySession.training_effect_anaerobic);
+    var candidateAerobic = toNumber(candidate.training_effect_aerobic);
+    var latestAerobic = toNumber(latestSameDaySession.training_effect_aerobic);
+
+    return (
+      candidateLoad >= latestLoad + 15
+      || candidateAnaerobic >= latestAnaerobic + 1
+      || candidateAerobic >= latestAerobic + 1.5
+      || (
+        hasStructuredSegments(candidate)
+        && !hasStructuredSegments(latestSameDaySession)
+        && (candidateAnaerobic >= latestAnaerobic + 0.5 || candidateLoad >= latestLoad + 10)
+      )
+    );
+  }
+
   function findLatestSession(report) {
     var latestDate = "";
-    var sameDaySessions = [];
+    var allSessions = [];
     safeArray(report.weekly_analysis).forEach(function scanWeek(week) {
       safeArray(week && week.sessions).forEach(function scanSession(session) {
         var sessionDate = normalizeSessionDateKey(session && session.date);
@@ -580,17 +623,14 @@
           return;
         }
 
+        allSessions.push(session);
+
         if (sessionDate.localeCompare(latestDate) > 0) {
           latestDate = sessionDate;
-          sameDaySessions = [session];
-          return;
-        }
-        if (sessionDate === latestDate) {
-          sameDaySessions.push(session);
         }
       });
     });
-    if (!sameDaySessions.length) {
+    if (!allSessions.length) {
       return null;
     }
 
@@ -621,7 +661,10 @@
       return right.localeCompare(left);
     }
 
-    sameDaySessions.sort(function sortByRepresentativeness(a, b) {
+    var latestDaySessions = allSessions.filter(function keepLatestDaySession(session) {
+      return normalizeSessionDateKey(session && session.date) === latestDate;
+    });
+    latestDaySessions.sort(function sortLatestDaySessions(a, b) {
       var scoreDiff = sessionScoreForLatest(b) - sessionScoreForLatest(a);
       if (scoreDiff !== 0) {
         return scoreDiff;
@@ -631,8 +674,45 @@
         b && b.activity_id
       );
     });
+    var latestSameDaySession = latestDaySessions[0] || null;
 
-    return sameDaySessions[0];
+    var candidateSessions = allSessions.filter(function keepRecentCandidate(session) {
+      return dayDiffFromLatest(session && session.date, latestDate) <= 2;
+    });
+    if (!candidateSessions.length) {
+      candidateSessions = allSessions.slice();
+    }
+
+    candidateSessions.sort(function sortByRepresentativeness(a, b) {
+      var scoreDiff = (
+        sessionScoreForLatest(b) - (dayDiffFromLatest(b && b.date, latestDate) * 100)
+      ) - (
+        sessionScoreForLatest(a) - (dayDiffFromLatest(a && a.date, latestDate) * 100)
+      );
+      if (scoreDiff !== 0) {
+        return scoreDiff;
+      }
+      var dateDiff = normalizeSessionDateKey(b && b.date).localeCompare(normalizeSessionDateKey(a && a.date));
+      if (dateDiff !== 0) {
+        return dateDiff;
+      }
+      return compareActivityIdDesc(
+        a && a.activity_id,
+        b && b.activity_id
+      );
+    });
+
+    var bestCandidate = candidateSessions[0] || null;
+    if (!bestCandidate) {
+      return latestSameDaySession;
+    }
+    if (normalizeSessionDateKey(bestCandidate && bestCandidate.date) === latestDate) {
+      return bestCandidate;
+    }
+    if (shouldPreferOlderRepresentativeSession(bestCandidate, latestSameDaySession)) {
+      return bestCandidate;
+    }
+    return latestSameDaySession || bestCandidate;
   }
 
   function buildLatestActivity(report) {
@@ -961,11 +1041,12 @@
         missingFields.training_load = true;
       }
 
-      if (session && session.type === "swim") {
+      var sourceType = normalizedSourceActivityType(session);
+      if (sourceType === "swimming" || sourceType === "lap_swimming") {
         swimDistance += toNumber(session.distance_km);
-      } else if (session && session.type === "bike") {
+      } else if (sourceType === "cycling") {
         bikeDistance += toNumber(session.distance_km);
-      } else if (session && session.type !== "rest") {
+      } else if (sourceType === "running") {
         runningDistance += toNumber(session.distance_km);
       }
       duration += toNumber(session && session.duration_min);
@@ -1075,18 +1156,15 @@
     var focuses = [];
     var hottestTemp = null;
     var rankedSessions = sessions.filter(isFocusSession).map(function scoreSession(session) {
-      var type = fallbackText(session.type, "easy");
-      var typeWeight = type === "interval" ? 40
-        : type === "race" ? 36
-        : type === "tempo" ? 32
-        : type === "long" ? 26
-        : 12;
       var anaerobic = toNumber(session.training_effect_anaerobic) * 12;
       var aerobic = toNumber(session.training_effect_aerobic) * 7;
       var load = Math.min(toNumber(session.training_load), 120) * 0.25;
+      var heat = isPresentNumber(session && session.environment && session.environment.estimated_temp_c)
+        ? Math.max(0, toNumber(session.environment.estimated_temp_c) - 26) * 1.5
+        : 0;
       return {
         session: session,
-        score: typeWeight + anaerobic + aerobic + load
+        score: anaerobic + aerobic + load + heat
       };
     }).sort(function sortByScore(a, b) {
       if (b.score !== a.score) {
@@ -1124,13 +1202,20 @@
       if (isPresentNumber(session.training_load) && toNumber(session.training_load) > 0) {
         teParts.push("load " + roundTo(session.training_load, 1));
       }
+      var usePaceDimension = isRunningSourceSession(session) && (
+        toNumber(session.training_effect_anaerobic) >= 1.5
+        || fallbackText(session.avg_pace, "").trim() !== ""
+      );
 
       focuses.push({
-        dimension: session.type === "interval" || session.type === "race" ? "pace" : "load",
-        label: intensityFocusLabel(session.type === "interval" || session.type === "race" ? "pace" : "load"),
+        dimension: usePaceDimension ? "pace" : "load",
+        label: intensityFocusLabel(usePaceDimension ? "pace" : "load"),
         headline: "代表課 " + String(index + 1) + "：" + formatDateLabel(session.date) + " " + typeLabel,
         analysis: teParts.length > 0
-          ? teParts.join(" · ") + "，這堂課比單看平均心率更適合拿來判斷本週強度品質。"
+          ? teParts.join(" · ")
+            + (isRunningSourceSession(session)
+              ? "，這堂跑步仍該和高溫、配速或加速段一起判讀實際負荷。"
+              : "，這堂課比單看平均心率更適合拿來判斷本週強度品質。")
           : "這堂課是本週最值得優先回看的強度課。"
       });
     });
@@ -1160,20 +1245,20 @@
   }
 
   function crossTrainingAnalysis(session) {
-    var sessionType = fallbackText(session && session.type, "");
-    var sessionTypeLabel = displaySessionTypeLabel(session) || sessionType || "交叉訓練";
+    var sourceType = normalizedSourceActivityType(session);
+    var sessionTypeLabel = displaySessionTypeLabel(session) || "交叉訓練";
     var load = roundTo(session && session.training_load, 1);
     var aerobic = roundTo(session && session.training_effect_aerobic, 1);
     var anaerobic = roundTo(session && session.training_effect_anaerobic, 1);
 
-    if (sessionType === "swim") {
+    if (sourceType === "swimming" || sourceType === "lap_swimming") {
       if (aerobic >= 3) {
         return "這堂游泳偏有氧刺激，可補容量又不額外增加跑步衝擊。";
       }
       return "這堂游泳以恢復和活動度維持為主，適合放在跑步主課之間。";
     }
 
-    if (sessionType === "bike") {
+    if (sourceType === "cycling") {
       if (load >= 80 || aerobic >= 3 || anaerobic >= 2) {
         return "這堂單車負荷偏高，對心肺有幫助，但隔天跑步主課要留意腿部殘留疲勞。";
       }
@@ -1186,7 +1271,8 @@
   function buildCrossTrainingHighlights(report) {
     return safeArray(report.weekly_analysis).map(function buildWeekHighlight(week, index) {
       var sessions = safeArray(week && week.sessions).map(adaptSession).filter(function keep(session) {
-        return session.type === "swim" || session.type === "bike";
+        var sourceType = normalizedSourceActivityType(session);
+        return sourceType === "swimming" || sourceType === "lap_swimming" || sourceType === "cycling";
       });
       if (!sessions.length) {
         return null;
