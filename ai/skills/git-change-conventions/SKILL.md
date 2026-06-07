@@ -47,8 +47,9 @@ Examples:
 
 1. Use the same logical type for the branch and PR title unless there
    is a clear reason not to.
-2. Branch `type` stays lowercase, while PR title `TYPE` defaults to
-   uppercase.
+2. Branch `type` uses the short lowercase prefix (e.g. `feat`), while
+   the PR title uses the full allowed `TYPE` name (e.g. `FEATURE:`).
+   See the mapping table in the PR creation section.
 3. Keep the text after the prefix specific to the actual change.
 4. Do not invent additional top-level prefixes unless the user
    explicitly changes the convention.
@@ -71,11 +72,52 @@ Examples:
 ## Examples
 
 - Branch: `feat/add-weekly-fatigue-summary`
-- PR title: `FEAT: add weekly fatigue summary to coach report`
+- PR title: `FEATURE: add weekly fatigue summary to coach report`
 - Branch: `fix/handle-empty-garmin-heart-rate-payload`
 - PR title: `FIX: handle empty Garmin heart rate payload`
 - Branch: `docs/add-shared-git-naming-conventions`
 - PR title: `DOCS: add shared Git naming conventions for branch, PR, and commits`
+
+## PR creation with GitHub CLI
+
+When creating a pull request via `gh`, apply the conventions above:
+
+```bash
+gh pr create \
+  --title "TYPE: summary" \
+  --body "## Summary
+<what this PR does>
+
+## Why
+<why the change was needed>
+
+## Changes
+- <file/area>: <description>
+
+## Validation
+- <tests run, manual checks, or screenshots>" \
+  --base main
+```
+
+- Use `--draft` for work-in-progress PRs that are not ready for review.
+- Add `--reviewer <handle>` when the team requires explicit reviewer
+  assignment.
+- Add `--label <label>` to categorise the PR when project labels exist.
+- The PR title `TYPE` must use the allowed name from the PR title
+  format section, not a literal uppercase of the branch prefix. Use the
+  mapping below:
+
+| Branch prefix | PR title TYPE |
+|---------------|---------------|
+| `feat`        | `FEATURE:`    |
+| `fix`         | `FIX:`        |
+| `refactor`    | `REFACTOR:`   |
+| `docs`        | `DOCS:`       |
+| `test`        | `TEST:`       |
+| `style`       | `STYLE:`      |
+| `perf`        | `PERF:`       |
+| `chore`       | `CHORE:`      |
+| `ci`          | `CI:`         |
 
 ## Output expectations
 

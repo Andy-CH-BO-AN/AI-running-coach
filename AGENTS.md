@@ -11,6 +11,7 @@ rules here; adapters under `.cursor/` point to `ai/`.
 - QA: [`ai/shared/qa.agent.md`](ai/shared/qa.agent.md)
 - Security: [`ai/shared/security.agent.md`](ai/shared/security.agent.md)
 - Dashboard UI/UX: [`ai/shared/uiux.agent.md`](ai/shared/uiux.agent.md)
+- Git conventions: [`ai/skills/git-change-conventions/SKILL.md`](ai/skills/git-change-conventions/SKILL.md)
 
 ## Cursor-specific entry points
 
