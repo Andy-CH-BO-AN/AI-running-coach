@@ -34,6 +34,7 @@ from src.preprocessing.coach_context_utils import (
     _week_start_for,
     _weighted_average,
 )
+from src.preprocessing.coach_context_zones import build_time_in_zone_distribution
 ZONE_RANGE = range(1, 6)
 ACTIVE_RUNNING_CADENCE_MIN = 120
 ZONE_NAMES = {
@@ -293,89 +294,27 @@ def _build_hr_zone_distribution(
     sessions: Sequence[CoachSession],
     processed_by_id: Dict[str, Dict[str, Any]],
 ) -> HrZoneDistribution:
-    minutes_by_zone: Dict[int, float] = {zone: 0.0 for zone in ZONE_RANGE}
-    for session in sessions:
-        processed = processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
-        for zone in ZONE_RANGE:
-            zone_seconds = _safe_float(
-                _get_any(
-                    processed,
-                    f"advanced_metrics.hr_zones.hr_zone_{zone}",
-                    f"advanced_metrics.hr_zones.hr_zone_{zone}",
-                )
-            )
-            minutes_by_zone[zone] += (zone_seconds or 0.0) / 60
-
-    total_minutes = sum(minutes_by_zone.values())
-    percentages = {
-        zone: _round_or_none(minutes / total_minutes * 100, 1) if total_minutes > 0 else 0.0
-        for zone, minutes in minutes_by_zone.items()
-    }
-    if total_minutes > 0:
-        rounding_delta = _round_or_none(100.0 - sum(percentages.values()), 1)
-        if rounding_delta:
-            largest_zone = max(minutes_by_zone, key=minutes_by_zone.get)
-            percentages[largest_zone] = _round_or_none(percentages[largest_zone] + rounding_delta, 1) or 0.0
-
-    easy_pct = percentages[1] + percentages[2]
-    hard_pct = percentages[4] + percentages[5]
-    return {
-        "period_weeks": 4,
-        "zones": [
-            {
-                "zone": zone,
-                "name": ZONE_NAMES[zone],
-                "minutes": _round_or_none(minutes_by_zone[zone], 1) or 0.0,
-                "percentage": percentages[zone],
-            }
-            for zone in ZONE_RANGE
-        ],
-        "total_minutes": _round_or_none(total_minutes, 1) or 0.0,
-        "is_polarized": easy_pct >= 75 and hard_pct <= 20 if total_minutes > 0 else False,
-    }
+    return build_time_in_zone_distribution(
+        sessions,
+        processed_by_id,
+        metric_base="hr",
+        zone_names=ZONE_NAMES,
+        get_any=_get_any,
+        include_polarized=True,
+    )
 
 
 def _build_power_zone_distribution(
     sessions: Sequence[CoachSession],
     processed_by_id: Dict[str, Dict[str, Any]],
 ) -> Dict[str, Any]:
-    minutes_by_zone: Dict[int, float] = {zone: 0.0 for zone in ZONE_RANGE}
-    for session in sessions:
-        processed = processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
-        for zone in ZONE_RANGE:
-            zone_seconds = _safe_float(
-                _get_any(
-                    processed,
-                    f"advanced_metrics.power_zones.power_zone_{zone}",
-                    f"advanced_metrics.power_zones.power_zone_{zone}",
-                )
-            )
-            minutes_by_zone[zone] += (zone_seconds or 0.0) / 60
-
-    total_minutes = sum(minutes_by_zone.values())
-    percentages = {
-        zone: _round_or_none(minutes / total_minutes * 100, 1) if total_minutes > 0 else 0.0
-        for zone, minutes in minutes_by_zone.items()
-    }
-    if total_minutes > 0:
-        rounding_delta = _round_or_none(100.0 - sum(percentages.values()), 1)
-        if rounding_delta:
-            largest_zone = max(minutes_by_zone, key=minutes_by_zone.get)
-            percentages[largest_zone] = _round_or_none(percentages[largest_zone] + rounding_delta, 1) or 0.0
-
-    return {
-        "period_weeks": 4,
-        "zones": [
-            {
-                "zone": zone,
-                "name": POWER_ZONE_NAMES[zone],
-                "minutes": _round_or_none(minutes_by_zone[zone], 1) or 0.0,
-                "percentage": percentages[zone],
-            }
-            for zone in ZONE_RANGE
-        ],
-        "total_minutes": _round_or_none(total_minutes, 1) or 0.0,
-    }
+    return build_time_in_zone_distribution(
+        sessions,
+        processed_by_id,
+        metric_base="power",
+        zone_names=POWER_ZONE_NAMES,
+        get_any=_get_any,
+    )
 
 
 def _resolve_resting_heart_rate(

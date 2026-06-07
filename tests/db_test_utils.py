@@ -1,4 +1,3 @@
-import os
 import uuid
 from collections.abc import Generator
 
@@ -6,45 +5,25 @@ import pytest
 import sqlalchemy
 from dotenv import load_dotenv
 from sqlalchemy import text
-from sqlalchemy.engine import URL, make_url
+from sqlalchemy.engine import URL
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from src.db.base import Base
 from src.db import models  # noqa: F401
+from tests.db_settings import test_database_refusal_reason, test_database_url
 
 load_dotenv()
 
 
 def _test_database_url() -> str | URL | None:
-    host = os.getenv("TEST_POSTGRES_HOST")
-    user = os.getenv("TEST_POSTGRES_USER")
-    database = os.getenv("TEST_POSTGRES_DB")
-    if host and user and database:
-        return URL.create(
-            "postgresql+psycopg",
-            username=user,
-            password=os.getenv("TEST_POSTGRES_PASSWORD"),
-            host=host,
-            port=int(os.getenv("TEST_POSTGRES_PORT", "5432")),
-            database=database,
-        )
-
-    database_url = os.getenv("TEST_DATABASE_URL")
-    if database_url:
-        return database_url
-
-    return None
+    return test_database_url()
 
 
 def _validate_test_database_url(database_url: str | URL) -> None:
-    configured_database_url = os.getenv("DATABASE_URL")
-    if configured_database_url and make_url(database_url) == make_url(configured_database_url):
-        pytest.skip("TEST_DATABASE_URL matches DATABASE_URL; refusing to run DB tests.")
-
-    database_name = make_url(database_url).database or ""
-    if "test" not in database_name.lower():
-        pytest.skip("TEST_DATABASE_URL database name must contain 'test'.")
+    refusal_reason = test_database_refusal_reason(database_url)
+    if refusal_reason:
+        pytest.skip(refusal_reason)
 
 
 def isolated_db_session() -> Generator[Session, None, None]:

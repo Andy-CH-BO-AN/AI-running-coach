@@ -6,7 +6,14 @@ from typing import List, Dict, Any, Optional
 from garminconnect import Garmin
 from dotenv import load_dotenv
 from datetime import date as date_cls, datetime, timedelta
-from src.preprocessing.data_processor import calculate_pace, should_skip_short_cycling
+from src.ingestion.garmin_parsers import (
+    extract_zone_seconds,
+    find_nested_value,
+    format_garmin_value,
+    get_activity_value,
+)
+from src.preprocessing.activity_policy import should_skip_short_cycling
+from src.preprocessing.data_processor import calculate_pace
 
 load_dotenv()
 
@@ -32,14 +39,9 @@ GARMIN_PR_MAPS = {
     }
 }
 TARGET_ACTIVITY_TYPES = {'running': 'running', 'lap_swimming': 'swimming', 'cycling': 'cycling'}
-RUNNING_PR_DISTANCES_KM = {
-    1: 1.0,
-    2: 1.60934,
-    3: 5.0,
-    4: 10.0,
-    5: 21.0975,
-    6: 42.195,
-}
+_find_nested_value = find_nested_value
+_get_activity_value = get_activity_value
+_extract_zone_seconds = extract_zone_seconds
 
 def safe_api_call(func, *args, **kwargs) -> Any:
     """具備指數退避邏輯的 API 呼叫包裝器"""
@@ -143,131 +145,6 @@ def get_user_biometric_data(client):
             elif tid in GARMIN_PR_MAPS["MISC"]:
                 data[GARMIN_PR_MAPS["MISC"][tid]] = display
     return data
-
-
-def format_garmin_value(value, typeId):
-    """
-    客製化格式化函數：
-    1. 自動計算配速 (/km)
-    2. 自動修正單位：功率 (mW -> W), 距離 (m -> km)
-    3. 修正 7, 8 號紀錄的誤植問題
-    """
-    # --- 1. 跑步與一般時間類 (1km, 1mile, 5km, 10km, 半馬, 全馬) ---
-    if typeId in RUNNING_PR_DISTANCES_KM:
-        total_seconds = round(value)
-        minutes = total_seconds // 60
-        seconds = total_seconds % 60
-        formatted_value = f"{minutes}:{seconds:02d}"
-
-        distance_km = RUNNING_PR_DISTANCES_KM.get(typeId)
-        pace = ""
-        if distance_km:
-            p_sec = total_seconds / distance_km
-            pace = f"{int(p_sec // 60)}:{int(p_sec % 60):02d} /km"
-
-        return formatted_value, pace
-
-    # --- 2. 距離類 (最長跑步, 最長騎乘) ---
-    if typeId in [7, 8]:
-        # 你的數據顯示 7 號是 21334.5 (m)，所以要除以 1000
-        value_km = value / 1000
-        return f"{value_km:.2f} km", ""
-
-    # --- 3. 單月最多步數 ---
-    if typeId == 14:
-        return f"{int(value):,} 步", ""
-
-    # --- 4. 游泳類 (100m, 400m, 750m) ---
-    if typeId in [18, 20, 22]:
-        total_seconds = round(value)
-        return f"{total_seconds // 60}:{total_seconds % 60:02d}", ""
-
-    # --- 4b. 游泳最長距離 (typeId 17, 單位 m) ---
-    if typeId == 17:
-        return f"{int(value)} m", ""
-
-    # --- 5. 爬升類 ---
-    if typeId == 13:
-        if value > 5000:
-            val_m = int(value // 1000)
-        else:
-            val_m = int(value)
-        return f"{val_m} m", ""
-
-    # --- 6. 連續目標天數（整數顯示）---
-    if typeId == 15:
-        return f"{int(value)} 天", ""
-
-    # 預設直接回傳（整數就不顯示小數）
-    if value == int(value):
-        return str(int(value)), ""
-    return str(round(value, 2)), ""
-
-def _find_nested_value(data: Any, target_key: str) -> Any:
-    """Recursively search dict/list payloads and return the first non-None match."""
-    if isinstance(data, dict):
-        if target_key in data and data[target_key] is not None:
-            return data[target_key]
-
-        for value in data.values():
-            found = _find_nested_value(value, target_key)
-            if found is not None:
-                return found
-
-    elif isinstance(data, list):
-        for item in data:
-            found = _find_nested_value(item, target_key)
-            if found is not None:
-                return found
-
-    return None
-
-def _get_activity_value(source: Any, *keys: str) -> Any:
-    """Fetch the first matching value from a Garmin activity payload."""
-    for key in keys:
-        value = _find_nested_value(source, key)
-        if value is not None:
-            return value
-    return None
-
-def _extract_zone_seconds(zone_payload: Any, zone_base: str) -> Dict[str, Any]:
-    """
-    Normalize Garmin time-in-zone payloads.
-
-    Expected API payload shape:
-      [
-        {"zoneNumber": 1, "secsInZone": 273.906, ...},
-        ...
-      ]
-
-    Returns both the internal normalized keys and Garmin-compatible keys.
-    """
-    zone_data = {f'{zone_base}_zone_{i}': None for i in range(1, 6)}
-    zone_data.update({f'{zone_base}TimeInZone_{i}': None for i in range(1, 6)})
-
-    if isinstance(zone_payload, list):
-        for entry in zone_payload:
-            if not isinstance(entry, dict):
-                continue
-            zone_number = entry.get('zoneNumber')
-            secs_in_zone = entry.get('secsInZone')
-            if zone_number in range(1, 6):
-                zone_data[f'{zone_base}_zone_{zone_number}'] = secs_in_zone
-                zone_data[f'{zone_base}TimeInZone_{zone_number}'] = secs_in_zone
-        return zone_data
-
-    if isinstance(zone_payload, dict):
-        for i in range(1, 6):
-            zone_data[f'{zone_base}_zone_{i}'] = _get_activity_value(
-                zone_payload,
-                f'{zone_base}TimeInZone_{i}',
-                f'{zone_base}_zone_{i}',
-                f'secsInZone_{i}',
-                f'zone_{i}',
-            )
-            zone_data[f'{zone_base}TimeInZone_{i}'] = zone_data[f'{zone_base}_zone_{i}']
-
-    return zone_data
 
 def _log_activity_payload_debug(activity_id: int, activity_type: str, sources: Dict[str, Any]) -> None:
     """Print payload shapes and zone candidates when debug mode is enabled."""

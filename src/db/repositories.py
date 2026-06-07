@@ -20,13 +20,13 @@ from src.db.models import (
     utc_now,
 )
 from src.db.mappers import (
-    _activity_values,
-    _first_present,
-    _int,
-    _jsonable,
-    _num,
-    _split_values,
-    _user_profile_snapshot_values,
+    activity_values,
+    first_present,
+    int_or_none,
+    jsonable,
+    num,
+    split_values,
+    user_profile_snapshot_values,
 )
 
 
@@ -76,7 +76,7 @@ def insert_user_profile_snapshot(
     captured_at: datetime,
     source_file: str | None = None,
 ) -> UserProfileSnapshot:
-    values = _user_profile_snapshot_values(
+    values = user_profile_snapshot_values(
         user_id=user_id,
         profile_data=profile_data,
         captured_at=captured_at,
@@ -159,7 +159,7 @@ def get_recent_max_heart_rate(
             Activity.activity_date <= reference_date,
         )
     )
-    return _num(max(_num(activity_value) or 0, _num(split_value) or 0)) or None
+    return num(max(num(activity_value) or 0, num(split_value) or 0)) or None
 
 
 def upsert_activity(
@@ -168,7 +168,7 @@ def upsert_activity(
     activity_data: dict[str, Any],
     source_file: str | None = None,
 ) -> Activity:
-    values = _activity_values(user_id=user_id, activity_data=activity_data, source_file=source_file)
+    values = activity_values(user_id=user_id, activity_data=activity_data, source_file=source_file)
     stmt = pg_insert(Activity).values(**values)
     stmt = stmt.on_conflict_do_update(
         constraint="uq_activities_garmin_activity_id",
@@ -195,7 +195,7 @@ def upsert_activity_splits(
     for split in splits or []:
         if split.get("split_index") is None:
             continue
-        values = _split_values(activity_id, split, activity_type=activity_type)
+        values = split_values(activity_id, split, activity_type=activity_type)
         stmt = pg_insert(ActivitySplit).values(**values)
         stmt = stmt.on_conflict_do_update(
             constraint="uq_activity_splits_activity_id_split_index",
@@ -220,13 +220,13 @@ def upsert_swimming_lengths(
         values = {
             "activity_split_id": activity_split_id,
             "length_index": int(length_index),
-            "distance_m": _num(_first_present(length.get("distance"), length.get("distance_m"))),
-            "duration_sec": _num(_first_present(length.get("duration"), length.get("duration_sec"))),
+            "distance_m": num(first_present(length.get("distance"), length.get("distance_m"))),
+            "duration_sec": num(first_present(length.get("duration"), length.get("duration_sec"))),
             "swim_stroke": length.get("swim_stroke"),
-            "strokes": _int(length.get("strokes")),
-            "swolf": _num(length.get("swolf")),
-            "avg_hr": _num(length.get("avg_hr")),
-            "raw_json": _jsonable(length),
+            "strokes": int_or_none(length.get("strokes")),
+            "swolf": num(length.get("swolf")),
+            "avg_hr": num(length.get("avg_hr")),
+            "raw_json": jsonable(length),
             "updated_at": utc_now(),
         }
         stmt = pg_insert(SwimmingLength).values(**values)
@@ -254,7 +254,7 @@ def save_activity_features(
         "feature_version": feature_version,
         "algorithm_version": algorithm_version,
         "computed_at": utc_now(),
-        "features": _jsonable(features),
+        "features": jsonable(features),
     }
     stmt = pg_insert(ActivityFeature).values(**values)
     stmt = stmt.on_conflict_do_update(
@@ -287,7 +287,7 @@ def save_weekly_summary(
         "week_end": week_end,
         "summary_version": summary_version,
         "computed_at": utc_now(),
-        "summary_json": _jsonable(summary_json),
+        "summary_json": jsonable(summary_json),
         **{key: metrics.get(key) for key in _weekly_metric_keys()},
     }
     stmt = pg_insert(WeeklySummary).values(**values)
@@ -345,8 +345,8 @@ def save_ai_report(
         model_name=model_name,
         prompt_version=prompt_version,
         feature_version=feature_version,
-        input_json=_jsonable(input_json),
-        report_json=_jsonable(report_json) if report_json is not None else None,
+        input_json=jsonable(input_json),
+        report_json=jsonable(report_json) if report_json is not None else None,
         report_text=report_text,
         confidence=confidence,
         output_path=output_path,

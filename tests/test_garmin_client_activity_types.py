@@ -3,8 +3,6 @@ import sys
 import types
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
 garminconnect_stub = types.ModuleType("garminconnect")
 garminconnect_stub.Garmin = object
 sys.modules.setdefault("garminconnect", garminconnect_stub)
@@ -19,7 +17,7 @@ except ImportError:
 from datetime import date
 from unittest.mock import patch
 
-from ingestion.garmin_client import TARGET_ACTIVITY_TYPES, format_garmin_value, get_garmin_activities, get_user_biometric_data
+from src.ingestion.garmin_client import TARGET_ACTIVITY_TYPES, format_garmin_value, get_garmin_activities, get_user_biometric_data
 
 
 class GarminClientActivityTypeTests(unittest.TestCase):
@@ -106,7 +104,7 @@ class GarminClientActivityTypeTests(unittest.TestCase):
                 return []
 
         with patch.dict(os.environ, {"GARMIN_ACCOUNT": "user@example.com", "GARMIN_PASSWORD": "secret"}), patch(
-            "ingestion.garmin_client.Garmin", FakeGarminClient
+            "src.ingestion.garmin_client.Garmin", FakeGarminClient
         ):
             payload = get_garmin_activities(n=999, since_date=date(2026, 5, 10))
 
@@ -168,7 +166,7 @@ class GarminClientActivityTypeTests(unittest.TestCase):
                 return []
 
         with patch.dict(os.environ, {"GARMIN_ACCOUNT": "user@example.com", "GARMIN_PASSWORD": "secret"}), patch(
-            "ingestion.garmin_client.Garmin", FakeGarminClient
+            "src.ingestion.garmin_client.Garmin", FakeGarminClient
         ):
             payload = get_garmin_activities(n=2)
 
@@ -221,7 +219,7 @@ class GarminClientActivityTypeTests(unittest.TestCase):
                 return []
 
         with patch.dict(os.environ, {"GARMIN_ACCOUNT": "user@example.com", "GARMIN_PASSWORD": "secret"}), patch(
-            "ingestion.garmin_client.Garmin", FakeGarminClient
+            "src.ingestion.garmin_client.Garmin", FakeGarminClient
         ):
             payload = get_garmin_activities(n=1, fallback_max_heart_rate=190)
 
@@ -249,7 +247,7 @@ class GarminClientActivityTypeTests(unittest.TestCase):
                 raise AssertionError("get_activities should not be called when n=0")
 
         with patch.dict(os.environ, {"GARMIN_ACCOUNT": "user@example.com", "GARMIN_PASSWORD": "secret"}), patch(
-            "ingestion.garmin_client.Garmin", FakeGarminClient
+            "src.ingestion.garmin_client.Garmin", FakeGarminClient
         ):
             payload = get_garmin_activities(n=0)
 

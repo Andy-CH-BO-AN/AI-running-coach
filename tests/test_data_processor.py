@@ -1,10 +1,6 @@
-import os
-import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-from preprocessing.data_processor import (
+from src.preprocessing.data_processor import (
     calculate_cycling_efficiency,
     calculate_swimming_efficiency,
     format_pace,

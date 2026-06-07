@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.db.models import Activity
-from src.preprocessing.data_processor import should_skip_short_cycling
+from src.preprocessing.activity_policy import should_skip_short_cycling
 from src.db.repositories import (
     insert_user_profile_snapshot,
     save_activity_features,

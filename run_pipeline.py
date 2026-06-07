@@ -1,12 +1,7 @@
-import sys
-import os
 import argparse
 
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-
-from pipeline.goal_prompt import build_goal_prompt_overrides
-from pipeline.runner import run_pipeline
+from src.pipeline.goal_prompt import build_goal_prompt_overrides
+from src.pipeline.runner import run_pipeline
 
 
 def parse_args() -> argparse.Namespace:

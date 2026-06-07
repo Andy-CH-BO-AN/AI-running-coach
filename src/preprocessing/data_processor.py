@@ -1,9 +1,14 @@
 import logging
 from typing import Any, Dict, List, Optional
 
+from src.preprocessing.activity_policy import (
+    SHORT_CYCLING_MAX_DISTANCE_KM,
+    numeric_distance_km,
+    should_skip_short_cycling,
+)
+
 logger = logging.getLogger(__name__)
 
-SHORT_CYCLING_MAX_DISTANCE_KM = 3.0
 ZONE_RANGE = range(1, 6)
 
 
@@ -253,21 +258,7 @@ def _build_activity_type_details(activity_type: str, raw_data: Dict[str, Any]) -
 
 
 def _numeric_distance_km(distance_km: Any) -> Optional[float]:
-    if distance_km is None:
-        return None
-    try:
-        return float(distance_km)
-    except (TypeError, ValueError):
-        return None
-
-
-def should_skip_short_cycling(activity_type: str | None, distance_km: Any) -> bool:
-    numeric_distance = _numeric_distance_km(distance_km)
-    return (
-        activity_type == "cycling"
-        and numeric_distance is not None
-        and numeric_distance <= SHORT_CYCLING_MAX_DISTANCE_KM
-    )
+    return numeric_distance_km(distance_km)
 
 
 def _should_skip_activity(item: Dict[str, Any]) -> bool:

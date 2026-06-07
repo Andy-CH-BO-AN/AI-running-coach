@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """Manual smoke test for Garmin client."""
 
-import os
 import sys
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT_DIR / "src"))
+sys.path.insert(0, str(ROOT_DIR))
 
-from ingestion.garmin_client import get_garmin_activities
+from src.ingestion.garmin_client import get_garmin_activities
 
 
 def main():

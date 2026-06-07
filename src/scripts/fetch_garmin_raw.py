@@ -1,17 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from src.db.mirror import sync_shadow_database, validate_shadow_parity
-from src.db.repositories import get_or_create_default_user
-from src.db.session import SessionLocal
-from src.services.db_importer import import_artifact_bundle
-
-RAW_DATA_DIR = Path("data/raw")
+from src.services.artifacts import RAW_DATA_DIR, raw_artifact_paths, write_json
+from src.services.garmin_import_service import import_fetched_raw_artifacts
 
 
 def _build_timestamp() -> str:
@@ -19,9 +14,7 @@ def _build_timestamp() -> str:
 
 
 def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file_obj:
-        json.dump(payload, file_obj, ensure_ascii=False, indent=4)
+    write_json(path, payload)
 
 
 def _get_garmin_activities(
@@ -51,8 +44,7 @@ def fetch_garmin_raw_files(
         raise RuntimeError("No Garmin activities found. Check credentials, Garmin login, or activity filters.")
 
     stamp = timestamp or _build_timestamp()
-    raw_path = output_dir / f"garmin_raw_{stamp}.json"
-    user_path = output_dir / f"garmin_user_{stamp}.json"
+    user_path, raw_path = raw_artifact_paths(stamp, output_dir=output_dir)
 
     print(f"Writing {len(raw_activities)} activities to {raw_path}", flush=True)
     _write_json(raw_path, raw_activities)
@@ -63,25 +55,7 @@ def fetch_garmin_raw_files(
 
 def import_raw_files(user_path: Path, raw_path: Path) -> dict[str, Any]:
     print("Importing fetched raw files into PostgreSQL", flush=True)
-    with SessionLocal() as session:
-        user = get_or_create_default_user(session)
-        results = import_artifact_bundle(
-            session,
-            user.id,
-            user_files=[user_path],
-            raw_file=raw_path,
-        )
-        session.commit()
-
-    shadow_import = sync_shadow_database()
-    if shadow_import is not None:
-        results["shadow_import"] = shadow_import
-        results["shadow_parity"] = validate_shadow_parity()
-
-    user_snapshot_ids = results.pop("user_snapshot_ids", [])
-    if user_snapshot_ids:
-        results["user_snapshot_id"] = user_snapshot_ids[0]
-    return results
+    return import_fetched_raw_artifacts(user_path=user_path, raw_path=raw_path)
 
 
 def parse_args() -> argparse.Namespace:
