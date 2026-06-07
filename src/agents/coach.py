@@ -1,3 +1,4 @@
+from copy import deepcopy
 import json
 import os
 import re
@@ -91,16 +92,49 @@ def _build_context(
     sections.append(f"### User Biometric Data & PRs:\n{user_context}")
 
     if deterministic_context:
-        context_json = json.dumps(deterministic_context, ensure_ascii=False, indent=2)
+        context_json = json.dumps(
+            _sanitize_deterministic_context_for_prompt(deterministic_context),
+            ensure_ascii=False,
+            indent=2,
+        )
         sections.append(
             "### Deterministic Coach Context (code-calculated source of truth):\n"
             f"{context_json}"
         )
 
-    data_context = json.dumps(data, ensure_ascii=False, indent=2)
+    data_context = json.dumps(_sanitize_processed_activity_data_for_prompt(data), ensure_ascii=False, indent=2)
     sections.append(f"### Processed Activity Data Reference:\n{data_context}")
 
     return "\n\n".join(sections)
+
+
+def _sanitize_deterministic_context_for_prompt(deterministic_context: Dict[str, Any]) -> Dict[str, Any]:
+    sanitized = deepcopy(deterministic_context)
+    for week in sanitized.get("weekly_analysis") or []:
+        if not isinstance(week, dict):
+            continue
+        session_counts = week.get("session_counts")
+        if isinstance(session_counts, dict):
+            session_counts.pop("by_type", None)
+        for session in week.get("sessions") or []:
+            if isinstance(session, dict):
+                session.pop("type", None)
+    return sanitized
+
+
+def _sanitize_processed_activity_data_for_prompt(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    sanitized: List[Dict[str, Any]] = []
+    for record in data or []:
+        if not isinstance(record, dict):
+            sanitized.append(record)
+            continue
+        copy = deepcopy(record)
+        activity_type = copy.get("type")
+        if activity_type in {"running", "cycling", "swimming", "lap_swimming"}:
+            copy["source_activity_type"] = activity_type
+            copy.pop("type", None)
+        sanitized.append(copy)
+    return sanitized
 
 
 def _is_retryable_model_error(exc: Exception) -> bool:

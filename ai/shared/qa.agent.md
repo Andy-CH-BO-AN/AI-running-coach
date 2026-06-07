@@ -94,6 +94,7 @@ Run a regression scope that matches the change risk.
 - Use Chrome DevTools MCP for dashboard QA when available. Open
   `http://127.0.0.1:8765/`, inspect accessibility snapshots, console errors,
   network failures, desktop/mobile viewports, key interactions, and screenshots.
+- QA port is fixed to `8765`. Do not reuse the UI/UX review port `8766`.
 - Keep Chrome MCP on the isolated/default automation profile. Do not inspect
   private user browser sessions unless explicitly requested.
 - If Chrome MCP is unavailable, use the headless Chrome commands in

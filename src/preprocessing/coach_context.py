@@ -263,6 +263,9 @@ def _build_session(
 
     session_type = _session_type(processed, raw, max_hr)
     segments = _build_segments(processed, session_type)
+    aerobic_te = _training_effect(processed, "aerobic")
+    anaerobic_te = _training_effect(processed, "anaerobic")
+    environment = _build_environment(processed, raw)
 
     return {
         "activity_id": activity_id,
@@ -274,10 +277,10 @@ def _build_session(
         "training_load": load if load is not None else 0,
         "avg_hr": avg_hr,
         "avg_pace": avg_pace,
-        "training_effect_aerobic": _training_effect(processed, "aerobic"),
-        "training_effect_anaerobic": _training_effect(processed, "anaerobic"),
+        "training_effect_aerobic": aerobic_te,
+        "training_effect_anaerobic": anaerobic_te,
         "segments": segments,
-        "environment": _build_environment(processed, raw),
+        "environment": environment,
         "coaching_note": None,
         "data_quality": {
             "status": "partial" if missing_fields else "complete",

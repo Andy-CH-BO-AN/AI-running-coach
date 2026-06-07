@@ -80,7 +80,25 @@ class CoachTests(unittest.TestCase):
                 data=[{"activity_id": 1}],
                 user_data={"max_heart_rate": 190},
                 goal_path=str(goal_path),
-                deterministic_context={"meta": {"today": "2026-05-10"}},
+                deterministic_context={
+                    "meta": {"today": "2026-05-10"},
+                    "weekly_analysis": [
+                        {
+                            "session_counts": {
+                                "total": 1,
+                                "by_type": {"easy": 1},
+                                "by_source_activity_type": {"running": 1},
+                            },
+                            "sessions": [
+                                {
+                                    "activity_id": 1,
+                                    "type": "easy",
+                                    "source_activity_type": "running",
+                                }
+                            ],
+                        }
+                    ],
+                },
             )
 
         self.assertIn("sub-20 5k", context)
@@ -88,6 +106,9 @@ class CoachTests(unittest.TestCase):
         self.assertIn("Deterministic Coach Context", context)
         self.assertIn('"today": "2026-05-10"', context)
         self.assertIn('"activity_id": 1', context)
+        self.assertIn('"source_activity_type": "running"', context)
+        self.assertNotIn('"type": "easy"', context)
+        self.assertNotIn('"by_type"', context)
 
     def test_coach_normalizes_json_wrapped_in_markdown_fences(self):
         generate_content = Mock(
@@ -111,12 +132,44 @@ class CoachTests(unittest.TestCase):
         ):
             coach.coach(
                 data=[{"activity_id": 1}],
-                deterministic_context={"meta": {"today": "2026-05-10"}},
+                deterministic_context={
+                    "meta": {"today": "2026-05-10"},
+                    "weekly_analysis": [
+                        {
+                            "session_counts": {
+                                "total": 1,
+                                "by_type": {"interval": 1},
+                                "by_source_activity_type": {"running": 1},
+                            },
+                            "sessions": [
+                                {
+                                    "activity_id": 1,
+                                    "type": "interval",
+                                    "source_activity_type": "running",
+                                }
+                            ],
+                        }
+                    ],
+                },
             )
 
         prompt = generate_content.call_args.kwargs["contents"]
         self.assertIn("Deterministic Coach Context", prompt)
         self.assertIn('"today": "2026-05-10"', prompt)
+        self.assertIn('"source_activity_type": "running"', prompt)
+        self.assertNotIn('"type": "interval"', prompt)
+        self.assertNotIn('"by_type"', prompt)
+
+    def test_build_context_sanitizes_processed_activity_type_for_prompt(self):
+        context = coach._build_context(
+            data=[{"activity_id": 1, "type": "running", "distance_km": 5.0}],
+            user_data=None,
+            goal_path=None,
+            deterministic_context=None,
+        )
+
+        self.assertIn('"source_activity_type": "running"', context)
+        self.assertNotIn('"type": "running"', context)
 
     def test_run_local_analysis_reads_user_json_and_writes_report(self):
         with tempfile.TemporaryDirectory() as temp_dir:

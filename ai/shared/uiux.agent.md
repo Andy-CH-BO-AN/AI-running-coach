@@ -128,7 +128,8 @@
 ## Dashboard 審查方式
 
 - 前端變更後，優先用瀏覽器驗證實際畫面。
-- 若 Chrome DevTools MCP 可用，優先用它開啟 `http://127.0.0.1:8765/`，檢查
+- UI/UX review port is fixed to `8766`。不要和 QA 共用 `8765`。
+- 若 Chrome DevTools MCP 可用，優先用它開啟 `http://127.0.0.1:8766/`，檢查
   DOM/accessibility snapshot、console messages、network requests、
   desktop/mobile viewport 與 screenshot。
 - Chrome MCP 應使用隔離或 automation profile；不要檢查使用者私人 Chrome
@@ -145,7 +146,7 @@
   --virtual-time-budget=5000 \
   --window-size=1440,4200 \
   --screenshot=tests/reports/dashboard_desktop_YYYYMMDD.png \
-  http://127.0.0.1:8765/
+  http://127.0.0.1:8766/
 ```
 
 - Mobile 範例：
@@ -157,7 +158,7 @@
   --virtual-time-budget=5000 \
   --window-size=390,5200 \
   --screenshot=tests/reports/dashboard_mobile_YYYYMMDD.png \
-  http://127.0.0.1:8765/
+  http://127.0.0.1:8766/
 ```
 
 - QA 檢查重點：目標區塊有渲染、文字不溢出、不被截斷、不遮蓋後續區塊、
