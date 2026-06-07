@@ -44,6 +44,7 @@ Notes:
 | **Cursor** | `.cursor/` | Rules, subagents, project skills |
 | **Codex** | `.codex/` | `copilot-instructions.md`, agents, skills |
 | **GitHub Copilot** | `.github/` | `copilot-instructions.md`, agents, skills |
+| **Antigravity** | `.agents/` | skills, agents |
 | **Gemini** | `GEMINI.md` | Root pointer + project context |
 | **Claude Code** | `CLAUDE.md` | Root pointer |
 | **Windsurf** | `.windsurfrules` | Root pointer |
