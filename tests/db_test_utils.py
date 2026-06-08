@@ -5,33 +5,18 @@ import pytest
 import sqlalchemy
 from dotenv import load_dotenv
 from sqlalchemy import text
-from sqlalchemy.engine import URL
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from src.db.base import Base
 from src.db import models  # noqa: F401
-from tests.db_settings import test_database_refusal_reason, test_database_url
+from tests.db_settings import require_safe_test_database_url_or_skip
 
 load_dotenv()
 
 
-def _test_database_url() -> str | URL | None:
-    return test_database_url()
-
-
-def _validate_test_database_url(database_url: str | URL) -> None:
-    refusal_reason = test_database_refusal_reason(database_url)
-    if refusal_reason:
-        pytest.skip(refusal_reason)
-
-
 def isolated_db_session() -> Generator[Session, None, None]:
-    database_url = _test_database_url()
-    if not database_url:
-        pytest.skip("Set TEST_DATABASE_URL or TEST_POSTGRES_* to run PostgreSQL DB tests.")
-
-    _validate_test_database_url(database_url)
+    database_url = require_safe_test_database_url_or_skip()
     engine = sqlalchemy.create_engine(database_url, future=True)
     schema_name = f"test_schema_{uuid.uuid4().hex}"
 

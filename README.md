@@ -366,6 +366,11 @@ DB tests 會拒絕 `TEST_DATABASE_URL` 等於 `DATABASE_URL` 或 database
 沒有 test database 或缺少 `TEST_DATABASE_URL` / `TEST_POSTGRES_*` 設定時，
 DB tests 會以環境缺失 skip；連到主 DB 或非 test DB 時，則屬安全防呆 skip。
 
+這兩條路徑（pytest DB fixtures 與 `tests/scripts/ensure_test_database.py`）
+共用同一份拒絕規則，集中在 `tests/db_settings.py` 的
+`require_safe_test_database_url_or_skip()` 與 `test_database_refusal_reason()`。
+任何改變 safety 行為的修改，只需改這一處。
+
 ## 專案結構
 
 | 路徑 | 角色 |
@@ -405,8 +410,9 @@ builder、runner payload provider、mapper/repository boundary 都已從大型 o
 
 下一階段建議按小批次繼續拆，不要一次重構整個 repository：
 
-1. Test DB guard：集中 `TEST_DATABASE_URL` safety validation，保留拒絕主 DB 與
-   非 test DB 的防呆。
+1. ~~Test DB guard：集中 `TEST_DATABASE_URL` safety validation，保留拒絕主 DB 與
+   非 test DB 的防呆。~~ ✅ 已完成（`tests/db_settings.py` 集中 guard，
+   `ensure_test_database.py` 與 pytest fixtures 共用同一套拒絕規則）
 
 每批都應先跑對應 targeted tests，再交 reviewer 檢查 changed code；QA 只補測試缺口
 與 full regression，避免 reviewer / QA 重複跑同一組測試。
