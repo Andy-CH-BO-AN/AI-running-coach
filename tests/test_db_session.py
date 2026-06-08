@@ -117,3 +117,125 @@ def test_get_database_mode_rejects_unknown_value(monkeypatch):
 
     with pytest.raises(ValueError, match="Unsupported DATABASE_MODE"):
         module.get_database_mode()
+
+
+# ---------------------------------------------------------------------------
+# db_settings safety-guard unit tests
+# These do not require a real database connection.
+# ---------------------------------------------------------------------------
+
+import importlib as _importlib
+
+
+def _clear_test_db_env(monkeypatch):
+    for key in (
+        "TEST_DATABASE_URL",
+        "TEST_POSTGRES_HOST",
+        "TEST_POSTGRES_USER",
+        "TEST_POSTGRES_PASSWORD",
+        "TEST_POSTGRES_DB",
+        "TEST_POSTGRES_PORT",
+        "DATABASE_URL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_resolve_test_database_url_returns_none_when_env_missing(monkeypatch):
+    _clear_test_db_env(monkeypatch)
+    import tests.db_settings as _dbs
+    _importlib.reload(_dbs)
+    assert _dbs.resolve_test_database_url() is None
+
+
+def test_resolve_test_database_url_uses_test_database_url_env(monkeypatch):
+    _clear_test_db_env(monkeypatch)
+    monkeypatch.setenv("TEST_DATABASE_URL", "postgresql+psycopg://u:p@localhost:5432/myapp_test")
+    import tests.db_settings as _dbs
+    _importlib.reload(_dbs)
+    assert _dbs.resolve_test_database_url() == "postgresql+psycopg://u:p@localhost:5432/myapp_test"
+
+
+def test_resolve_test_database_url_builds_from_postgres_env(monkeypatch):
+    _clear_test_db_env(monkeypatch)
+    monkeypatch.setenv("TEST_POSTGRES_HOST", "testhost")
+    monkeypatch.setenv("TEST_POSTGRES_USER", "testuser")
+    monkeypatch.setenv("TEST_POSTGRES_PASSWORD", "testpass")
+    monkeypatch.setenv("TEST_POSTGRES_DB", "ai_running_coach_test")
+    import tests.db_settings as _dbs
+    _importlib.reload(_dbs)
+    result = _dbs.resolve_test_database_url()
+    assert result is not None
+    url = make_url(result)
+    assert url.host == "testhost"
+    assert url.username == "testuser"
+    assert url.database == "ai_running_coach_test"
+    assert url.port == 5432
+
+
+def test_test_database_refusal_reason_rejects_when_matches_database_url(monkeypatch):
+    prod = "postgresql+psycopg://u:p@localhost:5432/ai_running_coach"
+    monkeypatch.setenv("DATABASE_URL", prod)
+    import tests.db_settings as _dbs
+    _importlib.reload(_dbs)
+    reason = _dbs.test_database_refusal_reason(prod)
+    assert reason is not None
+    assert "DATABASE_URL" in reason
+
+
+def test_test_database_refusal_reason_rejects_non_test_db_name(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    import tests.db_settings as _dbs
+    _importlib.reload(_dbs)
+    reason = _dbs.test_database_refusal_reason(
+        "postgresql+psycopg://u:p@localhost:5432/ai_running_coach"
+    )
+    assert reason is not None
+    assert "test" in reason.lower()
+
+
+def test_test_database_refusal_reason_allows_safe_test_url(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    import tests.db_settings as _dbs
+    _importlib.reload(_dbs)
+    reason = _dbs.test_database_refusal_reason(
+        "postgresql+psycopg://u:p@localhost:5432/ai_running_coach_test"
+    )
+    assert reason is None
+
+
+def test_require_safe_skips_when_env_missing(monkeypatch):
+    _clear_test_db_env(monkeypatch)
+    import tests.db_settings as _dbs
+    _importlib.reload(_dbs)
+    with pytest.raises(pytest.skip.Exception):
+        _dbs.require_safe_test_database_url_or_skip()
+
+
+def test_require_safe_skips_on_prod_url_match(monkeypatch):
+    _clear_test_db_env(monkeypatch)
+    prod = "postgresql+psycopg://u:p@localhost:5432/ai_running_coach"
+    monkeypatch.setenv("TEST_DATABASE_URL", prod)
+    monkeypatch.setenv("DATABASE_URL", prod)
+    import tests.db_settings as _dbs
+    _importlib.reload(_dbs)
+    with pytest.raises(pytest.skip.Exception):
+        _dbs.require_safe_test_database_url_or_skip()
+
+
+def test_require_safe_skips_on_non_test_db_name(monkeypatch):
+    _clear_test_db_env(monkeypatch)
+    monkeypatch.setenv("TEST_DATABASE_URL", "postgresql+psycopg://u:p@localhost:5432/ai_running_coach")
+    import tests.db_settings as _dbs
+    _importlib.reload(_dbs)
+    with pytest.raises(pytest.skip.Exception):
+        _dbs.require_safe_test_database_url_or_skip()
+
+
+def test_require_safe_returns_url_for_safe_target(monkeypatch):
+    _clear_test_db_env(monkeypatch)
+    safe = "postgresql+psycopg://u:p@localhost:5432/ai_running_coach_test"
+    monkeypatch.setenv("TEST_DATABASE_URL", safe)
+    import tests.db_settings as _dbs
+    _importlib.reload(_dbs)
+    result = _dbs.require_safe_test_database_url_or_skip()
+    assert result == safe

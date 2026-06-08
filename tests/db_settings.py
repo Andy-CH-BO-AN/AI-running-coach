@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import pytest
 from sqlalchemy.engine import URL, make_url
 
 
@@ -36,6 +37,32 @@ def test_database_refusal_reason(database_url: str | URL) -> str | None:
     if "test" not in database_name.lower():
         return "TEST_DATABASE_URL database name must contain 'test'."
     return None
+
+
+def resolve_test_database_url() -> str | URL | None:
+    """Public alias for test_database_url().
+
+    Returns the resolved test database URL from TEST_DATABASE_URL or
+    TEST_POSTGRES_* environment variables, or None when neither is set.
+    """
+    return test_database_url()
+
+
+def require_safe_test_database_url_or_skip() -> str | URL:
+    """Return the test database URL or call pytest.skip().
+
+    Skips the test when:
+    - TEST_DATABASE_URL and TEST_POSTGRES_* are both unset.
+    - The resolved URL matches DATABASE_URL (production DB guard).
+    - The resolved database name does not contain 'test'.
+    """
+    database_url = resolve_test_database_url()
+    if not database_url:
+        pytest.skip("Set TEST_DATABASE_URL or TEST_POSTGRES_* to run PostgreSQL DB tests.")
+    refusal_reason = test_database_refusal_reason(database_url)
+    if refusal_reason:
+        pytest.skip(refusal_reason)
+    return database_url
 
 
 def test_database_connection_settings() -> dict[str, Any]:

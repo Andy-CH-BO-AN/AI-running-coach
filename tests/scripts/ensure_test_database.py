@@ -27,10 +27,6 @@ def main() -> int:
         return 2
 
     database = str(settings.get("database") or "")
-    if "test" not in database.lower():
-        print("Refusing to create test database: target database name must contain 'test'.", file=sys.stderr)
-        return 2
-
     maintenance_db = os.getenv("TEST_POSTGRES_MAINTENANCE_DB") or os.getenv("POSTGRES_DB") or "postgres"
     with psycopg.connect(
         host=settings["host"],
