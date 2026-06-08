@@ -90,6 +90,31 @@ def _normalize_activity_id(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+def _nested_get(payload: dict[str, Any], path: Sequence[str]) -> Any:
+    current: Any = payload
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _get_any(payload: dict[str, Any], *paths: str) -> Any:
+    for path in paths:
+        if path in payload:
+            return payload[path]
+        value = _nested_get(payload, path.split("."))
+        if value is not None:
+            return value
+    return None
+
+
+def _stride_length_to_meters(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    return value / 100 if value > 10 else value
+
+
 def _format_pace_minutes(value: Any) -> Optional[str]:
     if isinstance(value, str):
         stripped = value.strip()
