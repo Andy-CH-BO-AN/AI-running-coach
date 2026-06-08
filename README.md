@@ -227,14 +227,24 @@ dashboard/
 
 ## 本機分析與 raw-only fetch
 
-如果想分析既有本機檔案、不重新抓 Garmin，可以使用
-`src/agents/coach.py` 裡的 `run_local_analysis`。`__main__` block
-內的檔名只是範例，使用前請改成你本機實際存在的 processed CSV 與
-user JSON。
+如果想分析既有本機 Garmin raw/user JSON、不重新抓 Garmin，也不跑 DB
+import/sync，可以使用支援的 local report CLI：
 
 ```bash
-python src/agents/coach.py
+.venv/bin/python -m src.scripts.generate_local_report \
+  --raw-file data/raw/garmin_raw_20260510.json \
+  --user-file data/raw/garmin_user_20260510.json \
+  --report-date 20260510
 ```
+
+這條路徑不會呼叫 Garmin API，也不會讀寫 PostgreSQL 或觸發 DB import/sync。
+它會在本機重新產生 processed CSV、deterministic coach context 與
+`output/ai_report_YYYYMMDD.json`。若報告已存在，預設會拒絕覆寫；加
+`--force` 才會覆寫既有 `ai_report_YYYYMMDD.json`。`--activity-limit`
+控制送進分析的 raw activities 數量，預設是 75。
+
+注意：這仍會呼叫 Gemini/Vertex LLM。送出的 prompt 會包含處理後活動資料、
+deterministic context，以及完整 user JSON payload。
 
 如果想先抓大量 raw Garmin 檔案、不跑 preprocessing 與 AI coach：
 
@@ -251,13 +261,6 @@ python -m src.scripts.fetch_garmin_raw --limit 999 --import-db
 Garmin login API 很容易先顯示兩次 `429` rate limit 訊息，之後才繼續
 做事。看到 `429` 後請先等 3-8 分鐘再判斷是否真的卡住，避免一直重跑
 造成更嚴格限流。
-
-如果你已經有當次的 `processed_YYYYMMDD.csv`、
-`coach_context_YYYYMMDD.json` 與 `garmin_user_YYYYMMDD.json`，也可以只重跑
-LLM 分析，不必重新抓 Garmin。做法是直接呼叫
-`src.pipeline.runner._generate_coach_report(...)`，把現成 processed data、
-deterministic context 與 user JSON 再送一次模型，另存成新的
-`output/ai_report_YYYYMMDD*.json` 供 dashboard 比對。
 
 ## 進階：PostgreSQL（選用）
 
