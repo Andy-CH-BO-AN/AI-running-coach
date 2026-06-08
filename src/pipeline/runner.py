@@ -1,9 +1,7 @@
-import json
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -20,6 +18,13 @@ from src.preprocessing.coach_context import (
     enforce_deterministic_report_fields,
 )
 from src.preprocessing.data_processor import preprocess_data
+from src.services.artifacts import (
+    persist_pipeline_artifacts,
+    persist_raw_artifacts,
+    write_json,
+    write_json_report,
+    write_processed_csv,
+)
 from src.services.db_importer import import_artifact_bundle
 
 RAW_DATA_DIR = Path("data/raw")
@@ -33,21 +38,15 @@ def _build_timestamp() -> str:
 
 
 def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file_obj:
-        json.dump(payload, file_obj, ensure_ascii=False, indent=4)
+    write_json(path, payload)
 
 
 def _write_processed_csv(path: Path, processed_data: List[Dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pd.json_normalize(processed_data).to_csv(path, index=False, encoding="utf-8-sig")
+    write_processed_csv(path, processed_data)
 
 
 def _write_json_report(path: Path, response: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file_obj:
-        json.dump(response, file_obj, ensure_ascii=False, indent=2)
-        file_obj.write("\n")
+    write_json_report(path, response)
 
 
 def _persist_pipeline_artifacts(
@@ -56,12 +55,14 @@ def _persist_pipeline_artifacts(
     deterministic_context: Dict[str, Any],
     response: Dict[str, Any],
 ) -> Path:
-    _write_processed_csv(PROCESSED_DATA_DIR / f"processed_{timestamp}.csv", processed_data)
-    _write_json(PROCESSED_DATA_DIR / f"coach_context_{timestamp}.json", deterministic_context)
-
-    report_path = OUTPUT_DIR / f"ai_report_{timestamp}.json"
-    _write_json_report(report_path, response)
-    return report_path
+    return persist_pipeline_artifacts(
+        timestamp=timestamp,
+        processed_data=processed_data,
+        deterministic_context=deterministic_context,
+        response=response,
+        processed_dir=PROCESSED_DATA_DIR,
+        output_dir=OUTPUT_DIR,
+    )
 
 
 def _persist_raw_artifacts(
@@ -69,11 +70,12 @@ def _persist_raw_artifacts(
     raw_activities: List[Dict[str, Any]],
     user_data: Dict[str, Any],
 ) -> tuple[Path, Path]:
-    raw_path = RAW_DATA_DIR / f"garmin_raw_{timestamp}.json"
-    user_path = RAW_DATA_DIR / f"garmin_user_{timestamp}.json"
-    _write_json(raw_path, raw_activities)
-    _write_json(user_path, user_data)
-    return user_path, raw_path
+    return persist_raw_artifacts(
+        timestamp=timestamp,
+        raw_activities=raw_activities,
+        user_data=user_data,
+        output_dir=RAW_DATA_DIR,
+    )
 
 
 def _get_latest_activity_date(session: Any, user_id: Any) -> Optional[date]:

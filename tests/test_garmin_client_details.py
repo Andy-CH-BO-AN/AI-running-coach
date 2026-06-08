@@ -1,9 +1,6 @@
-import os
 import sys
 import unittest
 import types
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 # Stub external dependencies so the unit tests only exercise parsing logic.
 garminconnect_stub = types.ModuleType('garminconnect')
@@ -17,7 +14,7 @@ except ImportError:
     dotenv_stub.load_dotenv = lambda *args, **kwargs: None
     sys.modules.setdefault('dotenv', dotenv_stub)
 
-from ingestion.garmin_client import get_activity_details
+from src.ingestion.garmin_client import get_activity_details
 
 
 class FakeGarminClient:

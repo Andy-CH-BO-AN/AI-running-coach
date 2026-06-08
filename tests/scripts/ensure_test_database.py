@@ -1,46 +1,31 @@
 import os
 import sys
+from pathlib import Path
 
 import psycopg
 from psycopg import sql
-from sqlalchemy.engine import make_url
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT_DIR))
+
+from tests.db_settings import test_database_connection_settings, test_database_refusal_reason
 
 
 def _settings() -> dict[str, str | int | None]:
-    host = os.getenv("TEST_POSTGRES_HOST")
-    user = os.getenv("TEST_POSTGRES_USER")
-    database = os.getenv("TEST_POSTGRES_DB")
-    if host and user and database:
-        return {
-            "host": host,
-            "port": int(os.getenv("TEST_POSTGRES_PORT", "5432")),
-            "user": user,
-            "password": os.getenv("TEST_POSTGRES_PASSWORD"),
-            "database": database,
-        }
-
-    database_url = os.getenv("TEST_DATABASE_URL")
-    if database_url:
-        url = make_url(database_url)
-        return {
-            "host": url.host or "localhost",
-            "port": url.port or 5432,
-            "user": url.username,
-            "password": url.password,
-            "database": url.database,
-        }
-
-    return {
-        "host": os.getenv("POSTGRES_HOST", "localhost"),
-        "port": int(os.getenv("POSTGRES_PORT", "5432")),
-        "user": os.getenv("POSTGRES_USER"),
-        "password": os.getenv("POSTGRES_PASSWORD"),
-        "database": None,
-    }
+    return test_database_connection_settings()
 
 
 def main() -> int:
     settings = _settings()
+    refusal_reason = (
+        test_database_refusal_reason(settings["database_url"])
+        if settings.get("database_url")
+        else None
+    )
+    if refusal_reason:
+        print(refusal_reason, file=sys.stderr)
+        return 2
+
     database = str(settings.get("database") or "")
     if "test" not in database.lower():
         print("Refusing to create test database: target database name must contain 'test'.", file=sys.stderr)

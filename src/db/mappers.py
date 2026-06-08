@@ -240,3 +240,12 @@ def _split_values(activity_id: uuid.UUID, split: dict[str, Any], activity_type: 
         "raw_json": _jsonable(split),
         "updated_at": utc_now(),
     }
+
+
+jsonable = _jsonable
+num = _num
+first_present = _first_present
+int_or_none = _int
+user_profile_snapshot_values = _user_profile_snapshot_values
+activity_values = _activity_values
+split_values = _split_values

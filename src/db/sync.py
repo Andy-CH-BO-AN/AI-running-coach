@@ -8,14 +8,14 @@ import json
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import MetaData, create_engine, func, select
+from sqlalchemy import MetaData, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.sql.schema import Table
 
 from src.db.base import Base
 from src.db import models  # noqa: F401
-from src.db.session import resolve_database_url
+from src.db.sync_targets import build_target_engine
 
 DEFAULT_SYNC_BATCH_SIZE = 500
 LOGICAL_KEY_COLUMNS = {
@@ -45,10 +45,6 @@ def _sorted_tables(table_names: Iterable[str] | None = None) -> list[Table]:
 
     wanted = set(table_names)
     return [table for table in tables if table.name in wanted]
-
-
-def build_target_engine(target: str, *, purpose: str = "direct") -> Engine:
-    return create_engine(resolve_database_url(target, purpose=purpose), future=True, pool_pre_ping=True)
 
 
 def _batched_rows(engine: Engine, table: Table, batch_size: int) -> Iterator[list[dict[str, Any]]]:
