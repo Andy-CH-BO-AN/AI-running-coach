@@ -60,23 +60,21 @@ garminconnect_stub = types.ModuleType("garminconnect")
 garminconnect_stub.Garmin = object
 sys.modules.setdefault("garminconnect", garminconnect_stub)
 
-from src.pipeline import runner
+from src.pipeline import activity_payloads, runner
+from src.pipeline.activity_payloads import ActivityPayloadProvider
 from src.pipeline.goal_prompt import GoalPromptOverrides
 from src.services import report_generator
 
 
 class RunnerTests(unittest.TestCase):
     def test_fetch_garmin_updates_fetches_from_latest_db_date(self):
-        with patch.object(
-            runner,
-            "get_garmin_activities",
-            return_value={"activities": [], "user_data": {}},
-        ) as fetch:
-            runner._fetch_garmin_updates(
-                latest_date=date(2026, 5, 10),
-                fetch_limit=999,
-                fallback_max_heart_rate=191,
-            )
+        fetch = Mock(return_value={"activities": [], "user_data": {}})
+        provider = ActivityPayloadProvider(garmin_fetcher=fetch)
+        provider._fetch_garmin_updates(
+            latest_date=date(2026, 5, 10),
+            fetch_limit=999,
+            fallback_max_heart_rate=191,
+        )
 
         fetch.assert_called_once_with(
             999,
@@ -85,7 +83,7 @@ class RunnerTests(unittest.TestCase):
             fallback_max_heart_rate=191,
         )
 
-    def test_sync_garmin_to_db_imports_already_fetched_payload(self):
+    def test_sync_garmin_to_db_delegates_already_fetched_payload_import(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             base = Path(temp_dir)
             raw_dir = base / "raw"
@@ -95,24 +93,35 @@ class RunnerTests(unittest.TestCase):
                 "user_data": {"max_heart_rate": 190},
             }
 
-            with patch.object(runner, "RAW_DATA_DIR", raw_dir), patch.object(
-                runner,
-                "import_artifact_bundle",
-                return_value={
-                    "user_snapshot_ids": ["snapshot-1"],
-                    "raw_import": {"activities": 1, "splits": 0, "swimming_lengths": 0},
-                },
-            ) as import_bundle:
-                counts = runner._sync_garmin_to_db(
-                    session=session,
-                    user_id="user-1",
-                    timestamp="20260510",
-                    garmin_data=garmin_data,
-                )
+            provider = ActivityPayloadProvider(
+                raw_data_dir=raw_dir,
+                import_service=Mock(
+                    return_value={
+                        "activities": 1,
+                        "splits": 0,
+                        "swimming_lengths": 0,
+                        "user_snapshot": True,
+                        "user_snapshot_id": "snapshot-1",
+                        "raw_import": {"activities": 1, "splits": 0, "swimming_lengths": 0},
+                    },
+                ),
+            )
+            counts = provider._sync_garmin_to_db(
+                session=session,
+                user_id="user-1",
+                timestamp="20260510",
+                garmin_data=garmin_data,
+            )
 
-            import_bundle.assert_called_once()
-            session.commit.assert_called_once()
+            provider.import_service.assert_called_once_with(
+                session=session,
+                user_id="user-1",
+                user_path=raw_dir / "garmin_user_20260510.json",
+                raw_path=raw_dir / "garmin_raw_20260510.json",
+            )
+            session.commit.assert_not_called()
             self.assertEqual(counts["activities"], 1)
+            self.assertTrue(counts["user_snapshot"])
             self.assertTrue((raw_dir / "garmin_raw_20260510.json").exists())
             self.assertTrue((raw_dir / "garmin_user_20260510.json").exists())
 
@@ -126,24 +135,27 @@ class RunnerTests(unittest.TestCase):
                 "user_data": {"max_heart_rate": 190},
             }
 
-            with patch.object(runner, "RAW_DATA_DIR", raw_dir), patch.object(
-                runner,
-                "sync_shadow_database",
-                return_value={"rows_copied": 10},
-            ) as shadow_sync, patch.object(
-                runner,
-                "validate_shadow_parity",
-                return_value={"ok": True, "mismatches": []},
-            ) as validate_shadow:
-                counts = runner._sync_garmin_to_db(
-                    session=session,
-                    user_id="user-1",
-                    timestamp="20260510",
-                    garmin_data=garmin_data,
-                )
+            provider = ActivityPayloadProvider(
+                raw_data_dir=raw_dir,
+                import_service=Mock(
+                    return_value={
+                        "activities": 1,
+                        "splits": 0,
+                        "swimming_lengths": 0,
+                        "user_snapshot": True,
+                        "shadow_import": {"rows_copied": 10},
+                        "shadow_parity": {"ok": True, "mismatches": []},
+                    },
+                ),
+            )
+            counts = provider._sync_garmin_to_db(
+                session=session,
+                user_id="user-1",
+                timestamp="20260510",
+                garmin_data=garmin_data,
+            )
 
-            shadow_sync.assert_called_once()
-            validate_shadow.assert_called_once()
+            provider.import_service.assert_called_once()
             self.assertIn("shadow_import", counts)
             self.assertEqual(counts["shadow_parity"]["ok"], True)
 
@@ -164,20 +176,17 @@ class RunnerTests(unittest.TestCase):
             {"max_heart_rate": 190},
         )
 
-        with patch.object(runner, "SessionLocal", return_value=FakeSessionContext()), patch.object(
-            runner, "get_or_create_default_user", return_value=types.SimpleNamespace(id="user-1")
-        ), patch.object(runner, "_get_latest_activity_date", return_value=date(2026, 5, 10)), patch.object(
-            runner, "get_recent_max_heart_rate", return_value=191
-        ), patch.object(
-            runner, "_fetch_garmin_updates", return_value=garmin_payload
-        ), patch.object(
-            runner, "_sync_garmin_to_db", side_effect=SQLAlchemyError("bind params hidden by runner")
-        ), patch.object(
-            runner, "_load_existing_db_payloads", return_value=existing_payload
-        ), patch.object(
-            runner, "_fetch_without_db"
+        provider = ActivityPayloadProvider(session_factory=lambda: FakeSessionContext())
+        with patch.object(
+            activity_payloads, "get_or_create_default_user", return_value=types.SimpleNamespace(id="user-1")
+        ), patch.object(provider, "_get_latest_activity_date", return_value=date(2026, 5, 10)), patch.object(
+            activity_payloads, "get_recent_max_heart_rate", return_value=191
+        ), patch.object(provider, "_fetch_garmin_updates", return_value=garmin_payload), patch.object(
+            provider, "_sync_garmin_to_db", side_effect=SQLAlchemyError("bind params hidden by runner")
+        ), patch.object(provider, "_load_existing_db_payloads", return_value=existing_payload), patch.object(
+            provider, "_fetch_without_db"
         ) as fallback:
-            raw_activities, user_data = runner._load_or_fetch_activity_payloads(
+            raw_activities, user_data = provider.load_or_fetch(
                 activity_limit=75,
                 fetch_limit=999,
                 timestamp="20260510",
@@ -200,20 +209,17 @@ class RunnerTests(unittest.TestCase):
             "user_data": {"max_heart_rate": 190},
         }
 
-        with patch.object(runner, "SessionLocal", return_value=FakeSessionContext()), patch.object(
-            runner, "get_or_create_default_user", return_value=types.SimpleNamespace(id="user-1")
-        ), patch.object(runner, "_get_latest_activity_date", return_value=date(2026, 5, 10)), patch.object(
-            runner, "get_recent_max_heart_rate", return_value=191
-        ), patch.object(
-            runner, "_fetch_garmin_updates", return_value=garmin_payload
-        ), patch.object(
-            runner, "_sync_garmin_to_db", side_effect=SQLAlchemyError("bind params hidden by runner")
-        ), patch.object(
-            runner, "_load_existing_db_payloads", side_effect=SQLAlchemyError("read failed")
-        ), patch.object(
-            runner, "_fetch_without_db"
+        provider = ActivityPayloadProvider(session_factory=lambda: FakeSessionContext())
+        with patch.object(
+            activity_payloads, "get_or_create_default_user", return_value=types.SimpleNamespace(id="user-1")
+        ), patch.object(provider, "_get_latest_activity_date", return_value=date(2026, 5, 10)), patch.object(
+            activity_payloads, "get_recent_max_heart_rate", return_value=191
+        ), patch.object(provider, "_fetch_garmin_updates", return_value=garmin_payload), patch.object(
+            provider, "_sync_garmin_to_db", side_effect=SQLAlchemyError("bind params hidden by runner")
+        ), patch.object(provider, "_load_existing_db_payloads", side_effect=SQLAlchemyError("read failed")), patch.object(
+            provider, "_fetch_without_db"
         ) as fallback:
-            raw_activities, user_data = runner._load_or_fetch_activity_payloads(
+            raw_activities, user_data = provider.load_or_fetch(
                 activity_limit=75,
                 fetch_limit=999,
                 timestamp="20260510",
@@ -223,10 +229,64 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(raw_activities, garmin_payload["activities"])
         self.assertEqual(user_data, garmin_payload["user_data"])
 
+    def test_load_or_fetch_falls_back_to_direct_fetch_when_db_fails_before_fetch(self):
+        class FakeSessionContext:
+            def __enter__(self):
+                return Mock()
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+        direct_payload = (
+            [{"activity_id": 1, "type": "running"}],
+            {"max_heart_rate": 190},
+        )
+        provider = ActivityPayloadProvider(session_factory=lambda: FakeSessionContext())
+
+        with patch.object(
+            activity_payloads,
+            "get_or_create_default_user",
+            side_effect=SQLAlchemyError("db unavailable"),
+        ), patch.object(provider, "_fetch_without_db", return_value=direct_payload) as fallback:
+            raw_activities, user_data = provider.load_or_fetch(
+                activity_limit=75,
+                fetch_limit=999,
+                timestamp="20260510",
+            )
+
+        fallback.assert_called_once_with(activity_limit=75, timestamp="20260510")
+        self.assertEqual(raw_activities, direct_payload[0])
+        self.assertEqual(user_data, direct_payload[1])
+
+    def test_runner_load_or_fetch_delegates_to_activity_payload_provider(self):
+        provider = Mock()
+        provider.load_or_fetch.return_value = ([{"activity_id": 1}], {"max_heart_rate": 190})
+
+        with patch.object(runner, "RAW_DATA_DIR", Path("custom/raw")), patch.object(
+            runner,
+            "ActivityPayloadProvider",
+            return_value=provider,
+        ) as provider_class:
+            raw_activities, user_data = runner._load_or_fetch_activity_payloads(
+                activity_limit=75,
+                fetch_limit=999,
+                timestamp="20260510",
+            )
+
+        provider_class.assert_called_once_with(raw_data_dir=Path("custom/raw"))
+        provider.load_or_fetch.assert_called_once_with(
+            activity_limit=75,
+            fetch_limit=999,
+            timestamp="20260510",
+        )
+        self.assertEqual(raw_activities, [{"activity_id": 1}])
+        self.assertEqual(user_data, {"max_heart_rate": 190})
+
     def test_apply_resting_heart_rate_history_fills_missing_from_latest_db_value(self):
         session = Mock()
-        with patch.object(runner, "get_latest_resting_heart_rate", return_value=51.0):
-            user_data = runner._apply_resting_heart_rate_history(
+        provider = ActivityPayloadProvider()
+        with patch.object(activity_payloads, "get_latest_resting_heart_rate", return_value=51.0):
+            user_data = provider._apply_resting_heart_rate_history(
                 session=session,
                 user_id="user-1",
                 user_data={"max_heart_rate": 190, "resting_heart_rate": None},
@@ -237,8 +297,9 @@ class RunnerTests(unittest.TestCase):
 
     def test_apply_resting_heart_rate_history_keeps_current_day_value_when_present(self):
         session = Mock()
-        with patch.object(runner, "get_latest_resting_heart_rate", return_value=51.0):
-            user_data = runner._apply_resting_heart_rate_history(
+        provider = ActivityPayloadProvider()
+        with patch.object(activity_payloads, "get_latest_resting_heart_rate", return_value=51.0):
+            user_data = provider._apply_resting_heart_rate_history(
                 session=session,
                 user_id="user-1",
                 user_data={"max_heart_rate": 190, "resting_heart_rate": 49},
@@ -249,8 +310,9 @@ class RunnerTests(unittest.TestCase):
 
     def test_apply_resting_heart_rate_history_uses_db_value_when_smaller_than_current(self):
         session = Mock()
-        with patch.object(runner, "get_latest_resting_heart_rate", return_value=48.0):
-            user_data = runner._apply_resting_heart_rate_history(
+        provider = ActivityPayloadProvider()
+        with patch.object(activity_payloads, "get_latest_resting_heart_rate", return_value=48.0):
+            user_data = provider._apply_resting_heart_rate_history(
                 session=session,
                 user_id="user-1",
                 user_data={"max_heart_rate": 190, "resting_heart_rate": 51},
@@ -484,15 +546,18 @@ class RunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             raw_dir = Path(temp_dir) / "raw"
 
-            with patch.object(runner, "RAW_DATA_DIR", raw_dir), patch.object(
-                runner,
-                "get_garmin_activities",
-                return_value={
-                    "activities": [{"activity_id": 1, "type": "running", "distance": 10.0, "duration": 50.0}],
-                    "user_data": {"max_heart_rate": 190},
-                },
-            ):
-                raw_activities, user_data = runner._fetch_without_db(activity_limit=75, timestamp="20260510")
+            provider = ActivityPayloadProvider(
+                raw_data_dir=raw_dir,
+                garmin_fetcher=Mock(
+                    return_value={
+                        "activities": [
+                            {"activity_id": 1, "type": "running", "distance": 10.0, "duration": 50.0}
+                        ],
+                        "user_data": {"max_heart_rate": 190},
+                    },
+                ),
+            )
+            raw_activities, user_data = provider._fetch_without_db(activity_limit=75, timestamp="20260510")
 
             self.assertEqual(len(raw_activities), 1)
             self.assertEqual(user_data["max_heart_rate"], 190)
