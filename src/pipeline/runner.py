@@ -5,18 +5,14 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.agents.coach import coach
 from src.db.mirror import sync_shadow_database, validate_shadow_parity
 from src.db.models import Activity
 from src.db.repositories import get_latest_resting_heart_rate, get_latest_user_profile, get_or_create_default_user, get_recent_activities
 from src.db.repositories import get_recent_max_heart_rate
 from src.db.session import SessionLocal
 from src.ingestion.garmin_client import get_garmin_activities
-from src.pipeline.goal_prompt import GoalPromptOverrides, render_goal_prompt
-from src.preprocessing.coach_context import (
-    build_deterministic_coach_context,
-    enforce_deterministic_report_fields,
-)
+from src.pipeline.goal_prompt import GoalPromptOverrides
+from src.preprocessing.coach_context import build_deterministic_coach_context
 from src.preprocessing.data_processor import preprocess_data
 from src.services.artifacts import (
     persist_pipeline_artifacts,
@@ -26,6 +22,7 @@ from src.services.artifacts import (
     write_processed_csv,
 )
 from src.services.db_importer import import_artifact_bundle
+from src.services.report_generator import generate_coach_report
 
 RAW_DATA_DIR = Path("data/raw")
 PROCESSED_DATA_DIR = Path("data/processed")
@@ -270,15 +267,13 @@ def _generate_coach_report(
     deterministic_context: Dict[str, Any],
     goal_overrides: GoalPromptOverrides | None = None,
 ) -> Dict[str, Any]:
-    goal_text = render_goal_prompt(GOAL_PROMPT_PATH, goal_overrides)
-    response = coach(
-        data=processed_data,
+    return generate_coach_report(
+        processed_data=processed_data,
         user_data=user_data,
         deterministic_context=deterministic_context,
-        goal_path=str(GOAL_PROMPT_PATH),
-        goal_text=goal_text,
+        goal_overrides=goal_overrides,
+        goal_prompt_path=GOAL_PROMPT_PATH,
     )
-    return enforce_deterministic_report_fields(response, deterministic_context)
 
 
 def run_pipeline(

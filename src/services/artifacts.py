@@ -62,3 +62,21 @@ def persist_pipeline_artifacts(
     report_path = output_dir / f"ai_report_{timestamp}.json"
     write_json_report(report_path, response)
     return report_path
+
+
+def pipeline_artifact_paths(
+    timestamp: str,
+    *,
+    processed_dir: Path = PROCESSED_DATA_DIR,
+    output_dir: Path = OUTPUT_DIR,
+) -> dict[str, Path]:
+    return {
+        "processed": processed_dir / f"processed_{timestamp}.csv",
+        "coach_context": processed_dir / f"coach_context_{timestamp}.json",
+        "report": output_dir / f"ai_report_{timestamp}.json",
+    }
+
+
+def refuse_existing_report(path: Path, *, force: bool = False) -> None:
+    if path.exists() and not force:
+        raise FileExistsError(f"Report already exists: {path}. Use --force to overwrite.")
