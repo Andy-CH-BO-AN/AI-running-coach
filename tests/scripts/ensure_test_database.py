@@ -27,6 +27,13 @@ def main() -> int:
         return 2
 
     database = str(settings.get("database") or "")
+    if not database:
+        print(
+            "Refusing to create test database: no target database configured. "
+            "Set TEST_DATABASE_URL or TEST_POSTGRES_DB.",
+            file=sys.stderr,
+        )
+        return 2
     maintenance_db = os.getenv("TEST_POSTGRES_MAINTENANCE_DB") or os.getenv("POSTGRES_DB") or "postgres"
     with psycopg.connect(
         host=settings["host"],

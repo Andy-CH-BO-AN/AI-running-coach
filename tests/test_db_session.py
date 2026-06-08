@@ -239,3 +239,28 @@ def test_require_safe_returns_url_for_safe_target(monkeypatch):
     _importlib.reload(_dbs)
     result = _dbs.require_safe_test_database_url_or_skip()
     assert result == safe
+
+
+# ---------------------------------------------------------------------------
+# ensure_test_database.py regression: no-database-configured path
+# ---------------------------------------------------------------------------
+
+def test_ensure_script_returns_exit2_when_no_test_db_configured(monkeypatch):
+    """Regression: ensure script must exit 2 without any connection attempt when
+    TEST_DATABASE_URL and TEST_POSTGRES_* are both missing/incomplete."""
+    _clear_test_db_env(monkeypatch)
+    # Also clear POSTGRES_* so no fallback host sneaks through
+    for key in ("POSTGRES_HOST", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "POSTGRES_PORT"):
+        monkeypatch.delenv(key, raising=False)
+
+    import tests.scripts.ensure_test_database as _ensure
+    _importlib.reload(_ensure)
+
+    # Patch psycopg.connect to detect if a connection is attempted (it must NOT be)
+    import psycopg as _psycopg
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("psycopg.connect should not be called when no DB is configured")
+
+    monkeypatch.setattr(_psycopg, "connect", _fail_if_called)
+    assert _ensure.main() == 2
