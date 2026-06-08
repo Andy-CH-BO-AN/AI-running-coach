@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,7 +9,8 @@ from sqlalchemy import func, select
 
 from src.db.models import Activity, ActivitySplit, SwimmingLength, UserProfileSnapshot
 from src.db.repositories import get_or_create_default_user
-from src.services.db_importer import import_garmin_raw_file, import_garmin_user_file
+from src.services import db_importer
+from src.services.db_importer import import_garmin_raw_file, import_garmin_user_file, import_processed_csv_file
 from tests.db_test_utils import isolated_db_session
 
 
@@ -116,3 +118,60 @@ def test_import_garmin_raw_file_skips_short_cycling_records(db_session, tmp_path
     assert counts["skipped_short_cycling"] == 1
     activity = db_session.scalars(select(Activity)).one()
     assert activity.garmin_activity_id == 602
+
+
+def test_import_processed_csv_uses_repository_activity_lookup(monkeypatch, tmp_path):
+    csv_path = tmp_path / "processed_20260510.csv"
+    csv_path.write_text(
+        "activity_id,distance_km\n"
+        "123.0,5.2\n"
+        "999,8.1\n"
+        ",1.0\n",
+        encoding="utf-8",
+    )
+    found_activity = SimpleNamespace(id="activity-uuid")
+    lookups = []
+    saved_features = []
+
+    def fake_find_activity(session, *, user_id, garmin_activity_id):
+        lookups.append((session, user_id, garmin_activity_id))
+        return found_activity if garmin_activity_id == 123 else None
+
+    def fake_save_activity_features(session, *, activity_id, feature_version, algorithm_version, features):
+        saved_features.append(
+            {
+                "session": session,
+                "activity_id": activity_id,
+                "feature_version": feature_version,
+                "algorithm_version": algorithm_version,
+                "features": features,
+            }
+        )
+
+    monkeypatch.setattr(db_importer, "find_activity_by_garmin_id", fake_find_activity)
+    monkeypatch.setattr(db_importer, "save_activity_features", fake_save_activity_features)
+
+    counts = import_processed_csv_file(
+        session="session",
+        user_id="user-uuid",
+        path=csv_path,
+        feature_version="processed_csv:test",
+    )
+
+    assert counts == {"rows_seen": 3, "features_saved": 1, "missing_activities": 1}
+    assert lookups == [
+        ("session", "user-uuid", 123),
+        ("session", "user-uuid", 999),
+    ]
+    assert saved_features == [
+        {
+            "session": "session",
+            "activity_id": "activity-uuid",
+            "feature_version": "processed_csv:test",
+            "algorithm_version": "csv-import",
+            "features": {
+                "processed_row": {"activity_id": "123.0", "distance_km": "5.2"},
+                "source_file": str(csv_path),
+            },
+        }
+    ]

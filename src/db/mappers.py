@@ -175,6 +175,138 @@ def _activity_values(
     }
 
 
+def map_user_profile_snapshot_values(
+    user_id: uuid.UUID,
+    profile_data: dict[str, Any],
+    captured_at: datetime,
+    source_file: str | None = None,
+) -> dict[str, Any]:
+    return _user_profile_snapshot_values(
+        user_id=user_id,
+        profile_data=profile_data,
+        captured_at=captured_at,
+        source_file=source_file,
+    )
+
+
+def map_activity_values(
+    user_id: uuid.UUID,
+    activity_data: dict[str, Any],
+    source_file: str | None = None,
+) -> dict[str, Any]:
+    return _activity_values(
+        user_id=user_id,
+        activity_data=activity_data,
+        source_file=source_file,
+    )
+
+
+def map_swimming_length_values(
+    activity_split_id: uuid.UUID,
+    length: dict[str, Any],
+    *,
+    offset: int,
+) -> dict[str, Any]:
+    length_index = length.get("length_index") or offset
+    return {
+        "activity_split_id": activity_split_id,
+        "length_index": int(length_index),
+        "distance_m": _num(_first_present(length.get("distance"), length.get("distance_m"))),
+        "duration_sec": _num(_first_present(length.get("duration"), length.get("duration_sec"))),
+        "swim_stroke": length.get("swim_stroke"),
+        "strokes": _int(length.get("strokes")),
+        "swolf": _num(length.get("swolf")),
+        "avg_hr": _num(length.get("avg_hr")),
+        "raw_json": _jsonable(length),
+        "updated_at": utc_now(),
+    }
+
+
+def map_activity_feature_values(
+    activity_id: uuid.UUID,
+    feature_version: str,
+    features: dict[str, Any],
+    algorithm_version: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "activity_id": activity_id,
+        "feature_version": feature_version,
+        "algorithm_version": algorithm_version,
+        "computed_at": utc_now(),
+        "features": _jsonable(features),
+    }
+
+
+def weekly_metric_keys() -> tuple[str, ...]:
+    return (
+        "total_distance_km",
+        "total_duration_min",
+        "running_distance_km",
+        "swimming_distance_km",
+        "workout_count",
+        "running_count",
+        "swimming_count",
+        "high_intensity_count",
+        "long_run_count",
+        "training_load",
+        "acute_load",
+        "chronic_load",
+        "acute_chronic_ratio",
+        "monotony",
+        "strain",
+    )
+
+
+def map_weekly_summary_values(
+    user_id: uuid.UUID,
+    week_start: date,
+    week_end: date,
+    summary_version: str,
+    summary_json: dict[str, Any],
+    **metrics: Any,
+) -> dict[str, Any]:
+    return {
+        "user_id": user_id,
+        "week_start": week_start,
+        "week_end": week_end,
+        "summary_version": summary_version,
+        "computed_at": utc_now(),
+        "summary_json": _jsonable(summary_json),
+        **{key: metrics.get(key) for key in weekly_metric_keys()},
+    }
+
+
+def map_ai_report_values(
+    user_id: uuid.UUID,
+    report_scope: str,
+    report_text: str,
+    input_json: dict[str, Any],
+    *,
+    model_name: str = "unknown",
+    prompt_version: str = "unknown",
+    activity_id: uuid.UUID | None = None,
+    weekly_summary_id: uuid.UUID | None = None,
+    feature_version: str | None = None,
+    report_json: dict[str, Any] | None = None,
+    confidence: str | None = None,
+    output_path: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "user_id": user_id,
+        "activity_id": activity_id,
+        "weekly_summary_id": weekly_summary_id,
+        "report_scope": report_scope,
+        "model_name": model_name,
+        "prompt_version": prompt_version,
+        "feature_version": feature_version,
+        "input_json": _jsonable(input_json),
+        "report_json": _jsonable(report_json) if report_json is not None else None,
+        "report_text": report_text,
+        "confidence": confidence,
+        "output_path": output_path,
+    }
+
+
 def _split_values(activity_id: uuid.UUID, split: dict[str, Any], activity_type: str | None = None) -> dict[str, Any]:
     duration_min = _num(_first_present(split.get("duration"), split.get("duration_min")))
     distance_km = _num(_first_present(split.get("distance"), split.get("distance_km")))
@@ -246,6 +378,31 @@ jsonable = _jsonable
 num = _num
 first_present = _first_present
 int_or_none = _int
-user_profile_snapshot_values = _user_profile_snapshot_values
-activity_values = _activity_values
+user_profile_snapshot_values = map_user_profile_snapshot_values
+activity_values = map_activity_values
 split_values = _split_values
+swimming_length_values = map_swimming_length_values
+activity_feature_values = map_activity_feature_values
+weekly_summary_values = map_weekly_summary_values
+ai_report_values = map_ai_report_values
+
+__all__ = [
+    "activity_feature_values",
+    "activity_values",
+    "ai_report_values",
+    "first_present",
+    "int_or_none",
+    "jsonable",
+    "map_activity_feature_values",
+    "map_activity_values",
+    "map_ai_report_values",
+    "map_swimming_length_values",
+    "map_user_profile_snapshot_values",
+    "map_weekly_summary_values",
+    "num",
+    "split_values",
+    "swimming_length_values",
+    "user_profile_snapshot_values",
+    "weekly_metric_keys",
+    "weekly_summary_values",
+]

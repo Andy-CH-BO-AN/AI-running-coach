@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+import uuid
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -7,7 +8,14 @@ sqlalchemy = pytest.importorskip("sqlalchemy")
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from src.db.mappers import _activity_values, _user_profile_snapshot_values
+from src.db.mappers import (
+    map_activity_feature_values,
+    map_activity_values,
+    map_ai_report_values,
+    map_swimming_length_values,
+    map_user_profile_snapshot_values,
+    map_weekly_summary_values,
+)
 from src.db.models import AIReport, Activity, ActivityFeature, ActivitySplit, SwimmingLength, User
 from src.db.repositories import (
     get_activity_with_splits,
@@ -67,7 +75,7 @@ def test_activity_values_maps_running_payload_without_db_roundtrip(db_session):
         },
     }
 
-    values = _activity_values(user.id, payload, source_file="raw.json")
+    values = map_activity_values(user.id, payload, source_file="raw.json")
 
     assert values["user_id"] == user.id
     assert values["garmin_activity_id"] == 401
@@ -95,7 +103,7 @@ def test_activity_values_keeps_cycling_speed_out_of_pace_columns(db_session):
         "raw_data": {"average_speed_kmh": 20.0},
     }
 
-    values = _activity_values(user.id, payload)
+    values = map_activity_values(user.id, payload)
 
     assert values["average_pace_min_per_km"] is None
     assert values["average_speed_kmh"] == 20.0
@@ -112,7 +120,7 @@ def test_user_profile_snapshot_values_preserves_raw_profile_and_capture_time(db_
         "pr_running": {"5km": "19:57 (3:59 /km)"},
     }
 
-    values = _user_profile_snapshot_values(
+    values = map_user_profile_snapshot_values(
         user_id=user.id,
         profile_data=profile,
         captured_at=captured_at,
@@ -125,6 +133,93 @@ def test_user_profile_snapshot_values_preserves_raw_profile_and_capture_time(db_
     assert values["max_heart_rate"] == 200.0
     assert values["available_training_days"] == ["MONDAY", "WEDNESDAY"]
     assert values["raw_profile"] == profile
+
+
+def test_swimming_length_values_normalize_fields_without_db_roundtrip():
+    split_id = uuid.uuid4()
+    payload = {
+        "distance": "25",
+        "duration": "36.5",
+        "swim_stroke": "FREESTYLE",
+        "strokes": "18",
+        "swolf": "54",
+        "avg_hr": "132",
+        "extra": datetime(2026, 5, 10, tzinfo=timezone.utc),
+    }
+
+    values = map_swimming_length_values(split_id, payload, offset=2)
+
+    assert values["activity_split_id"] == split_id
+    assert values["length_index"] == 2
+    assert values["distance_m"] == 25.0
+    assert values["duration_sec"] == 36.5
+    assert values["strokes"] == 18
+    assert values["raw_json"]["extra"] == "2026-05-10T00:00:00+00:00"
+    assert values["updated_at"].tzinfo is not None
+
+
+def test_activity_feature_values_jsonify_features_without_db_roundtrip():
+    activity_id = uuid.uuid4()
+
+    values = map_activity_feature_values(
+        activity_id,
+        "v1",
+        {"computed_on": date(2026, 5, 10), "bad_number": float("nan")},
+        algorithm_version="algo:v1",
+    )
+
+    assert values["activity_id"] == activity_id
+    assert values["feature_version"] == "v1"
+    assert values["algorithm_version"] == "algo:v1"
+    assert values["features"] == {"computed_on": "2026-05-10", "bad_number": None}
+    assert values["computed_at"].tzinfo is not None
+
+
+def test_weekly_summary_values_keep_known_metrics_without_db_roundtrip():
+    user_id = uuid.uuid4()
+
+    values = map_weekly_summary_values(
+        user_id,
+        date(2026, 5, 4),
+        date(2026, 5, 10),
+        "weekly:v1",
+        {"generated_at": datetime(2026, 5, 10, tzinfo=timezone.utc)},
+        total_distance_km=42.2,
+        workout_count=5,
+        ignored_metric=999,
+    )
+
+    assert values["user_id"] == user_id
+    assert values["summary_json"] == {"generated_at": "2026-05-10T00:00:00+00:00"}
+    assert values["total_distance_km"] == 42.2
+    assert values["workout_count"] == 5
+    assert "ignored_metric" not in values
+    assert values["training_load"] is None
+    assert values["computed_at"].tzinfo is not None
+
+
+def test_ai_report_values_jsonify_payloads_without_db_roundtrip():
+    user_id = uuid.uuid4()
+    activity_id = uuid.uuid4()
+
+    values = map_ai_report_values(
+        user_id,
+        "activity",
+        "report",
+        {"generated_at": datetime(2026, 5, 10, tzinfo=timezone.utc)},
+        model_name="gemini",
+        prompt_version="coach:v1",
+        activity_id=activity_id,
+        report_json={"score": float("inf")},
+        output_path="output/report.json",
+    )
+
+    assert values["user_id"] == user_id
+    assert values["activity_id"] == activity_id
+    assert values["model_name"] == "gemini"
+    assert values["input_json"] == {"generated_at": "2026-05-10T00:00:00+00:00"}
+    assert values["report_json"] == {"score": None}
+    assert values["output_path"] == "output/report.json"
 
 
 def test_upsert_activity_updates_by_garmin_activity_id(db_session):
