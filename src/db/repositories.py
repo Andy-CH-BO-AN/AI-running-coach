@@ -21,9 +21,10 @@ from src.db.models import (
 )
 from src.db.mappers import (
     activity_values,
-    first_present,
-    int_or_none,
-    jsonable,
+    map_activity_feature_values,
+    map_ai_report_values,
+    map_swimming_length_values,
+    map_weekly_summary_values,
     num,
     split_values,
     user_profile_snapshot_values,
@@ -181,6 +182,19 @@ def upsert_activity(
     return activity
 
 
+def find_activity_by_garmin_id(
+    session: Session,
+    user_id: uuid.UUID,
+    garmin_activity_id: int,
+) -> Activity | None:
+    return session.scalars(
+        select(Activity).where(
+            Activity.user_id == user_id,
+            Activity.garmin_activity_id == garmin_activity_id,
+        )
+    ).first()
+
+
 def upsert_activity_splits(
     session: Session,
     activity_id: uuid.UUID,
@@ -216,19 +230,7 @@ def upsert_swimming_lengths(
 ) -> list[SwimmingLength]:
     persisted: list[SwimmingLength] = []
     for offset, length in enumerate(lengths or [], start=1):
-        length_index = length.get("length_index") or offset
-        values = {
-            "activity_split_id": activity_split_id,
-            "length_index": int(length_index),
-            "distance_m": num(first_present(length.get("distance"), length.get("distance_m"))),
-            "duration_sec": num(first_present(length.get("duration"), length.get("duration_sec"))),
-            "swim_stroke": length.get("swim_stroke"),
-            "strokes": int_or_none(length.get("strokes")),
-            "swolf": num(length.get("swolf")),
-            "avg_hr": num(length.get("avg_hr")),
-            "raw_json": jsonable(length),
-            "updated_at": utc_now(),
-        }
+        values = map_swimming_length_values(activity_split_id, length, offset=offset)
         stmt = pg_insert(SwimmingLength).values(**values)
         stmt = stmt.on_conflict_do_update(
             constraint="uq_swimming_lengths_split_id_length_index",
@@ -249,13 +251,12 @@ def save_activity_features(
     features: dict[str, Any],
     algorithm_version: str | None = None,
 ) -> ActivityFeature:
-    values = {
-        "activity_id": activity_id,
-        "feature_version": feature_version,
-        "algorithm_version": algorithm_version,
-        "computed_at": utc_now(),
-        "features": jsonable(features),
-    }
+    values = map_activity_feature_values(
+        activity_id,
+        feature_version,
+        features,
+        algorithm_version,
+    )
     stmt = pg_insert(ActivityFeature).values(**values)
     stmt = stmt.on_conflict_do_update(
         constraint="uq_activity_features_activity_version",
@@ -281,15 +282,14 @@ def save_weekly_summary(
     summary_json: dict[str, Any],
     **metrics: Any,
 ) -> WeeklySummary:
-    values = {
-        "user_id": user_id,
-        "week_start": week_start,
-        "week_end": week_end,
-        "summary_version": summary_version,
-        "computed_at": utc_now(),
-        "summary_json": jsonable(summary_json),
-        **{key: metrics.get(key) for key in _weekly_metric_keys()},
-    }
+    values = map_weekly_summary_values(
+        user_id,
+        week_start,
+        week_end,
+        summary_version,
+        summary_json,
+        **metrics,
+    )
     stmt = pg_insert(WeeklySummary).values(**values)
     stmt = stmt.on_conflict_do_update(
         constraint="uq_weekly_summaries_user_week_version",
@@ -300,26 +300,6 @@ def save_weekly_summary(
     summary = session.get(WeeklySummary, summary_id)
     session.refresh(summary)
     return summary
-
-
-def _weekly_metric_keys() -> tuple[str, ...]:
-    return (
-        "total_distance_km",
-        "total_duration_min",
-        "running_distance_km",
-        "swimming_distance_km",
-        "workout_count",
-        "running_count",
-        "swimming_count",
-        "high_intensity_count",
-        "long_run_count",
-        "training_load",
-        "acute_load",
-        "chronic_load",
-        "acute_chronic_ratio",
-        "monotony",
-        "strain",
-    )
 
 
 def save_ai_report(
@@ -337,20 +317,21 @@ def save_ai_report(
     confidence: str | None = None,
     output_path: str | None = None,
 ) -> AIReport:
-    report = AIReport(
+    values = map_ai_report_values(
         user_id=user_id,
-        activity_id=activity_id,
-        weekly_summary_id=weekly_summary_id,
         report_scope=report_scope,
+        report_text=report_text,
+        input_json=input_json,
         model_name=model_name,
         prompt_version=prompt_version,
+        activity_id=activity_id,
+        weekly_summary_id=weekly_summary_id,
         feature_version=feature_version,
-        input_json=jsonable(input_json),
-        report_json=jsonable(report_json) if report_json is not None else None,
-        report_text=report_text,
+        report_json=report_json,
         confidence=confidence,
         output_path=output_path,
     )
+    report = AIReport(**values)
     session.add(report)
     session.flush()
     return report

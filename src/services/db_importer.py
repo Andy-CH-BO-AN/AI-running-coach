@@ -7,18 +7,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.db.models import Activity
-from src.preprocessing.activity_policy import should_skip_short_cycling
 from src.db.repositories import (
+    find_activity_by_garmin_id,
     insert_user_profile_snapshot,
     save_activity_features,
     upsert_activity,
     upsert_activity_splits,
     upsert_swimming_lengths,
 )
+from src.preprocessing.activity_policy import should_skip_short_cycling
 
 FILENAME_DATE_RE = re.compile(r"(\d{8})")
 
@@ -106,12 +105,11 @@ def import_processed_csv_file(
             activity_id = row.get("activity_id")
             if not activity_id:
                 continue
-            activity = session.scalars(
-                select(Activity).where(
-                    Activity.user_id == user_id,
-                    Activity.garmin_activity_id == int(float(activity_id)),
-                )
-            ).first()
+            activity = find_activity_by_garmin_id(
+                session,
+                user_id=user_id,
+                garmin_activity_id=int(float(activity_id)),
+            )
             if not activity:
                 counts["missing_activities"] += 1
                 continue
