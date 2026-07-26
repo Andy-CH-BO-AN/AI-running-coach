@@ -1,6 +1,7 @@
 ---
 name: grill-me
 description: Antigravity adapter for the grill-me skill. Read the canonical skill in ai/skills before acting.
+disable-model-invocation: true
 ---
 
 # Antigravity Skill Adapter
