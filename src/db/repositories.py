@@ -374,7 +374,12 @@ SYSTEM_INITIALIZED_MARKER_ID: int = -1
 
 
 def is_notification_system_initialized(session: Session) -> bool:
-    """檢查是否已完成 baseline 初始化（即是否存在任何紀錄，包含 sentinel 標記）。"""
+    """檢查是否已完成 baseline 初始化（即是否存在任何紀錄，包含 sentinel 標記）。
+
+    註：notifier 模組在取得 notified_ids 後，會在記憶體中複用 `len(notified_ids) > 0`
+    作為初始化依據，以避免在單次通知流程中產生二次重複 SQL 查詢。
+    此 helper 供外部 Repository 調用者與獨立單元測試使用。
+    """
     notified_ids = get_notified_activity_ids(session)
     return len(notified_ids) > 0
 
