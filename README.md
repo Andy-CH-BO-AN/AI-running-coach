@@ -88,6 +88,9 @@ TEST_DATABASE_URL=postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@localhost:5
 
 建議 Neon app 連線用 pooler URL，migration / bulk sync / parity validation 用 direct URL。
 
+> 💡 **跨裝置/跨電腦同步與 GitHub Actions**：當切換為 `DATABASE_MODE=cloud` 時，不同電腦上的 Dashboard、CLI 流程與 GitHub Actions 自動化排程皆會直接存取中心化的 Neon Cloud DB，實現多端數據無縫同步。
+
+
 ### 3. 跑主流程
 
 ```bash

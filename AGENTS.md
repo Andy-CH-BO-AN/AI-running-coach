@@ -25,7 +25,7 @@ rules here; adapters under `.cursor/` point to `ai/`.
   (`src/preprocessing/coach_context.py`); the LLM interprets coaching context
   only.
 - Dashboard is Vanilla HTML/JS/CSS with no build step.
-- Data stays local; no cloud deployment architecture.
+- Data is local by default, with optional Neon Cloud DB support (`DATABASE_MODE=cloud`) and GitHub Actions automation for multi-device sync.
 
 ## Default style
 
