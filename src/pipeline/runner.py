@@ -112,4 +112,38 @@ def run_pipeline(
 
     print("✨ Pipeline completed!")
     print(f"📄 JSON Report: {report_path}")
+
+    # ── LINE 通知（opt-in，不影響核心 pipeline exit code）
+    _run_line_notification(timestamp)
+
     return str(report_path)
+
+
+def _run_line_notification(timestamp: str) -> None:
+    """執行 LINE 群組通知（pipeline 最後一步）。
+
+    使用 persist_pipeline_artifacts 寫出的實際 coach_context 路徑，
+    不自行掃描資料夾或猜測檔名。
+
+    失敗時 log error，不 raise，確保不影響核心 pipeline exit code。
+    """
+    import logging
+
+    from src.notifications.notifier import run_line_notification
+    from src.services.artifacts import pipeline_artifact_paths
+
+    logger = logging.getLogger(__name__)
+
+    coach_context_path = pipeline_artifact_paths(
+        timestamp,
+        processed_dir=PROCESSED_DATA_DIR,
+        output_dir=OUTPUT_DIR,
+    )["coach_context"]
+
+    try:
+        result = run_line_notification(str(coach_context_path))
+        print(f"📱 LINE notification: {result}")
+    except Exception:
+        logger.exception(
+            "LINE notification encountered an unexpected error — pipeline result unaffected"
+        )

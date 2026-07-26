@@ -18,16 +18,21 @@ from src.db.mappers import (
 )
 from src.db.models import AIReport, Activity, ActivityFeature, ActivitySplit, SwimmingLength, User
 from src.db.repositories import (
+    SYSTEM_INITIALIZED_MARKER_ID,
     get_activity_with_splits,
     get_latest_resting_heart_rate,
     get_latest_user_profile,
+    get_notified_activity_ids,
     get_or_create_default_user,
     get_profile_history,
     get_recent_activities,
     get_recent_max_heart_rate,
     insert_user_profile_snapshot,
+    is_notification_system_initialized,
+    record_notification,
     save_activity_features,
     save_ai_report,
+    seed_baseline_notifications,
     upsert_activity,
     upsert_activity_splits,
     upsert_swimming_lengths,
@@ -626,3 +631,26 @@ def test_ai_reports_allow_multiple_model_prompt_rows_for_same_activity(db_sessio
     )
 
     assert db_session.scalar(select(func.count()).select_from(AIReport)) == 2
+
+
+def test_line_notification_repository_empty_context_seeding_and_record(db_session):
+    """驗證 LINE 通知 DB 函式：空 context 初始化、sentinel 標記、去重寫入與 idempotency。"""
+    assert is_notification_system_initialized(db_session) is False
+
+    # 首次執行空 context：寫入 sentinel 標記 (-1)
+    inserted = seed_baseline_notifications(db_session, [])
+    assert inserted == 1
+    assert is_notification_system_initialized(db_session) is True
+
+    notified = get_notified_activity_ids(db_session)
+    assert SYSTEM_INITIALIZED_MARKER_ID in notified
+
+    # 記錄一筆 LINE 發送成功 (1001)
+    recorded = record_notification(db_session, 1001)
+    assert recorded is True
+    assert 1001 in get_notified_activity_ids(db_session)
+
+    # 再次記錄同筆活動 1001，ON CONFLICT DO NOTHING 不重複寫入
+    recorded_again = record_notification(db_session, 1001)
+    assert recorded_again is False
+

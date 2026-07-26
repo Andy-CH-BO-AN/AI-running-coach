@@ -23,6 +23,7 @@ artifacts、coach context 與 AI report 都留在本機，適合想保留資料�
 - 在程式端計算週訓練負荷、分運動週量、心率/功率 Z1-Z5、跑姿、配速/心率區間、交叉訓練摘要與下週日期 seed。
 - 透過 Gemini 把 deterministic facts 轉成狀態標籤、風險解釋、賽事準備度、下週課表、強度解讀與 evidence 文案。
 - 啟動本機 dashboard，讀取 `output/ai_report_YYYYMMDD.json`，呈現訓練回顧、週期化脈絡、下週課表、四週訓練卡、交叉訓練分析與 Zone E。
+- 每次 pipeline 執行後，自動比對紀錄，將新訓練的客觀數據（跑步、游泳、自行車，含間歇工作分段）推送至 LINE 群組（支援去重、首次 baseline seed 與 PostgreSQL advisory lock）。
 - 選用 PostgreSQL 匯入 raw/user/processed artifacts，支援 idempotent upsert 與後續資料版本化。
 
 ## 目前限制
@@ -220,10 +221,11 @@ src/ingestion/garmin_client.py
 src/preprocessing/data_processor.py
     ↓
 src/preprocessing/coach_context.py
-    ↓
-src/agents/coach.py
-    ↓
-output/ai_report_YYYYMMDD.json
+    ├─────────────────────────────┐
+    ↓                             ↓
+src/agents/coach.py      src/notifications/
+    ↓                             ↓
+output/ai_report_YYYYMMDD.json  LINE Group Push Notification
     ↓
 dashboard/
 ```
@@ -391,6 +393,7 @@ DB tests 會以環境缺失 skip；連到主 DB 或非 test DB 時，則屬安�
 | `src/preprocessing/coach_context.py` | 建立 deterministic coach context，並覆寫 AI report 中必須可信的 derived fields。 |
 | `src/preprocessing/coach_context_zones.py` | 心率/功率 time-in-zone 分佈的 deterministic builder。 |
 | `src/agents/coach.py` | 組合 coach prompt、呼叫 Gemini、解析 JSON report 與本機分析模式。 |
+| `src/notifications/` | LINE Push Notification 客戶端、訊息格式化器、PostgreSQL Advisory Lock 與發送協調器。 |
 | `src/dashboard/server.py` | 本機 dashboard static server 與 read-only report API。 |
 | `dashboard/` | 無 build step 的 dashboard 前端。 |
 | `src/db/` | SQLAlchemy 2.0 models、DB settings/session、mapper/repository layer；`sync.py` 是 local/cloud sync facade，copy/conflict 與 snapshot/compare internals 分別在 `sync_copy.py`、`sync_compare.py`。 |
