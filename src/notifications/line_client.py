@@ -87,10 +87,10 @@ def send_push_message(token: str, group_id: str, text: str) -> LineSendResult:
                         error_type=None,
                     )
 
-                if resp.status_code in _NO_RETRY_CODES:
-                    # 不重試，立即回傳
+                # 4xx 客戶端錯誤（除了 429 Rate Limit 外）— 不重試，立即回傳
+                if 400 <= resp.status_code < 500 and resp.status_code != 429:
                     logger.error(
-                        "LINE push rejected with status %d (no retry, attempt %d)",
+                        "LINE push rejected with client error status %d (no retry, attempt %d)",
                         resp.status_code,
                         attempt,
                     )
@@ -102,7 +102,7 @@ def send_push_message(token: str, group_id: str, text: str) -> LineSendResult:
                     )
 
                 # 429 / 5xx — 可重試
-                last_error_type = "server_error" if resp.status_code >= 500 else "rate_limited"
+                last_error_type = "rate_limited" if resp.status_code == 429 else "server_error"
                 logger.warning(
                     "LINE push returned status %d (attempt %d/%d)",
                     resp.status_code,

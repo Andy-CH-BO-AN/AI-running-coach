@@ -73,6 +73,15 @@ SUCCESS_RESULT = LineSendResult(success=True, status_code=200, attempts=1, error
 FAIL_RESULT = LineSendResult(success=False, status_code=500, attempts=3, error_type="server_error")
 
 
+@pytest.fixture(autouse=True)
+def mock_lock_connection():
+    """自動 mock _get_lock_connection，避免單元測試嘗試連線實體 PostgreSQL。"""
+    mock_conn = MagicMock()
+    with patch("src.notifications.notifier._get_lock_connection") as mock_get_conn:
+        mock_get_conn.return_value.__enter__.return_value = mock_conn
+        yield mock_conn
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 環境變數缺失
 # ──────────────────────────────────────────────────────────────────────────────
@@ -119,6 +128,7 @@ class TestSeedBaseline:
         ctx_path = _write_context(tmp_path, _make_coach_context())
 
         with patch.dict(os.environ, self._env()), \
+             patch("src.notifications.notifier.is_notification_system_initialized", return_value=False), \
              patch("src.notifications.notifier.get_notified_activity_ids", return_value=set()), \
              patch("src.notifications.notifier.seed_baseline_notifications") as mock_seed, \
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
@@ -133,6 +143,7 @@ class TestSeedBaseline:
         ctx_path = _write_context(tmp_path, _make_coach_context())
 
         with patch.dict(os.environ, self._env()), \
+             patch("src.notifications.notifier.is_notification_system_initialized", return_value=False), \
              patch("src.notifications.notifier.get_notified_activity_ids", return_value=set()), \
              patch("src.notifications.notifier.seed_baseline_notifications"), \
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
@@ -142,6 +153,50 @@ class TestSeedBaseline:
             run_line_notification(str(ctx_path))
 
         mock_send.assert_not_called()
+
+    def test_first_run_empty_context_then_second_run_new_activity_sends_notification(self, tmp_path):
+        """第一次 context 無活動 (seeded)，第二次新增一筆活動時應正常發送 LINE 訊息。"""
+        empty_ctx_path = _write_context(tmp_path, _make_coach_context(sessions_by_week=[[]]))
+        new_activity_ctx_path = _write_context(tmp_path, _make_coach_context(sessions_by_week=[[
+            {"activity_id": 1001, "date": "2026-07-20", "type": "easy",
+             "source_activity_type": "running", "distance_km": 5.0,
+             "duration_min": 30.0, "training_load": 50.0, "avg_hr": 140,
+             "avg_pace": "6:00", "segments": [],
+             "environment": {"estimated_temp_c": None, "humidity_pct": None, "hr_impact": None},
+             "data_quality": {"status": "complete", "missing_fields": []}}
+        ]]))
+
+        # 1. 第一次執行 (empty context) -> is_initialized = False
+        with patch.dict(os.environ, self._env()), \
+             patch("src.notifications.notifier.is_notification_system_initialized", return_value=False), \
+             patch("src.notifications.notifier.get_notified_activity_ids", return_value=set()), \
+             patch("src.notifications.notifier.seed_baseline_notifications") as mock_seed, \
+             patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
+             patch("src.notifications.notifier._release_advisory_lock"), \
+             patch("src.notifications.notifier._get_db_session"), \
+             patch("src.notifications.notifier.send_push_message") as mock_send_1:
+            res1 = run_line_notification(str(empty_ctx_path))
+
+        assert res1.status == "seeded"
+        mock_seed.assert_called_once()
+        mock_send_1.assert_not_called()
+
+        # 2. 第二次執行 (new activity 1001) -> is_initialized = True, notified_ids = {-1} (sentinel marker)
+        with patch.dict(os.environ, self._env()), \
+             patch("src.notifications.notifier.is_notification_system_initialized", return_value=True), \
+             patch("src.notifications.notifier.get_notified_activity_ids", return_value={-1}), \
+             patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
+             patch("src.notifications.notifier._release_advisory_lock"), \
+             patch("src.notifications.notifier._get_db_session"), \
+             patch("src.notifications.notifier.record_notification") as mock_record_2, \
+             patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT) as mock_send_2:
+            res2 = run_line_notification(str(new_activity_ctx_path))
+
+        assert res2.status == "done"
+        assert res2.sent == 1
+        mock_send_2.assert_called_once()
+        assert mock_record_2.call_count == 1
+        assert mock_record_2.call_args[0][1] == 1001
 
 
 # ──────────────────────────────────────────────────────────────────────────────

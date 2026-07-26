@@ -370,6 +370,15 @@ def get_weekly_training_summary(session: Session, user_id: uuid.UUID, week_start
 # LINE 通知狀態持久化
 # ──────────────────────────────────────────────────────────────────────────────
 
+SYSTEM_INITIALIZED_MARKER_ID: int = -1
+
+
+def is_notification_system_initialized(session: Session) -> bool:
+    """檢查是否已完成 baseline 初始化（即是否存在任何紀錄，包含 sentinel 標記）。"""
+    notified_ids = get_notified_activity_ids(session)
+    return len(notified_ids) > 0
+
+
 def get_notified_activity_ids(session: Session) -> set[int]:
     """回傳所有已記錄（seed 或已通知）的 garmin_activity_id 集合。"""
     rows = session.execute(
@@ -379,13 +388,16 @@ def get_notified_activity_ids(session: Session) -> set[int]:
 
 
 def seed_baseline_notifications(session: Session, activity_ids: list[int]) -> int:
-    """批量建立 baseline seed 紀錄，忽略已存在的 activity_id。
+    """批量建立 baseline seed 紀錄，並寫入系統初始化標記（SYSTEM_INITIALIZED_MARKER_ID = -1）。
 
     使用 INSERT ... ON CONFLICT DO NOTHING 確保冪等。
+    即使 activity_ids 為空，也會寫入 sentinel 標記，避免未來出現第一筆活動時被誤判為首次初始化。
     回傳實際插入筆數。
     """
-    if not activity_ids:
-        return 0
+    to_insert = list(set(activity_ids))
+    if SYSTEM_INITIALIZED_MARKER_ID not in to_insert:
+        to_insert.append(SYSTEM_INITIALIZED_MARKER_ID)
+
     stmt = (
         pg_insert(LineNotification)
         .values([
@@ -396,7 +408,7 @@ def seed_baseline_notifications(session: Session, activity_ids: list[int]) -> in
                 "recorded_at": utc_now(),
                 "created_at": utc_now(),
             }
-            for aid in activity_ids
+            for aid in to_insert
         ])
         .on_conflict_do_nothing(index_elements=["garmin_activity_id"])
     )

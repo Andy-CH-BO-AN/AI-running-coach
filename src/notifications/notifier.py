@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from src.db.repositories import (
     get_notified_activity_ids,
+    is_notification_system_initialized,
     record_notification,
     seed_baseline_notifications,
 )
@@ -73,26 +74,35 @@ def _get_db_session() -> Generator[Session, None, None]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Advisory lock helpers（方便測試替換）
+# Advisory lock helpers（使用獨立 Connection 避免 pool 回收與不同連線問題）
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _acquire_advisory_lock(session: Session) -> bool:
+@contextmanager
+def _get_lock_connection() -> Generator[Any, None, None]:
+    """建立專用於 Advisory Lock 的獨立 DB Connection。"""
+    from src.db.session import engine
+    with engine.connect() as conn:
+        yield conn
+
+
+def _acquire_advisory_lock(conn: Any) -> bool:
     """嘗試取得 PostgreSQL advisory lock。
 
     使用 pg_try_advisory_lock（非阻塞），回傳 True 表示取得成功。
+    傳入 dedicated Connection 確保整個流程鎖在同一條實體連線。
     """
     from sqlalchemy import text
-    result = session.execute(
+    result = conn.execute(
         text("SELECT pg_try_advisory_lock(:key)"),
         {"key": LINE_NOTIFICATION_LOCK_KEY},
     )
     return bool(result.scalar())
 
 
-def _release_advisory_lock(session: Session) -> None:
+def _release_advisory_lock(conn: Any) -> None:
     """釋放 PostgreSQL advisory lock。"""
     from sqlalchemy import text
-    session.execute(
+    conn.execute(
         text("SELECT pg_advisory_unlock(:key)"),
         {"key": LINE_NOTIFICATION_LOCK_KEY},
     )
@@ -165,18 +175,19 @@ def run_line_notification(coach_context_path: str) -> NotificationResult:
         )
         return NotificationResult(status="error")
 
-    # ── 3. Advisory lock + 主流程
-    with _get_db_session() as db_session:
+    # ── 3. Dedicated Connection Advisory Lock + 主流程
+    with _get_lock_connection() as lock_conn:
         lock_acquired = False
         try:
-            lock_acquired = _acquire_advisory_lock(db_session)
+            lock_acquired = _acquire_advisory_lock(lock_conn)
             if not lock_acquired:
                 logger.info(
                     "LINE notification: skipped (advisory lock held by another process)"
                 )
                 return NotificationResult(status="skipped_locked")
 
-            return _run_with_lock(context, db_session, token, group_id)
+            with _get_db_session() as db_session:
+                return _run_with_lock(context, db_session, token, group_id)
 
         except Exception:
             logger.exception(
@@ -186,7 +197,10 @@ def run_line_notification(coach_context_path: str) -> NotificationResult:
 
         finally:
             if lock_acquired:
-                _release_advisory_lock(db_session)
+                try:
+                    _release_advisory_lock(lock_conn)
+                except Exception:
+                    logger.exception("LINE notification: failed to release advisory lock")
 
 
 def _run_with_lock(
@@ -199,8 +213,9 @@ def _run_with_lock(
     # ── 查詢已記錄的 activity_id
     try:
         notified_ids = get_notified_activity_ids(db_session)
+        is_initialized = len(notified_ids) > 0
     except Exception:
-        logger.exception("LINE notification: DB query failed (get_notified_activity_ids)")
+        logger.exception("LINE notification: DB query failed")
         db_session.rollback()
         return NotificationResult(status="error")
 
@@ -208,7 +223,7 @@ def _run_with_lock(
     all_ids = [s.get("activity_id") for s, _ in all_pairs if s.get("activity_id") is not None]
 
     # ── 首次執行：seed baseline
-    if not notified_ids:
+    if not is_initialized:
         logger.info(
             "LINE notification: first run detected — seeding %d activities as baseline",
             len(all_ids),
@@ -217,7 +232,7 @@ def _run_with_lock(
             seed_baseline_notifications(db_session, all_ids)
         except Exception:
             logger.exception("LINE notification: DB error during baseline seed")
-            # rollback 讓 session 回到乾淨狀態，確保後續 advisory lock 釋放正常
+            # rollback 讓 session 回到乾淨狀態
             db_session.rollback()
             return NotificationResult(status="error")
         return NotificationResult(status="seeded")

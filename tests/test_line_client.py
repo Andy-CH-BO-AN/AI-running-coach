@@ -87,7 +87,7 @@ class TestSendPushMessageSuccess:
 # ──────────────────────────────────────────────────────────────────────────────
 
 class TestNoRetryErrors:
-    @pytest.mark.parametrize("status_code", [400, 401, 403])
+    @pytest.mark.parametrize("status_code", [400, 401, 403, 404, 409, 413, 422])
     def test_client_error_no_retry(self, status_code: int):
         resp = _make_response(status_code)
 
