@@ -3,6 +3,7 @@ from datetime import date, datetime, timezone
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -295,3 +296,44 @@ class AIReport(Base):
     user: Mapped[User] = relationship()
     activity: Mapped[Activity | None] = relationship(back_populates="ai_reports")
     weekly_summary: Mapped[WeeklySummary | None] = relationship(back_populates="ai_reports")
+
+
+class LineNotification(Base):
+    """記錄已通知或已 seed 的 Garmin 活動。
+
+    is_seed=True：baseline 初始化紀錄。
+        首次啟用時為所有現有活動建立，以避免推送歷史資料。
+        recorded_at 反映 seed 時間，非 LINE 發送時間。
+    is_seed=False：LINE 訊息已成功發送後建立的紀錄。
+        recorded_at 反映實際通知時間。
+
+    所有寫入均使用 INSERT ... ON CONFLICT DO NOTHING 確保冪等性。
+    """
+
+    __tablename__ = "line_notifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "garmin_activity_id",
+            name="uq_line_notifications_garmin_activity_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    garmin_activity_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+    is_seed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )

@@ -6,6 +6,10 @@ on:
     - cron: '0 0 * * *'
   workflow_dispatch:
 
+concurrency:
+  group: daily-pipeline
+  cancel-in-progress: false
+
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
@@ -46,6 +50,8 @@ jobs:
           NEON_POSTGRES_PASSWORD: ${{ secrets.NEON_POSTGRES_PASSWORD }}
           CORE_GOAL: ${{ vars.CORE_GOAL }}
           TRAINING_PREFERENCES: ${{ vars.TRAINING_PREFERENCES }}
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_GROUP_ID: ${{ secrets.LINE_GROUP_ID }}
         run: |
           python run_pipeline.py \
             --core-goal "$CORE_GOAL" \

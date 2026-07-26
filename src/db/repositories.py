@@ -13,6 +13,7 @@ from src.db.models import (
     Activity,
     ActivityFeature,
     ActivitySplit,
+    LineNotification,
     SwimmingLength,
     User,
     UserProfileSnapshot,
@@ -363,3 +364,64 @@ def get_weekly_training_summary(session: Session, user_id: uuid.UUID, week_start
         .order_by(desc(WeeklySummary.computed_at))
         .limit(1)
     ).first()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# LINE 通知狀態持久化
+# ──────────────────────────────────────────────────────────────────────────────
+
+def get_notified_activity_ids(session: Session) -> set[int]:
+    """回傳所有已記錄（seed 或已通知）的 garmin_activity_id 集合。"""
+    rows = session.execute(
+        select(LineNotification.garmin_activity_id)
+    ).scalars().all()
+    return set(rows)
+
+
+def seed_baseline_notifications(session: Session, activity_ids: list[int]) -> int:
+    """批量建立 baseline seed 紀錄，忽略已存在的 activity_id。
+
+    使用 INSERT ... ON CONFLICT DO NOTHING 確保冪等。
+    回傳實際插入筆數。
+    """
+    if not activity_ids:
+        return 0
+    stmt = (
+        pg_insert(LineNotification)
+        .values([
+            {
+                "id": uuid.uuid4(),
+                "garmin_activity_id": aid,
+                "is_seed": True,
+                "recorded_at": utc_now(),
+                "created_at": utc_now(),
+            }
+            for aid in activity_ids
+        ])
+        .on_conflict_do_nothing(index_elements=["garmin_activity_id"])
+    )
+    result = session.execute(stmt)
+    session.commit()
+    return result.rowcount if result.rowcount is not None else 0
+
+
+def record_notification(session: Session, garmin_activity_id: int) -> bool:
+    """記錄 LINE 訊息已成功發送的活動（is_seed=False）。
+
+    使用 INSERT ... ON CONFLICT DO NOTHING 確保冪等。
+    回傳 True 表示成功插入，False 表示已存在。
+    """
+    stmt = (
+        pg_insert(LineNotification)
+        .values(
+            id=uuid.uuid4(),
+            garmin_activity_id=garmin_activity_id,
+            is_seed=False,
+            recorded_at=utc_now(),
+            created_at=utc_now(),
+        )
+        .on_conflict_do_nothing(index_elements=["garmin_activity_id"])
+    )
+    result = session.execute(stmt)
+    session.commit()
+    return (result.rowcount or 0) > 0
