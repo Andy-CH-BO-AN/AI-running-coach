@@ -36,12 +36,13 @@ class LineSendResult:
     attempts: int
     error_type: str | None
     # error_type 可能值：
-    #   "http_client_error" — 400/401/403 不重試
-    #   "rate_limited"      — 429 重試後仍失敗
-    #   "server_error"      — 5xx 重試後仍失敗
-    #   "timeout"           — requests.Timeout 重試後仍失敗
-    #   "connection_error"  — requests.ConnectionError 重試後仍失敗
-    #   None                — 成功
+    #   "http_client_error"      — 4xx (除了 429 外) 不重試
+    #   "unexpected_http_status" — 3xx 等其餘非 200 狀態碼不重試
+    #   "rate_limited"           — 429 重試後仍失敗
+    #   "server_error"           — 5xx 重試後仍失敗
+    #   "timeout"                — requests.Timeout 重試後仍失敗
+    #   "connection_error"       — requests.ConnectionError 重試後仍失敗
+    #   None                     — 成功
 
 
 def send_push_message(token: str, group_id: str, text: str) -> LineSendResult:
@@ -87,36 +88,37 @@ def send_push_message(token: str, group_id: str, text: str) -> LineSendResult:
                         error_type=None,
                     )
 
-                # 4xx 客戶端錯誤（除了 429 Rate Limit 外）— 不重試，立即回傳
-                if 400 <= resp.status_code < 500 and resp.status_code != 429:
-                    logger.error(
-                        "LINE push rejected with client error status %d (no retry, attempt %d)",
+                # 重試條件：僅限 429 (Rate Limit) 與 500-599 (Server Error)
+                if resp.status_code == 429 or 500 <= resp.status_code < 600:
+                    last_error_type = "rate_limited" if resp.status_code == 429 else "server_error"
+                    logger.warning(
+                        "LINE push returned status %d (attempt %d/%d)",
                         resp.status_code,
                         attempt,
+                        MAX_ATTEMPTS,
                     )
-                    return LineSendResult(
-                        success=False,
-                        status_code=resp.status_code,
-                        attempts=attempt,
-                        error_type="http_client_error",
-                    )
+                    if attempt < MAX_ATTEMPTS:
+                        if resp.status_code == 429:
+                            retry_after = _parse_retry_after(resp.headers)
+                            backoff = retry_after if retry_after is not None else RETRY_BACKOFF_SECONDS[attempt - 1]
+                        else:
+                            backoff = RETRY_BACKOFF_SECONDS[attempt - 1]
+                        time.sleep(backoff)
+                    continue
 
-                # 429 / 5xx — 可重試
-                last_error_type = "rate_limited" if resp.status_code == 429 else "server_error"
-                logger.warning(
-                    "LINE push returned status %d (attempt %d/%d)",
+                # 其餘所有非 200 狀態碼（例如 4xx 除了 429 外、3xx 等）— 不重試，立即回傳
+                logger.error(
+                    "LINE push rejected with status %d (no retry, attempt %d)",
                     resp.status_code,
                     attempt,
-                    MAX_ATTEMPTS,
                 )
-
-                if attempt < MAX_ATTEMPTS:
-                    if resp.status_code == 429:
-                        retry_after = _parse_retry_after(resp.headers)
-                        backoff = retry_after if retry_after is not None else RETRY_BACKOFF_SECONDS[attempt - 1]
-                    else:
-                        backoff = RETRY_BACKOFF_SECONDS[attempt - 1]
-                    time.sleep(backoff)
+                error_type = "http_client_error" if 400 <= resp.status_code < 500 else "unexpected_http_status"
+                return LineSendResult(
+                    success=False,
+                    status_code=resp.status_code,
+                    attempts=attempt,
+                    error_type=error_type,
+                )
 
             except requests.Timeout:
                 last_error_type = "timeout"

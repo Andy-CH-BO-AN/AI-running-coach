@@ -128,7 +128,6 @@ class TestSeedBaseline:
         ctx_path = _write_context(tmp_path, _make_coach_context())
 
         with patch.dict(os.environ, self._env()), \
-             patch("src.notifications.notifier.is_notification_system_initialized", return_value=False), \
              patch("src.notifications.notifier.get_notified_activity_ids", return_value=set()), \
              patch("src.notifications.notifier.seed_baseline_notifications") as mock_seed, \
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
@@ -143,7 +142,6 @@ class TestSeedBaseline:
         ctx_path = _write_context(tmp_path, _make_coach_context())
 
         with patch.dict(os.environ, self._env()), \
-             patch("src.notifications.notifier.is_notification_system_initialized", return_value=False), \
              patch("src.notifications.notifier.get_notified_activity_ids", return_value=set()), \
              patch("src.notifications.notifier.seed_baseline_notifications"), \
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
@@ -166,9 +164,8 @@ class TestSeedBaseline:
              "data_quality": {"status": "complete", "missing_fields": []}}
         ]]))
 
-        # 1. 第一次執行 (empty context) -> is_initialized = False
+        # 1. 第一次執行 (empty context) -> get_notified_activity_ids 返回 set()，系統進行 baseline seed
         with patch.dict(os.environ, self._env()), \
-             patch("src.notifications.notifier.is_notification_system_initialized", return_value=False), \
              patch("src.notifications.notifier.get_notified_activity_ids", return_value=set()), \
              patch("src.notifications.notifier.seed_baseline_notifications") as mock_seed, \
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
@@ -181,9 +178,8 @@ class TestSeedBaseline:
         mock_seed.assert_called_once()
         mock_send_1.assert_not_called()
 
-        # 2. 第二次執行 (new activity 1001) -> is_initialized = True, notified_ids = {-1} (sentinel marker)
+        # 2. 第二次執行 (new activity 1001) -> notified_ids = {-1} (sentinel marker)
         with patch.dict(os.environ, self._env()), \
-             patch("src.notifications.notifier.is_notification_system_initialized", return_value=True), \
              patch("src.notifications.notifier.get_notified_activity_ids", return_value={-1}), \
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
              patch("src.notifications.notifier._release_advisory_lock"), \

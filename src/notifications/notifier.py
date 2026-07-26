@@ -26,7 +26,6 @@ from sqlalchemy.orm import Session
 
 from src.db.repositories import (
     get_notified_activity_ids,
-    is_notification_system_initialized,
     record_notification,
     seed_baseline_notifications,
 )

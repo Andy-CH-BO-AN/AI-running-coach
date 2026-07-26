@@ -105,6 +105,24 @@ class TestNoRetryErrors:
         assert result.attempts == 1  # 只嘗試一次，不重試
         assert result.error_type == "http_client_error"
 
+    @pytest.mark.parametrize("status_code", [301, 302, 304])
+    def test_unexpected_http_status_no_retry(self, status_code: int):
+        resp = _make_response(status_code)
+
+        with patch("src.notifications.line_client.requests.Session") as mock_session_cls:
+            session = MagicMock()
+            session.__enter__ = MagicMock(return_value=session)
+            session.__exit__ = MagicMock(return_value=False)
+            session.post.return_value = resp
+            mock_session_cls.return_value = session
+
+            result = send_push_message(TOKEN, GROUP_ID, "msg")
+
+        assert result.success is False
+        assert result.status_code == status_code
+        assert result.attempts == 1  # 3xx 狀態碼只嘗試一次，不重試
+        assert result.error_type == "unexpected_http_status"
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 可重試的錯誤

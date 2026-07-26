@@ -411,10 +411,11 @@ def seed_baseline_notifications(session: Session, activity_ids: list[int]) -> in
             for aid in to_insert
         ])
         .on_conflict_do_nothing(index_elements=["garmin_activity_id"])
+        .returning(LineNotification.id)
     )
-    result = session.execute(stmt)
+    inserted_ids = session.execute(stmt).scalars().all()
     session.commit()
-    return result.rowcount if result.rowcount is not None else 0
+    return len(inserted_ids)
 
 
 def record_notification(session: Session, garmin_activity_id: int) -> bool:
@@ -433,7 +434,8 @@ def record_notification(session: Session, garmin_activity_id: int) -> bool:
             created_at=utc_now(),
         )
         .on_conflict_do_nothing(index_elements=["garmin_activity_id"])
+        .returning(LineNotification.id)
     )
-    result = session.execute(stmt)
+    inserted_ids = session.execute(stmt).scalars().all()
     session.commit()
-    return (result.rowcount or 0) > 0
+    return len(inserted_ids) > 0
