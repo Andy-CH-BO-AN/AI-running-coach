@@ -1,0 +1,64 @@
+name: Daily AI Running Coach Pipeline
+
+on:
+  schedule:
+    # 台灣時間 08:00 AM (UTC+8) = UTC 00:00 AM
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ai_running_coach
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ai_running_coach"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run database migrations
+        env:
+          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/ai_running_coach
+        run: alembic upgrade head
+
+      - name: Run AI Coach Pipeline
+        env:
+          GARMIN_ACCOUNT: ${{ secrets.GARMIN_ACCOUNT }}
+          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/ai_running_coach
+        run: |
+          python run_pipeline.py \
+            --core-goal "${{ vars.CORE_GOAL }}" \
+            --training-preferences "${{ vars.TRAINING_PREFERENCES }}"
+
+      - name: Upload output artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-coach-report-${{ github.run_id }}
+          path: output/
+          retention-days: 90
