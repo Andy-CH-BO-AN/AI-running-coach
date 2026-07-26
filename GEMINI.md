@@ -16,7 +16,7 @@ Canonical 設定集中在 [`ai/README.md`](ai/README.md)。各工具僅保留薄
 ## 核心架構與職責邊界 (Crucial Design Principles)
 
 - **職責分離：** 距離、日期、加總、百分比等「事實 (deterministic facts)」必須由 Python 程式端 (`coach_context.py`) 精確計算。**AI (Gemini) 僅負責教練語境的判讀、狀態標籤、風險解釋與課表安排，絕對不要讓 AI 進行精確數學計算。**
-- **本地化：** 所有資料保留在本機，無需建構雲端服務架構。
+- **數據儲存與雲端架構：** 預設為本機儲存與運行，但支援配置 Neon 雲端資料庫 (`DATABASE_MODE=cloud`) 與 GitHub Actions 自動化排程，實現跨裝置資料同步。
 
 ## 專案架構脈絡
 
