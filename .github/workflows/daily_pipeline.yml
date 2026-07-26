@@ -38,6 +38,7 @@ jobs:
           GARMIN_ACCOUNT: ${{ secrets.GARMIN_ACCOUNT }}
           GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_GENAI_USE_VERTEXAI: "true"
           DATABASE_MODE: cloud
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           NEON_DATABASE_DIRECT_URL: ${{ secrets.NEON_DATABASE_DIRECT_URL }}
@@ -47,11 +48,3 @@ jobs:
           python run_pipeline.py \
             --core-goal "${{ vars.CORE_GOAL }}" \
             --training-preferences "${{ vars.TRAINING_PREFERENCES }}"
-
-      - name: Upload output artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: ai-coach-report-${{ github.run_id }}
-          path: output/
-          retention-days: 90
