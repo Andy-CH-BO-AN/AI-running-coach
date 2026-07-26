@@ -36,7 +36,13 @@ Apply the **deletion test** to anything you suspect is shallow: would deleting i
 
 ### 2. Present candidates as an HTML report
 
-Write a 100% self-contained, offline HTML file to the OS temp directory so nothing lands in the repo. Resolve the temp dir from `$TMPDIR`, falling back to `/tmp` (or `%TEMP%` on Windows), and write to `<tmpdir>/architecture-review-<timestamp>.html` so each run gets a fresh file. Open it for the user — `xdg-open <path>` on Linux, `open <path>` on macOS, `start <path>` on Windows — and tell them the absolute path.
+Write a 100% self-contained, offline HTML file to the OS temp directory (`<tmpdir>/architecture-review-<timestamp>.html`), and ALSO save a copy to the workspace output directory (`output/architecture-review-<timestamp>.html`) so remote/headless users can access and download it.
+
+**Desktop Opener & Headless Fallback:**
+- If a desktop environment is available, attempt to open the file (`open <path>` on macOS, `xdg-open <path>` on Linux, `start <path>` on Windows).
+- If running in a headless session, remote container, CLI runner, or if desktop opening is unavailable:
+  1. Surface the workspace file path `output/architecture-review-<timestamp>.html` so remote users can open/download it from the workspace.
+  2. **Inline Markdown Fallback:** Render an inline Markdown summary of all candidates (Title, Files, Problem, Solution, Benefits, Recommendation Strength, and Top Recommendation) directly in your chat response so the deliverable is immediately readable regardless of environment.
 
 **Local Data & Security Constraint:** Do NOT load any unpinned external scripts or CSS from CDNs (such as Tailwind CDN or Mermaid CDN). The report MUST function completely offline with zero network requests. Use embedded CSS (system typography, CSS variables, flexbox/grid layouts) and hand-crafted inline SVG / HTML elements for diagrams (boxes, seams, call graphs, cross-sections, collapse visuals). Each candidate gets a **before/after visualisation**. Be visual.
 
@@ -57,7 +63,7 @@ End the report with a **Top recommendation** section: which candidate you'd tack
 
 See [HTML-REPORT.md](HTML-REPORT.md) for the full HTML scaffold, diagram patterns, and styling guidance.
 
-Do NOT propose interfaces yet. After the file is written, ask the user: "Which of these would you like to explore?"
+Do NOT propose interfaces yet. After the report is delivered (via HTML file and inline fallback if headless), ask the user: "Which of these would you like to explore?"
 
 ### 3. Grilling loop
 
