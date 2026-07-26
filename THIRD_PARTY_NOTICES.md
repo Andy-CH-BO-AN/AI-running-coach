@@ -43,11 +43,15 @@ SOFTWARE.
   - `https://github.com/mattpocock/skills/blob/main/skills/productivity/grill-me/SKILL.md`
   - `https://github.com/mattpocock/skills/blob/main/skills/productivity/grilling/SKILL.md`
   - `https://github.com/mattpocock/skills/blob/main/skills/engineering/domain-modeling/SKILL.md`
+  - `https://github.com/mattpocock/skills/blob/main/skills/engineering/improve-codebase-architecture/SKILL.md`
+  - `https://github.com/mattpocock/skills/blob/main/skills/engineering/codebase-design/SKILL.md`
 - Adapted local files:
   - `ai/skills/grill-with-docs/`
   - `ai/skills/grill-me/`
   - `ai/skills/grilling/`
   - `ai/skills/domain-modeling/`
+  - `ai/skills/improve-codebase-architecture/`
+  - `ai/skills/codebase-design/`
 - Upstream license: MIT
 
 MIT License
