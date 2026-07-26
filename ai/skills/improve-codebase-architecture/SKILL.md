@@ -34,9 +34,7 @@ Then walk the codebase using your runtime's available subagent or task delegatio
 
 Apply the **deletion test** to anything you suspect is shallow: would deleting it concentrate complexity, or just move it? A "yes, concentrates" is the signal you want.
 
-### 2. Present candidates as an HTML report
-
-Write a 100% self-contained, offline HTML file to the OS temp directory (`<tmpdir>/architecture-review-<timestamp>.html`), and ALSO save a copy to the workspace output directory (`output/architecture-review-<timestamp>.html`) so remote/headless users can access and download it.
+Write a 100% self-contained, offline HTML file to the OS temp directory (`<tmpdir>/architecture-review-<timestamp>.html`), and ALSO save a copy to the workspace output directory (`output/architecture-review-<timestamp>.html`) so remote/headless users can access and download it. Ensure the workspace destination directory exists prior to writing (e.g., create `output/` via `mkdir -p output` if missing).
 
 **Desktop Opener & Headless Fallback:**
 - If a desktop environment is available, attempt to open the file (`open <path>` on macOS, `xdg-open <path>` on Linux, `start <path>` on Windows).

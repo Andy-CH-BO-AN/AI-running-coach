@@ -1,6 +1,6 @@
 # HTML Report Format
 
-The architectural review is rendered as a single 100% self-contained HTML file saved to the OS temp directory (`<tmpdir>/architecture-review-<timestamp>.html`) and copied to the workspace output directory (`output/architecture-review-<timestamp>.html`). In headless, remote, or non-GUI adapter environments where desktop opening is unavailable, surface the workspace file path and provide an inline Markdown summary fallback directly in the chat turn. All layout, typography, and visual diagrams are generated using embedded CSS and inline SVG/HTML elements. **No external CDN dependencies or third-party script tags are allowed**, ensuring full offline usability and compliance with local data privacy requirements.
+The architectural review is rendered as a single 100% self-contained HTML file saved to the OS temp directory (`<tmpdir>/architecture-review-<timestamp>.html`) and copied to the workspace output directory (`output/architecture-review-<timestamp>.html`, ensuring `output/` is created first via `mkdir -p output`). In headless, remote, or non-GUI adapter environments where desktop opening is unavailable, surface the workspace file path and provide an inline Markdown summary fallback directly in the chat turn. All layout, typography, and visual diagrams are generated using embedded CSS and inline SVG/HTML elements. **No external CDN dependencies or third-party script tags are allowed**, ensuring full offline usability and compliance with local data privacy requirements.
 
 ## Scaffold
 
