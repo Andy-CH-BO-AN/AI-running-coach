@@ -464,3 +464,78 @@ class TestActivityTypeMapping:
         msg = format_activity_message(session, None)
         assert "hiking" in msg
         assert "unknown_xyz" not in msg
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Garmin Connect 活動連結
+# ──────────────────────────────────────────────────────────────────────────────
+
+_GARMIN_BASE = "https://connect.garmin.com/modern/activity/"
+
+
+class TestGarminActivityLink:
+    def test_valid_int_activity_id_shows_link(self):
+        """正整數 activity_id 應顯示正確的 Garmin Connect URL。"""
+        session = _make_easy_running_session(activity_id=23738727822)
+        msg = format_activity_message(session, None)
+        assert f"{_GARMIN_BASE}23738727822" in msg
+        assert "🔗" in msg
+
+    def test_numeric_string_activity_id_shows_link(self):
+        """數字字串 activity_id 應正常轉換並顯示連結。"""
+        session = _make_easy_running_session(activity_id="23738727822")
+        msg = format_activity_message(session, None)
+        assert f"{_GARMIN_BASE}23738727822" in msg
+
+    def test_link_appears_after_week_section(self):
+        """連結應出現在本週累積區塊之後。"""
+        session = _make_easy_running_session(activity_id=12345)
+        msg = format_activity_message(session, _make_week())
+        week_pos = msg.find("本週累積")
+        link_pos = msg.find(_GARMIN_BASE)
+        assert week_pos != -1
+        assert link_pos != -1
+        assert link_pos > week_pos
+
+    def test_link_appears_without_week_section(self):
+        """week=None 時，連結仍正常顯示。"""
+        session = _make_easy_running_session(activity_id=12345)
+        msg = format_activity_message(session, None)
+        assert f"{_GARMIN_BASE}12345" in msg
+
+    def test_missing_activity_id_no_link(self):
+        """activity_id 缺失時不顯示連結。"""
+        session = _make_easy_running_session()
+        del session["activity_id"]
+        msg = format_activity_message(session, None)
+        assert _GARMIN_BASE not in msg
+
+    def test_none_activity_id_no_link(self):
+        """activity_id 為 None 時不顯示連結。"""
+        session = _make_easy_running_session(activity_id=None)
+        msg = format_activity_message(session, None)
+        assert _GARMIN_BASE not in msg
+
+    def test_non_numeric_string_activity_id_no_link(self):
+        """非數字字串 activity_id 不顯示連結。"""
+        session = _make_easy_running_session(activity_id="abc123")
+        msg = format_activity_message(session, None)
+        assert _GARMIN_BASE not in msg
+
+    def test_zero_activity_id_no_link(self):
+        """activity_id 為 0 時不顯示連結。"""
+        session = _make_easy_running_session(activity_id=0)
+        msg = format_activity_message(session, None)
+        assert _GARMIN_BASE not in msg
+
+    def test_negative_activity_id_no_link(self):
+        """activity_id 為負數時不顯示連結。"""
+        session = _make_easy_running_session(activity_id=-9999)
+        msg = format_activity_message(session, None)
+        assert _GARMIN_BASE not in msg
+
+    def test_float_whole_number_shows_link(self):
+        """整數值的 float（如 12345.0）可正常轉換為正整數並顯示連結。"""
+        session = _make_easy_running_session(activity_id=12345.0)
+        msg = format_activity_message(session, None)
+        assert f"{_GARMIN_BASE}12345" in msg

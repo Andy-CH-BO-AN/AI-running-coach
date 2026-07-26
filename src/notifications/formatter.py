@@ -64,6 +64,30 @@ def _sport_emoji(source_activity_type: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Garmin Connect 連結
+# ──────────────────────────────────────────────────────────────────────────────
+
+_GARMIN_ACTIVITY_BASE = "https://connect.garmin.com/modern/activity/"
+
+
+def _garmin_activity_url(activity_id: Any) -> str | None:
+    """將 activity_id 轉為 Garmin Connect 連結。
+
+    只有當 activity_id 可轉換為正整數時才回傳 URL，否則回傳 None。
+    不接受外部傳入的任意 URL，固定使用 _GARMIN_ACTIVITY_BASE 模板。
+    """
+    if activity_id is None:
+        return None
+    try:
+        aid = int(activity_id)
+    except (ValueError, TypeError):
+        return None
+    if aid <= 0:
+        return None
+    return f"{_GARMIN_ACTIVITY_BASE}{aid}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # 數值格式化工具
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -326,5 +350,11 @@ def format_activity_message(
             # 注意：derived_total_distance_km 混合跑步、游泳、自行車，
             # 第一版不顯示，避免誤導。
             # 待 coach_context 提供分運動類型的 subtotal 後再啟用。
+
+    # ── Garmin Connect 連結（本週累積之後）
+    url = _garmin_activity_url(activity.get("activity_id"))
+    if url:
+        lines.append("")
+        lines.append(f"🔗 {url}")
 
     return "\n".join(lines)
