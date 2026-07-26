@@ -25,6 +25,7 @@ Canonical 設定集中在 [`ai/README.md`](ai/README.md)。各工具僅保留薄
 - **資料獲取：** `src/ingestion/garmin_client.py` (Garmin API 整合)
 - **資料預處理：** `src/preprocessing/data_processor.py` (正規化) 與 `src/preprocessing/coach_context.py` (計算事實層)
 - **AI 代理：** `src/agents/coach.py` (呼叫 Gemini 並解析 JSON)
+- **通知服務：** `src/notifications/` (`notifier.py`, `line_client.py`, `formatter.py`) (自動化 LINE 群組通知與去重狀態持久化)
 - **前端展示：** `src/dashboard/server.py` 與 `dashboard/` (本機檢視介面)
 
 ## 技能要求 (Skills)
