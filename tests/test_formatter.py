@@ -539,3 +539,21 @@ class TestGarminActivityLink:
         session = _make_easy_running_session(activity_id=12345.0)
         msg = format_activity_message(session, None)
         assert f"{_GARMIN_BASE}12345" in msg
+
+    def test_non_integer_float_no_link(self):
+        """非整數 float（如 12345.9）不應截斷為 12345，應不顯示連結。"""
+        session = _make_easy_running_session(activity_id=12345.9)
+        msg = format_activity_message(session, None)
+        assert _GARMIN_BASE not in msg
+
+    def test_bool_true_no_link(self):
+        """True（Python bool，int 子類）不應產生 activity/1，應不顯示連結。"""
+        session = _make_easy_running_session(activity_id=True)
+        msg = format_activity_message(session, None)
+        assert _GARMIN_BASE not in msg
+
+    def test_bool_false_no_link(self):
+        """False（Python bool，int 子類）不應產生 activity/0，應不顯示連結。"""
+        session = _make_easy_running_session(activity_id=False)
+        msg = format_activity_message(session, None)
+        assert _GARMIN_BASE not in msg
