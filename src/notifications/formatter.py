@@ -64,6 +64,48 @@ def _sport_emoji(source_activity_type: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Garmin Connect 連結
+# ──────────────────────────────────────────────────────────────────────────────
+
+_GARMIN_ACTIVITY_BASE = "https://connect.garmin.com/modern/activity/"
+
+
+def _garmin_activity_url(activity_id: Any) -> str | None:
+    """將 activity_id 轉為 Garmin Connect 連結。
+
+    接受規則（依序檢查）：
+    - bool 一律拒絕（Python 中 bool 是 int 的子類，True→1 會產生錯誤連結）
+    - int：直接使用
+    - float：僅接受 is_integer() 為 True（12345.0 可；12345.9 拒絕）
+    - str：僅接受可直接轉換的純整數字串（"12345" 可；"12345.0" 拒絕）
+    - 其餘型別：拒絕
+
+    不接受外部傳入的任意 URL，固定使用 _GARMIN_ACTIVITY_BASE 模板。
+    """
+    if activity_id is None:
+        return None
+    # bool 是 int 子類，必須優先排除，否則 True → 1、False → 0
+    if isinstance(activity_id, bool):
+        return None
+    if isinstance(activity_id, int):
+        aid = activity_id
+    elif isinstance(activity_id, float):
+        if not activity_id.is_integer():
+            return None
+        aid = int(activity_id)
+    elif isinstance(activity_id, str):
+        try:
+            aid = int(activity_id)  # "12345.9" 等非純整數字串會 raise ValueError
+        except ValueError:
+            return None
+    else:
+        return None
+    if aid <= 0:
+        return None
+    return f"{_GARMIN_ACTIVITY_BASE}{aid}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # 數值格式化工具
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -326,5 +368,11 @@ def format_activity_message(
             # 注意：derived_total_distance_km 混合跑步、游泳、自行車，
             # 第一版不顯示，避免誤導。
             # 待 coach_context 提供分運動類型的 subtotal 後再啟用。
+
+    # ── Garmin Connect 連結（本週累積之後）
+    url = _garmin_activity_url(activity.get("activity_id"))
+    if url:
+        lines.append("")
+        lines.append(f"🔗 {url}")
 
     return "\n".join(lines)
