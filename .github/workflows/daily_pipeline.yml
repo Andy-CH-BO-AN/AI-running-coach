@@ -10,21 +10,6 @@ jobs:
   run-pipeline:
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: ai_running_coach
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d ai_running_coach"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -41,7 +26,11 @@ jobs:
 
       - name: Run database migrations
         env:
-          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/ai_running_coach
+          DATABASE_MODE: cloud
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          NEON_DATABASE_DIRECT_URL: ${{ secrets.NEON_DATABASE_DIRECT_URL }}
+          NEON_POSTGRES_USER: ${{ secrets.NEON_POSTGRES_USER }}
+          NEON_POSTGRES_PASSWORD: ${{ secrets.NEON_POSTGRES_PASSWORD }}
         run: alembic upgrade head
 
       - name: Run AI Coach Pipeline
@@ -49,7 +38,11 @@ jobs:
           GARMIN_ACCOUNT: ${{ secrets.GARMIN_ACCOUNT }}
           GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/ai_running_coach
+          DATABASE_MODE: cloud
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          NEON_DATABASE_DIRECT_URL: ${{ secrets.NEON_DATABASE_DIRECT_URL }}
+          NEON_POSTGRES_USER: ${{ secrets.NEON_POSTGRES_USER }}
+          NEON_POSTGRES_PASSWORD: ${{ secrets.NEON_POSTGRES_PASSWORD }}
         run: |
           python run_pipeline.py \
             --core-goal "${{ vars.CORE_GOAL }}" \
