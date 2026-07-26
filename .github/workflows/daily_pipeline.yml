@@ -44,7 +44,9 @@ jobs:
           NEON_DATABASE_DIRECT_URL: ${{ secrets.NEON_DATABASE_DIRECT_URL }}
           NEON_POSTGRES_USER: ${{ secrets.NEON_POSTGRES_USER }}
           NEON_POSTGRES_PASSWORD: ${{ secrets.NEON_POSTGRES_PASSWORD }}
+          CORE_GOAL: ${{ vars.CORE_GOAL }}
+          TRAINING_PREFERENCES: ${{ vars.TRAINING_PREFERENCES }}
         run: |
           python run_pipeline.py \
-            --core-goal "${{ vars.CORE_GOAL }}" \
-            --training-preferences "${{ vars.TRAINING_PREFERENCES }}"
+            --core-goal "$CORE_GOAL" \
+            --training-preferences "$TRAINING_PREFERENCES"
