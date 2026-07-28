@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "run_neon_migrations.sh"
@@ -121,6 +123,60 @@ def test_cannot_connect_now_retries_then_enters_degraded_mode(tmp_path):
     assert len(attempts) == 3
     assert sleeps == ["10", "20"]
     assert env_lines == ["DATABASE_AVAILABLE=false", "GARMIN_ACTIVITY_LIMIT=10"]
+    assert failure_message not in result.stdout
+    assert failure_message not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("sqlstate", "failure_text"),
+    [
+        ("57P01", "FATAL: terminating connection due to administrator command"),
+        ("57P02", "FATAL: the database system is in recovery mode after a crash"),
+    ],
+)
+def test_shutdown_sqlstates_retry_then_enter_degraded_mode(
+    tmp_path,
+    sqlstate,
+    failure_text,
+):
+    failure_message = f"{failure_text} (SQLSTATE {sqlstate})"
+    result, env_lines, attempts, sleeps = _run_migration_script(
+        tmp_path,
+        fail_until=3,
+        failure_message=failure_message,
+    )
+
+    assert result.returncode == 0
+    assert len(attempts) == 3
+    assert sleeps == ["10", "20"]
+    assert env_lines == ["DATABASE_AVAILABLE=false", "GARMIN_ACTIVITY_LIMIT=10"]
+    assert failure_message not in result.stdout
+    assert failure_message not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("sqlstate", "failure_text"),
+    [
+        ("57014", "canceling statement due to user request"),
+        ("57P04", "FATAL: database was dropped"),
+    ],
+)
+def test_non_transient_operator_sqlstates_fail_closed(
+    tmp_path,
+    sqlstate,
+    failure_text,
+):
+    failure_message = f"{failure_text} (SQLSTATE {sqlstate})"
+    result, env_lines, attempts, sleeps = _run_migration_script(
+        tmp_path,
+        fail_until=1,
+        failure_message=failure_message,
+    )
+
+    assert result.returncode == 1
+    assert attempts == ["attempt"]
+    assert sleeps == []
+    assert env_lines == []
     assert failure_message not in result.stdout
     assert failure_message not in result.stderr
 

@@ -176,6 +176,40 @@ def test_database_connection_classifier_accepts_cannot_connect_now():
     assert is_database_connection_error(compute_starting) is True
 
 
+@pytest.mark.parametrize("sqlstate", ["57P01", "57P02"])
+def test_database_connection_classifier_accepts_shutdown_sqlstates(sqlstate):
+    from src.db.settings import is_database_connection_error
+
+    shutdown_error = OperationalError(
+        "SELECT 1",
+        {},
+        _DriverError("database connection terminated during restart", sqlstate=sqlstate),
+        connection_invalidated=True,
+    )
+
+    assert is_database_connection_error(shutdown_error) is True
+
+
+@pytest.mark.parametrize(
+    ("sqlstate", "connection_invalidated"),
+    [("57014", False), ("57P04", True)],
+)
+def test_database_connection_classifier_rejects_other_operator_intervention_states(
+    sqlstate,
+    connection_invalidated,
+):
+    from src.db.settings import is_database_connection_error
+
+    non_transient_error = OperationalError(
+        "SELECT 1",
+        {},
+        _DriverError("non-transient operator intervention", sqlstate=sqlstate),
+        connection_invalidated=connection_invalidated,
+    )
+
+    assert is_database_connection_error(non_transient_error) is False
+
+
 @pytest.mark.parametrize("sqlstate", ["28P01", None])
 def test_database_connection_classifier_rejects_authentication_failures(sqlstate):
     from src.db.settings import is_database_connection_error

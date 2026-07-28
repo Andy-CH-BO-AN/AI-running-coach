@@ -16,7 +16,7 @@ is_connection_failure() {
   fi
 
   if grep -Eqi 'sqlstate[^[:alnum:]]*[[:alnum:]]{5}' "$1"; then
-    grep -Eqi 'sqlstate[^[:alnum:]]*(08[[:alnum:]]{3}|57p03)' "$1"
+    grep -Eqi 'sqlstate[^[:alnum:]]*(08[[:alnum:]]{3}|57p0[123])' "$1"
     return
   fi
 

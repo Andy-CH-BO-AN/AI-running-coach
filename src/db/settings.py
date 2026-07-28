@@ -10,6 +10,7 @@ VALID_DATABASE_MODES = {"local", "mirror", "cloud"}
 VALID_DATABASE_TARGETS = {"primary", "shadow", "local", "cloud"}
 VALID_DATABASE_PURPOSES = {"app", "direct"}
 POSTGRES_DRIVER_ALIASES = {"postgres", "postgresql", "postgresql+psycopg2"}
+TRANSIENT_POSTGRES_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
 
 
 def env_value(name: str) -> str | None:
@@ -33,7 +34,7 @@ def is_database_available() -> bool:
 
 
 def is_database_connection_error(exc: BaseException) -> bool:
-    """Classify only connection-level SQLAlchemy failures as degradable."""
+    """Classify connection outages, including PostgreSQL restart states, as degradable."""
     if not isinstance(exc, SQLAlchemyError):
         return False
 
@@ -42,7 +43,10 @@ def is_database_connection_error(exc: BaseException) -> bool:
     detail = str(original).lower()
     if isinstance(sqlstate, str):
         normalized_sqlstate = sqlstate.upper()
-        return normalized_sqlstate.startswith("08") or normalized_sqlstate == "57P03"
+        return (
+            normalized_sqlstate.startswith("08")
+            or normalized_sqlstate in TRANSIENT_POSTGRES_SQLSTATES
+        )
 
     authentication_markers = (
         "password authentication failed",
