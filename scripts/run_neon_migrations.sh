@@ -20,6 +20,13 @@ is_connection_failure() {
     return
   fi
 
+  # SQLAlchemy may render the psycopg exception class/message without SQLSTATE.
+  if grep -Eqi \
+    'psycopg(2)?\.errors\.(adminshutdown|crashshutdown|cannotconnectnow)([^[:alnum:]_]|$)|the database system is (starting up|shutting down|in recovery mode)|terminating connection (due to administrator command|because of crash of another server process)' \
+    "$1"; then
+    return 0
+  fi
+
   grep -Eqi \
     'could not connect|connection (refused|reset|closed|timed out)|connection timeout( expired)?|connect timeout|timeout expired|network is unreachable|failed to resolve host|could not translate host|name or service not known|server closed|server is not accepting|ssl.*connection' \
     "$1"

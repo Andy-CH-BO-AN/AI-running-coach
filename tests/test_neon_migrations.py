@@ -128,6 +128,37 @@ def test_cannot_connect_now_retries_then_enters_degraded_mode(tmp_path):
 
 
 @pytest.mark.parametrize(
+    "failure_message",
+    [
+        "psycopg.errors.CannotConnectNow: temporarily unavailable",
+        "psycopg2.errors.AdminShutdown: maintenance restart",
+        "psycopg.errors.CrashShutdown: server process crashed",
+        "FATAL: the database system is starting up",
+        "FATAL: the database system is shutting down",
+        "FATAL: the database system is in recovery mode",
+        "terminating connection due to administrator command",
+        "terminating connection because of crash of another server process",
+    ],
+)
+def test_restart_output_without_sqlstate_retries_then_enters_degraded_mode(
+    tmp_path,
+    failure_message,
+):
+    result, env_lines, attempts, sleeps = _run_migration_script(
+        tmp_path,
+        fail_until=3,
+        failure_message=failure_message,
+    )
+
+    assert result.returncode == 0
+    assert len(attempts) == 3
+    assert sleeps == ["10", "20"]
+    assert env_lines == ["DATABASE_AVAILABLE=false", "GARMIN_ACTIVITY_LIMIT=10"]
+    assert failure_message not in result.stdout
+    assert failure_message not in result.stderr
+
+
+@pytest.mark.parametrize(
     ("sqlstate", "failure_text"),
     [
         ("57P01", "FATAL: terminating connection due to administrator command"),
@@ -167,6 +198,34 @@ def test_non_transient_operator_sqlstates_fail_closed(
     failure_text,
 ):
     failure_message = f"{failure_text} (SQLSTATE {sqlstate})"
+    result, env_lines, attempts, sleeps = _run_migration_script(
+        tmp_path,
+        fail_until=1,
+        failure_message=failure_message,
+    )
+
+    assert result.returncode == 1
+    assert attempts == ["attempt"]
+    assert sleeps == []
+    assert env_lines == []
+    assert failure_message not in result.stdout
+    assert failure_message not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "failure_message",
+    [
+        "psycopg.errors.QueryCanceled: canceling statement due to user request",
+        "psycopg.errors.DatabaseDropped: FATAL: database was dropped",
+        "psycopg.errors.AdminShutdownSomething: unrelated migration failure",
+        "psycopg.errors.CannotConnectNow2: unrelated migration failure",
+        "psycopg2.errors.CrashShutdown_helper: unrelated migration failure",
+    ],
+)
+def test_other_psycopg_operator_errors_without_sqlstate_fail_closed(
+    tmp_path,
+    failure_message,
+):
     result, env_lines, attempts, sleeps = _run_migration_script(
         tmp_path,
         fail_until=1,
