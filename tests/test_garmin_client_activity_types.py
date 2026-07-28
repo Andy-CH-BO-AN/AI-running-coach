@@ -108,9 +108,9 @@ class GarminClientActivityTypeTests(unittest.TestCase):
         ):
             payload = get_garmin_activities(n=999, since_date=date(2026, 5, 10))
 
-        self.assertEqual([item["activity_id"] for item in payload["activities"]], [1, 2])
-        self.assertIsNone(payload["activities"][1]["average_pace"])
-        self.assertEqual(payload["activities"][1]["raw_data"]["average_speed_kmh"], 20.0)
+        self.assertEqual([item["activity_id"] for item in payload["activities"]], [2, 1])
+        self.assertIsNone(payload["activities"][0]["average_pace"])
+        self.assertEqual(payload["activities"][0]["raw_data"]["average_speed_kmh"], 20.0)
 
     def test_short_cycling_activities_are_skipped_before_detail_fetch(self):
         class FakeGarminClient:
@@ -224,6 +224,55 @@ class GarminClientActivityTypeTests(unittest.TestCase):
             payload = get_garmin_activities(n=1, fallback_max_heart_rate=190)
 
         self.assertEqual(payload["user_data"]["max_heart_rate"], 190)
+
+    def test_activity_limit_selects_newest_records_from_unsorted_api_page(self):
+        class FakeGarminClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def login(self):
+                pass
+
+            def get_rhr_day(self, _date):
+                return {}
+
+            def get_user_profile(self):
+                return {}
+
+            def get_personal_record(self):
+                return []
+
+            def get_activities(self, _start, _limit):
+                return [
+                    {
+                        "activityId": activity_id,
+                        "activityType": {"typeKey": "running"},
+                        "startTimeLocal": f"2026-05-10 {activity_id:02d}:00:00",
+                        "distance": 10000,
+                        "duration": 3000,
+                    }
+                    for activity_id in [1, 12, 3, 11, 4, 10, 5, 9, 6, 8, 7, 2]
+                ]
+
+            def get_activity_splits(self, _activity_id):
+                return {"lapDTOs": []}
+
+            def get_activity(self, _activity_id):
+                return {}
+
+            def get_activity_hr_in_timezones(self, _activity_id):
+                return []
+
+            def get_activity_power_in_timezones(self, _activity_id):
+                return []
+
+        with patch.dict(os.environ, {"GARMIN_ACCOUNT": "user@example.com", "GARMIN_PASSWORD": "secret"}), patch(
+            "src.ingestion.garmin_client.Garmin", FakeGarminClient
+        ):
+            payload = get_garmin_activities(n=10)
+
+        assert [item["activity_id"] for item in payload["activities"]] == list(range(12, 2, -1))
+        assert all(item["started_at"] for item in payload["activities"])
 
     def test_zero_activity_limit_does_not_fetch_activity_pages(self):
         class FakeGarminClient:

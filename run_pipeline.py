@@ -1,12 +1,21 @@
 import argparse
+import os
 
 from src.pipeline.goal_prompt import build_goal_prompt_overrides
 from src.pipeline.runner import run_pipeline
 
 
+GARMIN_ACTIVITY_LIMIT = int(os.getenv("GARMIN_ACTIVITY_LIMIT", "75"))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Garmin sync and generate an AI training report.")
-    parser.add_argument("--activity-limit", type=int, default=75, help="How many recent activities the AI coach should analyze.")
+    parser.add_argument(
+        "--activity-limit",
+        type=int,
+        default=GARMIN_ACTIVITY_LIMIT,
+        help="How many recent activities the AI coach should analyze.",
+    )
     parser.add_argument(
         "--fetch-limit",
         type=int,

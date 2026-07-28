@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from sqlalchemy.engine import URL, make_url
+from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, OperationalError, SQLAlchemyError
 
 DEFAULT_DATABASE_URL = "postgresql+psycopg://postgres@localhost:5432/ai_running_coach"
 VALID_DATABASE_MODES = {"local", "mirror", "cloud"}
@@ -17,6 +18,53 @@ def env_value(name: str) -> str | None:
         return None
     value = value.strip()
     return value or None
+
+
+def is_database_available() -> bool:
+    """Return workflow DB availability; unspecified keeps local runs in normal mode."""
+    value = env_value("DATABASE_AVAILABLE")
+    if value is None:
+        return True
+    if value.lower() == "true":
+        return True
+    if value.lower() == "false":
+        return False
+    raise ValueError("DATABASE_AVAILABLE must be 'true' or 'false'.")
+
+
+def is_database_connection_error(exc: BaseException) -> bool:
+    """Classify only connection-level SQLAlchemy failures as degradable."""
+    if not isinstance(exc, SQLAlchemyError):
+        return False
+    if isinstance(exc, DisconnectionError):
+        return True
+    if isinstance(exc, DBAPIError) and exc.connection_invalidated:
+        return True
+    if not isinstance(exc, (OperationalError, InterfaceError)):
+        return False
+
+    original = getattr(exc, "orig", exc)
+    sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
+    if isinstance(sqlstate, str) and sqlstate.startswith("08"):
+        return True
+
+    detail = str(original).lower()
+    connection_markers = (
+        "connection",
+        "connect",
+        "network",
+        "server closed",
+        "server is not accepting",
+        "ssl",
+        "could not translate host",
+        "failed to resolve host",
+        "nodename",
+        "not known",
+        "dns",
+        "name or service",
+        "database is unavailable",
+    )
+    return any(marker in detail for marker in connection_markers)
 
 
 def postgres_env_database_url(prefix: str = "POSTGRES_") -> str | None:

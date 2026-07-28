@@ -282,6 +282,30 @@ class TestTokenSecurity:
                 f"Group ID leaked in log: {record.getMessage()}"
 
 
+class TestMessageLength:
+    def test_overlong_text_is_truncated_before_request_and_content_stays_private(self, caplog):
+        long_text = "秘密內容" * 2000
+        with patch("src.notifications.line_client.requests.Session") as mock_session_cls, \
+             caplog.at_level(logging.WARNING, logger="src.notifications.line_client"):
+            session = MagicMock()
+            session.__enter__ = MagicMock(return_value=session)
+            session.__exit__ = MagicMock(return_value=False)
+            session.post.return_value = _make_response(200)
+            mock_session_cls.return_value = session
+
+            result = send_push_message(TOKEN, GROUP_ID, long_text)
+
+        assert result.success is True
+        sent_text = session.post.call_args.kwargs["json"]["messages"][0]["text"]
+        assert len(sent_text) <= 5000
+        assert sent_text.endswith("…訊息過長，後續內容已截斷。")
+        log_messages = " ".join(record.getMessage() for record in caplog.records)
+        assert "truncated" in log_messages
+        assert "秘密內容" not in log_messages
+        assert TOKEN not in log_messages
+        assert GROUP_ID not in log_messages
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # LineSendResult 型別
 # ──────────────────────────────────────────────────────────────────────────────

@@ -4,11 +4,11 @@ import sys
 import tempfile
 import types
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -64,6 +64,10 @@ from src.pipeline import activity_payloads, runner
 from src.pipeline.activity_payloads import ActivityPayloadProvider
 from src.pipeline.goal_prompt import GoalPromptOverrides
 from src.services import report_generator
+
+
+def _connection_error(message: str = "connection refused") -> OperationalError:
+    return OperationalError("SELECT 1", {}, ConnectionError(message))
 
 
 class RunnerTests(unittest.TestCase):
@@ -182,7 +186,7 @@ class RunnerTests(unittest.TestCase):
         ), patch.object(provider, "_get_latest_activity_date", return_value=date(2026, 5, 10)), patch.object(
             activity_payloads, "get_recent_max_heart_rate", return_value=191
         ), patch.object(provider, "_fetch_garmin_updates", return_value=garmin_payload), patch.object(
-            provider, "_sync_garmin_to_db", side_effect=SQLAlchemyError("bind params hidden by runner")
+            provider, "_sync_garmin_to_db", side_effect=_connection_error()
         ), patch.object(provider, "_load_existing_db_payloads", return_value=existing_payload), patch.object(
             provider, "_fetch_without_db"
         ) as fallback:
@@ -215,8 +219,8 @@ class RunnerTests(unittest.TestCase):
         ), patch.object(provider, "_get_latest_activity_date", return_value=date(2026, 5, 10)), patch.object(
             activity_payloads, "get_recent_max_heart_rate", return_value=191
         ), patch.object(provider, "_fetch_garmin_updates", return_value=garmin_payload), patch.object(
-            provider, "_sync_garmin_to_db", side_effect=SQLAlchemyError("bind params hidden by runner")
-        ), patch.object(provider, "_load_existing_db_payloads", side_effect=SQLAlchemyError("read failed")), patch.object(
+            provider, "_sync_garmin_to_db", side_effect=_connection_error()
+        ), patch.object(provider, "_load_existing_db_payloads", side_effect=_connection_error()), patch.object(
             provider, "_fetch_without_db"
         ) as fallback:
             raw_activities, user_data = provider.load_or_fetch(
@@ -246,7 +250,7 @@ class RunnerTests(unittest.TestCase):
         with patch.object(
             activity_payloads,
             "get_or_create_default_user",
-            side_effect=SQLAlchemyError("db unavailable"),
+            side_effect=_connection_error(),
         ), patch.object(provider, "_fetch_without_db", return_value=direct_payload) as fallback:
             raw_activities, user_data = provider.load_or_fetch(
                 activity_limit=75,
@@ -257,6 +261,43 @@ class RunnerTests(unittest.TestCase):
         fallback.assert_called_once_with(activity_limit=75, timestamp="20260510")
         self.assertEqual(raw_activities, direct_payload[0])
         self.assertEqual(user_data, direct_payload[1])
+
+    def test_load_or_fetch_reraises_non_connection_sqlalchemy_errors(self):
+        class FakeSessionContext:
+            def __enter__(self):
+                return Mock()
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+        provider = ActivityPayloadProvider(session_factory=lambda: FakeSessionContext())
+        with patch.object(
+            activity_payloads,
+            "get_or_create_default_user",
+            side_effect=IntegrityError("INSERT", {}, Exception("constraint failed")),
+        ), self.assertRaises(IntegrityError):
+            provider.load_or_fetch(activity_limit=75, fetch_limit=75, timestamp="20260510")
+
+    def test_load_or_fetch_reraises_statement_timeout(self):
+        class FakeSessionContext:
+            def __enter__(self):
+                return Mock()
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+        provider = ActivityPayloadProvider(session_factory=lambda: FakeSessionContext())
+        statement_timeout = OperationalError(
+            "SELECT expensive_query",
+            {},
+            Exception("canceling statement due to statement timeout"),
+        )
+        with patch.object(
+            activity_payloads,
+            "get_or_create_default_user",
+            side_effect=statement_timeout,
+        ), self.assertRaises(OperationalError):
+            provider.load_or_fetch(activity_limit=75, fetch_limit=75, timestamp="20260510")
 
     def test_runner_load_or_fetch_delegates_to_activity_payload_provider(self):
         provider = Mock()
@@ -410,7 +451,7 @@ class RunnerTests(unittest.TestCase):
                 return_value=(raw_activities, {"max_heart_rate": 190}),
             ), patch.object(runner, "preprocess_data", return_value=processed_data), patch.object(
                 report_generator, "coach", return_value=report_payload
-            ) as coach_mock:
+            ) as coach_mock, patch.object(runner, "_run_line_notification"):
                 report = runner.run_pipeline()
 
             self.assertEqual(report, str(output_dir / "ai_report_20260510.json"))
@@ -455,7 +496,7 @@ class RunnerTests(unittest.TestCase):
                 runner, "_persist_pipeline_artifacts", return_value=Path("output/report.json")
             ), patch.object(
                 report_generator, "coach", return_value={"headline": "report"}
-            ) as coach_mock:
+            ) as coach_mock, patch.object(runner, "_run_line_notification"):
                 report = runner.run_pipeline(goal_overrides=overrides)
 
         self.assertEqual(report, "output/report.json")
@@ -564,6 +605,96 @@ class RunnerTests(unittest.TestCase):
 
             raw_payload = json.loads((raw_dir / "garmin_user_20260510.json").read_text(encoding="utf-8"))
             self.assertEqual(raw_payload["max_heart_rate"], 190)
+
+    def test_degraded_mode_skips_session_and_uses_latest_ten_activities(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            session_factory = Mock(side_effect=AssertionError("DB session must not be created"))
+            garmin_fetcher = Mock(
+                return_value={
+                    "activities": [
+                        {
+                            "activity_id": activity_id,
+                            "date": "2026-05-10",
+                            "started_at": f"2026-05-10 {activity_id:02d}:00:00",
+                            "type": "running",
+                        }
+                        for activity_id in [1, 12, 3, 11, 4, 10, 5, 9, 6, 8, 7, 2]
+                    ],
+                    "user_data": {"max_heart_rate": 190},
+                }
+            )
+            provider = ActivityPayloadProvider(
+                session_factory=session_factory,
+                garmin_fetcher=garmin_fetcher,
+                raw_data_dir=Path(temp_dir) / "raw",
+            )
+
+            with patch.dict(os.environ, {"DATABASE_AVAILABLE": "false"}, clear=False):
+                raw_activities, user_data = provider.load_or_fetch(
+                    activity_limit=10,
+                    fetch_limit=10,
+                    timestamp="20260510",
+                )
+
+            session_factory.assert_not_called()
+            garmin_fetcher.assert_called_once_with(10, progress=True)
+            self.assertEqual([item["activity_id"] for item in raw_activities], list(range(12, 2, -1)))
+            self.assertEqual(user_data["max_heart_rate"], 190)
+
+    def test_direct_garmin_payload_limits_normal_mode_to_latest_seventy_five(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provider = ActivityPayloadProvider(
+                garmin_fetcher=Mock(
+                    return_value={
+                        "activities": [
+                            {
+                                "activity_id": activity_id,
+                                "started_at": (datetime(2026, 1, 1) + timedelta(days=activity_id)).isoformat(),
+                                "type": "running",
+                            }
+                            for activity_id in range(1, 81)
+                        ],
+                        "user_data": {},
+                    }
+                ),
+                raw_data_dir=Path(temp_dir) / "raw",
+            )
+
+            raw_activities, _ = provider._fetch_without_db(
+                activity_limit=75,
+                timestamp="20260510",
+            )
+
+        assert len(raw_activities) == 75
+        assert [item["activity_id"] for item in raw_activities] == list(range(80, 5, -1))
+
+    def test_degraded_mode_does_not_swallow_garmin_errors(self):
+        provider = ActivityPayloadProvider(
+            session_factory=Mock(side_effect=AssertionError("DB session must not be created")),
+            garmin_fetcher=Mock(side_effect=ValueError("Garmin failed")),
+        )
+
+        with patch.dict(os.environ, {"DATABASE_AVAILABLE": "false"}, clear=False), \
+             self.assertRaisesRegex(ValueError, "Garmin failed"):
+            provider.load_or_fetch(activity_limit=10, fetch_limit=10, timestamp="20260510")
+
+    def test_run_pipeline_reads_garmin_limit_from_environment_when_not_explicit(self):
+        with patch.dict(
+            os.environ,
+            {"GARMIN_ACTIVITY_LIMIT": "10", "DATABASE_AVAILABLE": "false"},
+            clear=False,
+        ), patch.object(runner, "_build_timestamp", return_value="20260510"), patch.object(
+            runner,
+            "_load_or_fetch_activity_payloads",
+            return_value=([{"activity_id": 1}], {}),
+        ) as load_payloads, patch.object(runner, "preprocess_data", return_value=[]):
+            self.assertIsNone(runner.run_pipeline())
+
+        load_payloads.assert_called_once_with(
+            activity_limit=10,
+            fetch_limit=10,
+            timestamp="20260510",
+        )
 
 
 if __name__ == "__main__":

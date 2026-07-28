@@ -35,7 +35,7 @@ jobs:
           NEON_DATABASE_DIRECT_URL: ${{ secrets.NEON_DATABASE_DIRECT_URL }}
           NEON_POSTGRES_USER: ${{ secrets.NEON_POSTGRES_USER }}
           NEON_POSTGRES_PASSWORD: ${{ secrets.NEON_POSTGRES_PASSWORD }}
-        run: alembic upgrade head
+        run: bash scripts/run_neon_migrations.sh
 
       - name: Run AI Coach Pipeline
         env:

@@ -5,6 +5,7 @@ import pytest
 pytest.importorskip("sqlalchemy")
 
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import OperationalError
 
 
 def _load_session_module(monkeypatch, **env):
@@ -14,6 +15,7 @@ def _load_session_module(monkeypatch, **env):
 
     for key in (
         "DATABASE_MODE",
+        "DATABASE_AVAILABLE",
         "DATABASE_URL",
         "LOCAL_DATABASE_URL",
         "NEON_DATABASE_URL",
@@ -117,6 +119,28 @@ def test_get_database_mode_rejects_unknown_value(monkeypatch):
 
     with pytest.raises(ValueError, match="Unsupported DATABASE_MODE"):
         module.get_database_mode()
+
+
+def test_degraded_mode_does_not_create_engine_or_session(monkeypatch):
+    module = _load_session_module(monkeypatch, DATABASE_AVAILABLE="false")
+    monkeypatch.setattr(module, "create_engine", lambda *_args, **_kwargs: pytest.fail("engine must stay lazy"))
+
+    with pytest.raises(module.DatabaseUnavailableError):
+        module.get_engine()
+    with pytest.raises(module.DatabaseUnavailableError):
+        module.SessionLocal()
+
+
+def test_database_connection_classifier_rejects_statement_timeout():
+    from src.db.settings import is_database_connection_error
+
+    statement_timeout = OperationalError(
+        "SELECT expensive_query",
+        {},
+        Exception("canceling statement due to statement timeout"),
+    )
+
+    assert is_database_connection_error(statement_timeout) is False
 
 
 # ---------------------------------------------------------------------------

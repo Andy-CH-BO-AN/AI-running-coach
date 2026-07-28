@@ -24,6 +24,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 
 from src.notifications.line_client import LineSendResult
 from src.notifications.notifier import NotificationResult, run_line_notification
@@ -71,6 +72,10 @@ DUMMY_GROUP = "dummy_group"
 
 SUCCESS_RESULT = LineSendResult(success=True, status_code=200, attempts=1, error_type=None)
 FAIL_RESULT = LineSendResult(success=False, status_code=500, attempts=3, error_type="server_error")
+
+
+def _connection_error(message: str = "connection refused") -> OperationalError:
+    return OperationalError("SELECT 1", {}, ConnectionError(message))
 
 
 @pytest.fixture(autouse=True)
@@ -371,8 +376,8 @@ class TestPartialSuccess:
                    side_effect=[SUCCESS_RESULT, FAIL_RESULT]):
             run_line_notification(str(ctx_path))
 
-        assert 1001 in recorded_ids
-        assert 1002 not in recorded_ids
+        assert 1002 in recorded_ids
+        assert 1001 not in recorded_ids
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -419,10 +424,27 @@ class TestAdvisoryLock:
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
              patch("src.notifications.notifier._release_advisory_lock") as mock_release, \
              patch("src.notifications.notifier._get_db_session"), \
-             patch("src.notifications.notifier.get_notified_activity_ids",
+            patch("src.notifications.notifier.get_notified_activity_ids",
                    side_effect=RuntimeError("DB down")):
-            run_line_notification(str(ctx_path))
+            with pytest.raises(RuntimeError, match="DB down"):
+                run_line_notification(str(ctx_path))
 
+        mock_release.assert_called_once()
+
+    def test_connection_error_before_send_uses_stateless_degraded_mode(self, tmp_path):
+        ctx_path = _write_context(tmp_path, _make_coach_context())
+
+        with patch.dict(os.environ, self._env()), \
+             patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
+             patch("src.notifications.notifier._release_advisory_lock") as mock_release, \
+             patch("src.notifications.notifier._get_db_session"), \
+             patch("src.notifications.notifier.get_notified_activity_ids", side_effect=_connection_error()), \
+             patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT) as send:
+            result = run_line_notification(str(ctx_path))
+
+        assert result.status == "degraded_done"
+        assert result.sent == 1
+        send.assert_called_once()
         mock_release.assert_called_once()
 
 
@@ -434,8 +456,28 @@ class TestDbCommitFailure:
     def _env(self):
         return {"LINE_CHANNEL_ACCESS_TOKEN": DUMMY_TOKEN, "LINE_GROUP_ID": DUMMY_GROUP}
 
-    def test_db_commit_failure_logs_error(self, tmp_path, caplog):
-        """LINE 成功但 DB commit 失敗時必須有明確 error log。"""
+    def test_db_commit_failure_logs_warning_without_error_details(self, tmp_path, caplog):
+        """LINE 成功但 DB commit 失敗時必須明確記錄可重複推播風險。"""
+        ctx_path = _write_context(tmp_path, _make_coach_context())
+
+        with patch.dict(os.environ, self._env()), \
+             patch("src.notifications.notifier.get_notified_activity_ids", return_value={9999}), \
+             patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
+             patch("src.notifications.notifier._release_advisory_lock"), \
+            patch("src.notifications.notifier._get_db_session"), \
+            patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT), \
+            patch("src.notifications.notifier.record_notification",
+                   side_effect=_connection_error()), \
+             caplog.at_level(logging.WARNING, logger="src.notifications.notifier"):
+            result = run_line_notification(str(ctx_path))
+
+        assert result.failed == 1
+        warning_messages = " ".join(r.getMessage() for r in caplog.records)
+        assert "1001" in warning_messages
+        assert "may be sent again" in warning_messages
+        assert "DB commit failed" not in warning_messages
+
+    def test_non_connection_db_write_error_propagates(self, tmp_path):
         ctx_path = _write_context(tmp_path, _make_coach_context())
 
         with patch.dict(os.environ, self._env()), \
@@ -444,17 +486,78 @@ class TestDbCommitFailure:
              patch("src.notifications.notifier._release_advisory_lock"), \
              patch("src.notifications.notifier._get_db_session"), \
              patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT), \
-             patch("src.notifications.notifier.record_notification",
-                   side_effect=Exception("DB commit failed")), \
-             caplog.at_level(logging.ERROR, logger="src.notifications.notifier"):
+             patch(
+                 "src.notifications.notifier.record_notification",
+                 side_effect=IntegrityError("INSERT", {}, Exception("constraint failed")),
+             ), pytest.raises(IntegrityError):
+            run_line_notification(str(ctx_path))
+
+
+class TestNotificationCaps:
+    def _env(self, *, database_available: str) -> dict[str, str]:
+        return {
+            "LINE_CHANNEL_ACCESS_TOKEN": DUMMY_TOKEN,
+            "LINE_GROUP_ID": DUMMY_GROUP,
+            "DATABASE_AVAILABLE": database_available,
+        }
+
+    @staticmethod
+    def _many_activity_context(count: int) -> dict:
+        sessions = [
+            {
+                "activity_id": activity_id,
+                "date": f"2026-07-{(activity_id % 28) + 1:02d}",
+                "type": "easy",
+                "source_activity_type": "running",
+                "distance_km": 5.0,
+                "duration_min": 30.0,
+                "training_load": 50.0,
+                "avg_hr": 140,
+                "avg_pace": "6:00",
+                "segments": [],
+                "environment": {},
+                "data_quality": {"status": "complete", "missing_fields": []},
+            }
+            for activity_id in range(1, count + 1)
+        ]
+        return _make_coach_context([sessions])
+
+    def test_normal_mode_caps_to_twenty_and_defers_remaining(self, tmp_path, caplog):
+        ctx_path = _write_context(tmp_path, self._many_activity_context(21))
+
+        with patch.dict(os.environ, self._env(database_available="true")), \
+             patch("src.notifications.notifier.get_notified_activity_ids", return_value={9999}), \
+             patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
+             patch("src.notifications.notifier._release_advisory_lock"), \
+             patch("src.notifications.notifier._get_db_session"), \
+             patch("src.notifications.notifier.record_notification"), \
+             patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT) as send, \
+             caplog.at_level(logging.WARNING, logger="src.notifications.notifier"):
             result = run_line_notification(str(ctx_path))
 
-        # 應有 error log 說明可能的重複推播風險
-        error_msgs = " ".join(r.getMessage() for r in caplog.records
-                              if r.levelno >= logging.ERROR)
-        assert "1001" in error_msgs or "commit" in error_msgs.lower() or \
-               "db" in error_msgs.lower() or "重複" in error_msgs or \
-               "duplicate" in error_msgs.lower()
+        assert result.status == "done"
+        assert result.sent == 20
+        assert send.call_count == 20
+        assert any("deferring 1 activities" in record.getMessage() for record in caplog.records)
+
+    def test_degraded_mode_caps_to_three_without_lock_or_session(self, tmp_path, caplog):
+        ctx_path = _write_context(tmp_path, self._many_activity_context(4))
+
+        with patch.dict(os.environ, self._env(database_available="false")), \
+             patch("src.notifications.notifier._get_lock_connection") as lock, \
+             patch("src.notifications.notifier._get_db_session") as session, \
+             patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT) as send, \
+             caplog.at_level(logging.WARNING, logger="src.notifications.notifier"):
+            result = run_line_notification(str(ctx_path))
+
+        assert result.status == "degraded_done"
+        assert result.sent == 3
+        assert send.call_count == 3
+        lock.assert_not_called()
+        session.assert_not_called()
+        messages = " ".join(record.getMessage() for record in caplog.records)
+        assert "Repeated notifications are possible" in messages
+        assert "capped at 3" in messages
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -465,18 +568,13 @@ class TestBadJson:
     def _env(self):
         return {"LINE_CHANNEL_ACCESS_TOKEN": DUMMY_TOKEN, "LINE_GROUP_ID": DUMMY_GROUP}
 
-    def test_bad_json_logs_error_does_not_crash(self, tmp_path, caplog):
-        """JSON 損壞時，logging.exception 後回傳 failed 狀態，不讓 pipeline crash。"""
+    def test_bad_json_raises_to_fail_workflow(self, tmp_path):
+        """非 DB context 資料錯誤不能被 degraded mode 吞掉。"""
         p = tmp_path / "bad.json"
         p.write_text("{not valid json", encoding="utf-8")
 
-        with patch.dict(os.environ, self._env()), \
-             caplog.at_level(logging.ERROR, logger="src.notifications.notifier"):
-            result = run_line_notification(str(p))
-
-        # 不應 raise，應 log error
-        assert result is not None
-        assert any(r.levelno >= logging.ERROR for r in caplog.records)
+        with patch.dict(os.environ, self._env()), pytest.raises(json.JSONDecodeError):
+            run_line_notification(str(p))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -505,19 +603,15 @@ class TestFormatterException:
     def _env(self):
         return {"LINE_CHANNEL_ACCESS_TOKEN": DUMMY_TOKEN, "LINE_GROUP_ID": DUMMY_GROUP}
 
-    def test_formatter_exception_increments_failed_count(self, tmp_path):
-        """當 formatter 發生未預期例外時，應計算為 failed += 1 且不中斷其他處理。"""
+    def test_formatter_exception_raises_to_fail_workflow(self, tmp_path):
+        """非 DB formatter 錯誤不能被 degraded mode 吞掉。"""
         ctx_path = _write_context(tmp_path, _make_coach_context())
 
         with patch.dict(os.environ, self._env()), \
              patch("src.notifications.notifier.get_notified_activity_ids", return_value={9999}), \
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
              patch("src.notifications.notifier._release_advisory_lock"), \
-             patch("src.notifications.notifier._get_db_session"), \
-             patch("src.notifications.notifier.format_activity_message", side_effect=Exception("Formatter crash")):
-            result = run_line_notification(str(ctx_path))
-
-        assert result.status == "done"
-        assert result.sent == 0
-        assert result.failed == 1
-
+            patch("src.notifications.notifier._get_db_session"), \
+            patch("src.notifications.notifier.format_activity_message", side_effect=Exception("Formatter crash")):
+            with pytest.raises(Exception, match="Formatter crash"):
+                run_line_notification(str(ctx_path))
