@@ -15,6 +15,7 @@ import requests
 
 from src.notifications.constants import (
     CONNECT_TIMEOUT_SEC,
+    LINE_MAX_TEXT_LENGTH,
     LINE_PUSH_URL,
     MAX_ATTEMPTS,
     READ_TIMEOUT_SEC,
@@ -51,14 +52,15 @@ def send_push_message(token: str, group_id: str, text: str) -> LineSendResult:
     Args:
         token: LINE Channel Access Token（不會出現在 log）。
         group_id: LINE 群組 ID（不會出現在 error log）。
-        text: 訊息文字（最多 5000 字元）。
+        text: 訊息文字（最多 5000 字元；超長安全截斷）。
 
     Returns:
         LineSendResult — 不含任何敏感資訊。
     """
+    safe_text = _truncate_text(text)
     payload = {
         "to": group_id,
-        "messages": [{"type": "text", "text": text}],
+        "messages": [{"type": "text", "text": safe_text}],
     }
     headers = {
         "Content-Type": "application/json",
@@ -159,3 +161,18 @@ def _parse_retry_after(headers: dict) -> float | None:
         return float(value)
     except (ValueError, TypeError):
         return None
+
+
+def _truncate_text(text: str) -> str:
+    """Keep payloads within LINE's limit without logging message contents."""
+    if len(text) <= LINE_MAX_TEXT_LENGTH:
+        return text
+
+    suffix = "\n…訊息過長，後續內容已截斷。"
+    safe_length = LINE_MAX_TEXT_LENGTH - len(suffix)
+    logger.warning(
+        "LINE push text truncated from %d to %d characters",
+        len(text),
+        LINE_MAX_TEXT_LENGTH,
+    )
+    return f"{text[:safe_length]}{suffix}"

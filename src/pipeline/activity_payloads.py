@@ -16,6 +16,7 @@ from src.db.repositories import (
     get_recent_max_heart_rate,
 )
 from src.db.session import SessionLocal
+from src.db.settings import is_database_available, is_database_connection_error
 from src.ingestion.garmin_client import get_garmin_activities
 from src.services.artifacts import persist_raw_artifacts
 from src.services.garmin_import_service import import_fetched_garmin_payload
@@ -178,7 +179,9 @@ class ActivityPayloadProvider:
     ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
         print("⚠️ DB unavailable; falling back to direct Garmin fetch for structured JSON output.")
         garmin_data = self.garmin_fetcher(activity_limit, progress=True)
-        raw_activities = garmin_data.get("activities", [])
+        raw_activities = self._limit_to_most_recent(
+            garmin_data.get("activities", []), activity_limit
+        )
         user_data = garmin_data.get("user_data", {})
         if raw_activities or user_data:
             self._persist_raw_artifacts(
@@ -187,6 +190,21 @@ class ActivityPayloadProvider:
                 user_data=user_data,
             )
         return raw_activities, user_data
+
+    @staticmethod
+    def _limit_to_most_recent(
+        activities: List[Dict[str, Any]],
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        """Order Garmin payloads newest-first before downstream processing."""
+        def sort_key(activity: Dict[str, Any]) -> tuple[str, int]:
+            try:
+                activity_id = int(activity.get("activity_id"))
+            except (TypeError, ValueError):
+                activity_id = -1
+            return (str(activity.get("started_at") or activity.get("date") or ""), activity_id)
+
+        return sorted(activities, key=sort_key, reverse=True)[:max(limit, 0)]
 
     def _load_existing_db_payloads(
         self,
@@ -204,6 +222,9 @@ class ActivityPayloadProvider:
         fetch_limit: int,
         timestamp: str,
     ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        if not is_database_available():
+            return self._fetch_without_db(activity_limit=activity_limit, timestamp=timestamp)
+
         fetched_raw_activities: List[Dict[str, Any]] = []
         fetched_user_data: Dict[str, Any] = {}
         try:
@@ -229,6 +250,8 @@ class ActivityPayloadProvider:
                 print(f"📚 Loaded {len(raw_activities)} recent activities from DB for AI Coach.")
                 return raw_activities, user_data
         except SQLAlchemyError as exc:
+            if not is_database_connection_error(exc):
+                raise
             print(f"⚠️ Database sync failed: {type(exc).__name__}")
             if fetched_raw_activities or fetched_user_data:
                 try:
@@ -240,10 +263,15 @@ class ActivityPayloadProvider:
                         )
                         return raw_activities, user_data
                 except SQLAlchemyError as read_exc:
+                    if not is_database_connection_error(read_exc):
+                        raise
                     print(f"⚠️ Existing DB read failed: {type(read_exc).__name__}")
                 print(
                     "⚠️ Using already-fetched Garmin payload for structured JSON output; "
                     "not calling Garmin again."
                 )
-                return fetched_raw_activities, fetched_user_data
+                return (
+                    self._limit_to_most_recent(fetched_raw_activities, activity_limit),
+                    fetched_user_data,
+                )
             return self._fetch_without_db(activity_limit=activity_limit, timestamp=timestamp)

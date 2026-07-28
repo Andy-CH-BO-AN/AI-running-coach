@@ -330,6 +330,23 @@ def _parse_activity_date(activity: Dict[str, Any]) -> Optional[date_cls]:
         return None
 
 
+def _activity_recency_key(activity: Dict[str, Any]) -> tuple[str, int]:
+    """Sort Garmin summaries before fetching costly activity details."""
+    try:
+        activity_id = int(activity.get('activityId'))
+    except (TypeError, ValueError):
+        activity_id = -1
+    return (str(activity.get('startTimeLocal') or activity.get('date') or ''), activity_id)
+
+
+def _collected_activity_recency_key(activity: Dict[str, Any]) -> tuple[str, int]:
+    try:
+        activity_id = int(activity.get('activity_id'))
+    except (TypeError, ValueError):
+        activity_id = -1
+    return (str(activity.get('started_at') or activity.get('date') or ''), activity_id)
+
+
 def get_garmin_activities(
     n: Optional[int] = 30,
     progress: bool = False,
@@ -371,6 +388,7 @@ def get_garmin_activities(
             )
         activities = safe_api_call(client.get_activities, start, page_size)
         if not activities: break
+        activities = sorted(activities, key=_activity_recency_key, reverse=True)
 
         stop_after_page = False
         for activity in activities:
@@ -424,6 +442,7 @@ def get_garmin_activities(
                 collected_activities.append({
                     'type': act_type,
                     'date': activity.get('startTimeLocal', '')[:10],
+                    'started_at': activity.get('startTimeLocal'),
                     'distance': distance_km,
                     'duration': dur_s / 60,
                     'average_pace': None if act_type == 'cycling' else performance_value,
@@ -438,5 +457,6 @@ def get_garmin_activities(
         if len(activities) < page_size: break
 
     
+    collected_activities.sort(key=_collected_activity_recency_key, reverse=True)
     print(f"✅ 成功抓取 {len(collected_activities)} 筆活動並完成數據校正")
     return {'activities': collected_activities, 'user_data': user_data}

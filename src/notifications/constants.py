@@ -39,6 +39,13 @@ REP_DISTANCE_TOLERANCE: float = 0.10
 
 LINE_PUSH_URL: str = "https://api.line.me/v2/bot/message/push"
 
+# LINE Messaging API text-message ceiling.
+LINE_MAX_TEXT_LENGTH: int = 5000
+
+# Per-run safety caps. Degraded mode has no persistent deduplication.
+MAX_LINE_NOTIFICATIONS_PER_RUN: int = 20
+MAX_DEGRADED_LINE_NOTIFICATIONS_PER_RUN: int = 3
+
 # 連線超時（秒）
 CONNECT_TIMEOUT_SEC: int = 5
 

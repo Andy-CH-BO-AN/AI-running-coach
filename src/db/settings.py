@@ -3,12 +3,14 @@ from __future__ import annotations
 import os
 
 from sqlalchemy.engine import URL, make_url
+from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, OperationalError, SQLAlchemyError
 
 DEFAULT_DATABASE_URL = "postgresql+psycopg://postgres@localhost:5432/ai_running_coach"
 VALID_DATABASE_MODES = {"local", "mirror", "cloud"}
 VALID_DATABASE_TARGETS = {"primary", "shadow", "local", "cloud"}
 VALID_DATABASE_PURPOSES = {"app", "direct"}
 POSTGRES_DRIVER_ALIASES = {"postgres", "postgresql", "postgresql+psycopg2"}
+TRANSIENT_POSTGRES_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
 
 
 def env_value(name: str) -> str | None:
@@ -17,6 +19,77 @@ def env_value(name: str) -> str | None:
         return None
     value = value.strip()
     return value or None
+
+
+def is_database_available() -> bool:
+    """Return workflow DB availability; unspecified keeps local runs in normal mode."""
+    value = env_value("DATABASE_AVAILABLE")
+    if value is None:
+        return True
+    if value.lower() == "true":
+        return True
+    if value.lower() == "false":
+        return False
+    raise ValueError("DATABASE_AVAILABLE must be 'true' or 'false'.")
+
+
+def is_database_connection_error(exc: BaseException) -> bool:
+    """Classify connection outages, including PostgreSQL restart states, as degradable."""
+    if not isinstance(exc, SQLAlchemyError):
+        return False
+
+    original = getattr(exc, "orig", exc)
+    sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
+    detail = str(original).lower()
+    if isinstance(sqlstate, str):
+        normalized_sqlstate = sqlstate.upper()
+        return (
+            normalized_sqlstate.startswith("08")
+            or normalized_sqlstate in TRANSIENT_POSTGRES_SQLSTATES
+        )
+
+    authentication_markers = (
+        "password authentication failed",
+        "authentication failed",
+        "no password supplied",
+        "no pg_hba.conf entry",
+        "certificate verify failed",
+        "unsupported startup parameter",
+    )
+    if any(marker in detail for marker in authentication_markers):
+        return False
+    if "fatal:" in detail and "does not exist" in detail:
+        return False
+
+    if isinstance(exc, DisconnectionError):
+        return True
+    if isinstance(exc, DBAPIError) and exc.connection_invalidated:
+        return True
+    if not isinstance(exc, (OperationalError, InterfaceError)):
+        return False
+
+    connection_markers = (
+        "could not connect",
+        "connection refused",
+        "connection reset",
+        "connection closed",
+        "connection timed out",
+        "connection timeout",
+        "timeout expired",
+        "network is unreachable",
+        "no route to host",
+        "server closed",
+        "server is not accepting",
+        "ssl connection has been closed",
+        "ssl syscall error",
+        "could not translate host",
+        "failed to resolve host",
+        "nodename nor servname provided",
+        "name or service not known",
+        "temporary failure in name resolution",
+        "database is unavailable",
+    )
+    return any(marker in detail for marker in connection_markers)
 
 
 def postgres_env_database_url(prefix: str = "POSTGRES_") -> str | None:

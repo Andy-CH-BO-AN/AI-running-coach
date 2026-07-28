@@ -5,6 +5,7 @@ import pytest
 pytest.importorskip("sqlalchemy")
 
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import OperationalError
 
 
 def _load_session_module(monkeypatch, **env):
@@ -14,6 +15,7 @@ def _load_session_module(monkeypatch, **env):
 
     for key in (
         "DATABASE_MODE",
+        "DATABASE_AVAILABLE",
         "DATABASE_URL",
         "LOCAL_DATABASE_URL",
         "NEON_DATABASE_URL",
@@ -117,6 +119,111 @@ def test_get_database_mode_rejects_unknown_value(monkeypatch):
 
     with pytest.raises(ValueError, match="Unsupported DATABASE_MODE"):
         module.get_database_mode()
+
+
+def test_degraded_mode_does_not_create_engine_or_session(monkeypatch):
+    module = _load_session_module(monkeypatch, DATABASE_AVAILABLE="false")
+    monkeypatch.setattr(module, "create_engine", lambda *_args, **_kwargs: pytest.fail("engine must stay lazy"))
+
+    with pytest.raises(module.DatabaseUnavailableError):
+        module.get_engine()
+    with pytest.raises(module.DatabaseUnavailableError):
+        module.SessionLocal()
+
+
+def test_database_connection_classifier_rejects_statement_timeout():
+    from src.db.settings import is_database_connection_error
+
+    statement_timeout = OperationalError(
+        "SELECT expensive_query",
+        {},
+        Exception("canceling statement due to statement timeout"),
+    )
+
+    assert is_database_connection_error(statement_timeout) is False
+
+
+class _DriverError(Exception):
+    def __init__(self, message: str, *, sqlstate: str | None = None):
+        super().__init__(message)
+        self.sqlstate = sqlstate
+
+
+def test_database_connection_classifier_accepts_connection_timeout_expired():
+    from src.db.settings import is_database_connection_error
+
+    connection_timeout = OperationalError(
+        "SELECT 1",
+        {},
+        _DriverError("connection failed: connection timeout expired"),
+    )
+
+    assert is_database_connection_error(connection_timeout) is True
+
+
+def test_database_connection_classifier_accepts_cannot_connect_now():
+    from src.db.settings import is_database_connection_error
+
+    compute_starting = OperationalError(
+        "SELECT 1",
+        {},
+        _DriverError(
+            "FATAL: the database system is starting up",
+            sqlstate="57P03",
+        ),
+    )
+
+    assert is_database_connection_error(compute_starting) is True
+
+
+@pytest.mark.parametrize("sqlstate", ["57P01", "57P02"])
+def test_database_connection_classifier_accepts_shutdown_sqlstates(sqlstate):
+    from src.db.settings import is_database_connection_error
+
+    shutdown_error = OperationalError(
+        "SELECT 1",
+        {},
+        _DriverError("database connection terminated during restart", sqlstate=sqlstate),
+        connection_invalidated=True,
+    )
+
+    assert is_database_connection_error(shutdown_error) is True
+
+
+@pytest.mark.parametrize(
+    ("sqlstate", "connection_invalidated"),
+    [("57014", False), ("57P04", True)],
+)
+def test_database_connection_classifier_rejects_other_operator_intervention_states(
+    sqlstate,
+    connection_invalidated,
+):
+    from src.db.settings import is_database_connection_error
+
+    non_transient_error = OperationalError(
+        "SELECT 1",
+        {},
+        _DriverError("non-transient operator intervention", sqlstate=sqlstate),
+        connection_invalidated=connection_invalidated,
+    )
+
+    assert is_database_connection_error(non_transient_error) is False
+
+
+@pytest.mark.parametrize("sqlstate", ["28P01", None])
+def test_database_connection_classifier_rejects_authentication_failures(sqlstate):
+    from src.db.settings import is_database_connection_error
+
+    authentication_failure = OperationalError(
+        "SELECT 1",
+        {},
+        _DriverError(
+            "connection failed: FATAL: password authentication failed for user",
+            sqlstate=sqlstate,
+        ),
+    )
+
+    assert is_database_connection_error(authentication_failure) is False
 
 
 # ---------------------------------------------------------------------------

@@ -343,7 +343,7 @@ def get_recent_activities(session: Session, user_id: uuid.UUID, limit: int = 20)
         session.scalars(
             select(Activity)
             .where(Activity.user_id == user_id)
-            .order_by(desc(Activity.started_at))
+            .order_by(desc(Activity.started_at), desc(Activity.garmin_activity_id))
             .limit(limit)
         )
     )

@@ -1,18 +1,4 @@
-"""LINE 通知協調器。
-
-流程：
-1. 檢查環境變數 → 未啟用則 skip
-2. 取得 PostgreSQL advisory lock（避免並行發送）
-3. 讀取 coach_context JSON
-4. 查詢 DB 已記錄的 activity_id
-5. 若 DB 為空 → seed baseline，不發送
-6. 計算新活動 → 無新活動則 skip
-7. 逐筆發送 → LINE 成功後立即 commit DB 紀錄
-8. 釋放 lock（finally 確保一定執行）
-
-TODO: 未來 coach_context 加入 start_time_local / end_time_local 後，
-      可依相同 source_activity_type 與時間間隔合併相鄰活動為一則訊息。
-"""
+"""LINE notification coordinator with normal and stateless degraded modes."""
 from __future__ import annotations
 
 import json
@@ -22,6 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Generator
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from src.db.repositories import (
@@ -29,29 +16,21 @@ from src.db.repositories import (
     record_notification,
     seed_baseline_notifications,
 )
-from src.notifications.constants import LINE_NOTIFICATION_LOCK_KEY
+from src.db.settings import is_database_available, is_database_connection_error
+from src.notifications.constants import (
+    LINE_NOTIFICATION_LOCK_KEY,
+    MAX_DEGRADED_LINE_NOTIFICATIONS_PER_RUN,
+    MAX_LINE_NOTIFICATIONS_PER_RUN,
+)
 from src.notifications.formatter import format_activity_message
 from src.notifications.line_client import send_push_message
 
 logger = logging.getLogger(__name__)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Result type
-# ──────────────────────────────────────────────────────────────────────────────
-
 @dataclass
 class NotificationResult:
-    """通知流程執行結果。
-
-    status:
-        "disabled"       — LINE 環境變數未設定
-        "skipped_locked" — 無法取得 advisory lock（另一個 job 正在執行）
-        "seeded"         — 首次執行，已 seed baseline，未發送任何訊息
-        "no_new"         — 無新活動，未發送
-        "done"           — 執行完畢（部分或全部成功）
-        "error"          — 讀取 JSON 或 DB 查詢等非 LINE API 錯誤
-    """
+    """Result of one notification run without exposing sensitive values."""
 
     status: str
     sent: int = 0
@@ -61,36 +40,26 @@ class NotificationResult:
         return f"NotificationResult(status={self.status}, sent={self.sent}, failed={self.failed})"
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# DB session helper（方便測試替換）
-# ──────────────────────────────────────────────────────────────────────────────
-
 @contextmanager
 def _get_db_session() -> Generator[Session, None, None]:
     from src.db.session import SessionLocal
+
     with SessionLocal() as session:
         yield session
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Advisory lock helpers（使用獨立 Connection 避免 pool 回收與不同連線問題）
-# ──────────────────────────────────────────────────────────────────────────────
-
 @contextmanager
 def _get_lock_connection() -> Generator[Any, None, None]:
-    """建立專用於 Advisory Lock 的獨立 DB Connection。"""
-    from src.db.session import engine
-    with engine.connect() as conn:
+    """Use a dedicated DB connection for PostgreSQL advisory locking."""
+    from src.db.session import get_engine
+
+    with get_engine().connect() as conn:
         yield conn
 
 
 def _acquire_advisory_lock(conn: Any) -> bool:
-    """嘗試取得 PostgreSQL advisory lock。
-
-    使用 pg_try_advisory_lock（非阻塞），回傳 True 表示取得成功。
-    傳入 dedicated Connection 確保整個流程鎖在同一條實體連線。
-    """
     from sqlalchemy import text
+
     result = conn.execute(
         text("SELECT pg_try_advisory_lock(:key)"),
         {"key": LINE_NOTIFICATION_LOCK_KEY},
@@ -99,26 +68,20 @@ def _acquire_advisory_lock(conn: Any) -> bool:
 
 
 def _release_advisory_lock(conn: Any) -> None:
-    """釋放 PostgreSQL advisory lock。"""
     from sqlalchemy import text
+
     conn.execute(
         text("SELECT pg_advisory_unlock(:key)"),
         {"key": LINE_NOTIFICATION_LOCK_KEY},
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 輔助函式
-# ──────────────────────────────────────────────────────────────────────────────
-
 def _load_coach_context(path: str) -> dict[str, Any]:
-    """讀取 coach_context JSON 檔案。"""
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    with open(path, encoding="utf-8") as file_handle:
+        return json.load(file_handle)
 
 
 def _extract_all_sessions(context: dict[str, Any]) -> list[tuple[dict, dict]]:
-    """從 coach_context 取出所有 (session, week) 對，保持原始順序。"""
     pairs: list[tuple[dict, dict]] = []
     for week in context.get("weekly_analysis", []):
         for session in week.get("sessions", []):
@@ -126,80 +89,106 @@ def _extract_all_sessions(context: dict[str, Any]) -> list[tuple[dict, dict]]:
     return pairs
 
 
-def _find_week_for_session(
-    session_dict: dict[str, Any],
-    weekly_analysis: list[dict[str, Any]],
-) -> dict[str, Any] | None:
-    """找到包含此 activity 的 weekly_analysis entry。"""
-    aid = session_dict.get("activity_id")
-    for week in weekly_analysis:
-        for s in week.get("sessions", []):
-            if s.get("activity_id") == aid:
-                return week
-    return None
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 主函式
-# ──────────────────────────────────────────────────────────────────────────────
-
-def run_line_notification(coach_context_path: str) -> NotificationResult:
-    """執行 LINE 群組通知流程。
-
-    Args:
-        coach_context_path: coach_context JSON 檔案的絕對路徑。
-
-    Returns:
-        NotificationResult — 描述執行結果與統計。
-        不會 raise；所有錯誤均 log 後回傳適當狀態。
-    """
-    # ── 1. 檢查環境變數
-    token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
-    group_id = os.environ.get("LINE_GROUP_ID")
-
-    if not token or not group_id:
-        logger.info(
-            "LINE notification disabled: missing required environment variables "
-            "(LINE_CHANNEL_ACCESS_TOKEN and/or LINE_GROUP_ID)"
-        )
-        return NotificationResult(status="disabled")
-
-    # ── 2. 讀取 coach_context
+def _activity_recency_key(pair: tuple[dict, dict]) -> tuple[str, int]:
+    activity, _week = pair
     try:
-        context = _load_coach_context(coach_context_path)
-    except (json.JSONDecodeError, OSError):
-        logger.exception(
-            "LINE notification: failed to load coach_context from %s",
-            coach_context_path,
-        )
-        return NotificationResult(status="error")
+        activity_id = int(activity.get("activity_id"))
+    except (TypeError, ValueError):
+        activity_id = -1
+    return (str(activity.get("date") or ""), activity_id)
 
-    # ── 3. Dedicated Connection Advisory Lock + 主流程
-    with _get_lock_connection() as lock_conn:
-        lock_acquired = False
-        try:
-            lock_acquired = _acquire_advisory_lock(lock_conn)
-            if not lock_acquired:
-                logger.info(
-                    "LINE notification: skipped (advisory lock held by another process)"
-                )
-                return NotificationResult(status="skipped_locked")
 
-            with _get_db_session() as db_session:
-                return _run_with_lock(context, db_session, token, group_id)
+def _send_pairs(
+    pairs: list[tuple[dict, dict]],
+    token: str,
+    group_id: str,
+    *,
+    db_session: Session | None,
+    status: str,
+) -> NotificationResult:
+    sent = 0
+    failed = 0
 
-        except Exception:
-            logger.exception(
-                "LINE notification: unexpected error in notification flow"
+    for index, (activity, week) in enumerate(pairs):
+        activity_id = activity["activity_id"]
+        message = format_activity_message(activity, week)
+        result = send_push_message(token, group_id, message)
+
+        if not result.success:
+            logger.error(
+                "LINE notification: send FAILED for activity %s "
+                "(status=%s, attempts=%d, error=%s)",
+                activity_id,
+                result.status_code,
+                result.attempts,
+                result.error_type,
             )
-            return NotificationResult(status="error")
+            failed += 1
+            continue
 
-        finally:
-            if lock_acquired:
-                try:
-                    _release_advisory_lock(lock_conn)
-                except Exception:
-                    logger.exception("LINE notification: failed to release advisory lock")
+        if db_session is None:
+            sent += 1
+            logger.info("LINE notification: sent stateless activity %s", activity_id)
+            continue
+
+        try:
+            record_notification(db_session, activity_id)
+        except SQLAlchemyError as exc:
+            if not is_database_connection_error(exc):
+                raise
+            logger.warning(
+                "LINE notification: DB recording failed for activity %s (%s); "
+                "this activity may be sent again",
+                activity_id,
+                type(exc).__name__,
+            )
+            try:
+                db_session.rollback()
+            except SQLAlchemyError as rollback_exc:
+                if not is_database_connection_error(rollback_exc):
+                    raise
+                logger.warning(
+                    "LINE notification: DB rollback failed after recording error (%s)",
+                    type(rollback_exc).__name__,
+                )
+            failed += 1
+            remaining = len(pairs) - index - 1
+            logger.warning(
+                "LINE notification: persistence unavailable; stopping delivery with "
+                "%d activities not sent this run",
+                remaining,
+            )
+            break
+
+        sent += 1
+        logger.info("LINE notification: sent and recorded activity %s", activity_id)
+
+    return NotificationResult(status=status, sent=sent, failed=failed)
+
+
+def _run_without_database(
+    context: dict[str, Any],
+    token: str,
+    group_id: str,
+) -> NotificationResult:
+    pairs = [pair for pair in _extract_all_sessions(context) if pair[0].get("activity_id") is not None]
+    pairs.sort(key=_activity_recency_key, reverse=True)
+    selected = pairs[:MAX_DEGRADED_LINE_NOTIFICATIONS_PER_RUN]
+    deferred = len(pairs) - len(selected)
+
+    logger.warning(
+        "LINE notification: degraded mode; sending up to %d activities without DB deduplication. "
+        "Repeated notifications are possible while Neon is unavailable.",
+        MAX_DEGRADED_LINE_NOTIFICATIONS_PER_RUN,
+    )
+    if deferred:
+        logger.warning(
+            "LINE notification: degraded mode capped at %d; %d activities not sent this run",
+            MAX_DEGRADED_LINE_NOTIFICATIONS_PER_RUN,
+            deferred,
+        )
+
+    return _send_pairs(selected, token, group_id, db_session=None, status="degraded_done")
 
 
 def _run_with_lock(
@@ -208,92 +197,92 @@ def _run_with_lock(
     token: str,
     group_id: str,
 ) -> NotificationResult:
-    """在 advisory lock 保護下執行通知流程。"""
-    # ── 查詢已記錄的 activity_id
-    try:
-        notified_ids = get_notified_activity_ids(db_session)
-        is_initialized = len(notified_ids) > 0
-    except Exception:
-        logger.exception("LINE notification: DB query failed")
-        db_session.rollback()
-        return NotificationResult(status="error")
-
+    notified_ids = get_notified_activity_ids(db_session)
     all_pairs = _extract_all_sessions(context)
-    all_ids = [s.get("activity_id") for s, _ in all_pairs if s.get("activity_id") is not None]
+    all_ids = [session.get("activity_id") for session, _ in all_pairs if session.get("activity_id") is not None]
 
-    # ── 首次執行：seed baseline
-    if not is_initialized:
+    if not notified_ids:
         logger.info(
             "LINE notification: first run detected — seeding %d activities as baseline",
             len(all_ids),
         )
-        try:
-            seed_baseline_notifications(db_session, all_ids)
-        except Exception:
-            logger.exception("LINE notification: DB error during baseline seed")
-            # rollback 讓 session 回到乾淨狀態
-            db_session.rollback()
-            return NotificationResult(status="error")
+        seed_baseline_notifications(db_session, all_ids)
         return NotificationResult(status="seeded")
 
-    # ── 計算新活動
     new_pairs = [
-        (s, w) for s, w in all_pairs
-        if s.get("activity_id") is not None
-        and s["activity_id"] not in notified_ids
+        pair
+        for pair in all_pairs
+        if pair[0].get("activity_id") is not None
+        and pair[0]["activity_id"] not in notified_ids
     ]
+    new_pairs.sort(key=_activity_recency_key, reverse=True)
 
     if not new_pairs:
         logger.info("LINE notification: no new activities to notify")
         return NotificationResult(status="no_new")
 
-    logger.info(
-        "LINE notification: %d new activities to send", len(new_pairs)
-    )
+    selected = new_pairs[:MAX_LINE_NOTIFICATIONS_PER_RUN]
+    deferred = len(new_pairs) - len(selected)
+    logger.info("LINE notification: %d new activities to send", len(selected))
+    if deferred:
+        logger.warning(
+            "LINE notification: capped at %d; deferring %d activities to later runs",
+            MAX_LINE_NOTIFICATIONS_PER_RUN,
+            deferred,
+        )
 
-    # ── 逐筆發送
-    sent = 0
-    failed = 0
+    return _send_pairs(selected, token, group_id, db_session=db_session, status="done")
 
-    for activity, week in new_pairs:
-        activity_id = activity["activity_id"]
+
+def _run_with_database(
+    context: dict[str, Any],
+    token: str,
+    group_id: str,
+) -> NotificationResult:
+    with _get_lock_connection() as lock_conn:
+        lock_acquired = False
         try:
-            message = format_activity_message(activity, week)
-        except Exception:
-            logger.exception(
-                "LINE notification: formatter error for activity %s", activity_id
-            )
-            failed += 1
-            continue
+            lock_acquired = _acquire_advisory_lock(lock_conn)
+            if not lock_acquired:
+                logger.info("LINE notification: skipped (advisory lock held by another process)")
+                return NotificationResult(status="skipped_locked")
 
-        result = send_push_message(token, group_id, message)
+            with _get_db_session() as db_session:
+                return _run_with_lock(context, db_session, token, group_id)
+        finally:
+            if lock_acquired:
+                try:
+                    _release_advisory_lock(lock_conn)
+                except SQLAlchemyError as exc:
+                    if not is_database_connection_error(exc):
+                        raise
+                    logger.warning(
+                        "LINE notification: advisory-lock release failed (%s)",
+                        type(exc).__name__,
+                    )
 
-        if result.success:
-            # LINE 成功後立即 commit DB 紀錄（每筆獨立，不因後續失敗 rollback）
-            try:
-                record_notification(db_session, activity_id)
-                sent += 1
-                logger.info(
-                    "LINE notification: sent and recorded activity %s", activity_id
-                )
-            except Exception:
-                # LINE 已發送但 DB 寫入失敗 → 下次可能重複發送，需明確 log 並 rollback 清理 session
-                logger.exception(
-                    "LINE notification: LINE sent successfully but DB commit FAILED "
-                    "for activity %s — this activity may be sent again on next run",
-                    activity_id,
-                )
-                db_session.rollback()
-                failed += 1
-        else:
-            logger.error(
-                "LINE notification: send FAILED for activity %s "
-                "(status=%s, attempts=%d, error=%s) — will retry on next run",
-                activity_id,
-                result.status_code,
-                result.attempts,
-                result.error_type,
-            )
-            failed += 1
 
-    return NotificationResult(status="done", sent=sent, failed=failed)
+def run_line_notification(coach_context_path: str) -> NotificationResult:
+    """Send activity notifications; only DB failures use degraded behavior."""
+    token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
+    group_id = os.environ.get("LINE_GROUP_ID")
+    if not token or not group_id:
+        logger.info("LINE notification disabled: missing required environment variables")
+        return NotificationResult(status="disabled")
+
+    # Context, formatter, and program errors deliberately propagate to fail the workflow.
+    context = _load_coach_context(coach_context_path)
+
+    if not is_database_available():
+        return _run_without_database(context, token, group_id)
+
+    try:
+        return _run_with_database(context, token, group_id)
+    except SQLAlchemyError as exc:
+        if not is_database_connection_error(exc):
+            raise
+        logger.warning(
+            "LINE notification: DB access failed (%s); continuing in degraded mode",
+            type(exc).__name__,
+        )
+        return _run_without_database(context, token, group_id)

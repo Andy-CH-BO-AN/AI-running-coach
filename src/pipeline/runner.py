@@ -1,4 +1,5 @@
 from datetime import datetime
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -63,11 +64,19 @@ def _generate_coach_report(
 
 
 def run_pipeline(
-    activity_limit: int = 75,
+    activity_limit: int | None = None,
     fetch_limit: int | None = None,
     goal_overrides: GoalPromptOverrides | None = None,
 ) -> Optional[str]:
     print("🚀 Starting Garmin AI Coach Pipeline...")
+
+    if activity_limit is None:
+        activity_limit = int(os.getenv("GARMIN_ACTIVITY_LIMIT", "75"))
+    if os.getenv("DATABASE_AVAILABLE", "true").lower() == "false":
+        print(
+            "⚠️ Running in degraded mode: DB persistence is disabled; "
+            f"Garmin activity limit={activity_limit}."
+        )
 
     timestamp = _build_timestamp()
     raw_activities, user_data = _load_or_fetch_activity_payloads(
@@ -113,7 +122,7 @@ def run_pipeline(
     print("✨ Pipeline completed!")
     print(f"📄 JSON Report: {report_path}")
 
-    # ── LINE 通知（opt-in，不影響核心 pipeline exit code）
+    # ── LINE 通知
     _run_line_notification(timestamp)
 
     return str(report_path)
@@ -125,14 +134,10 @@ def _run_line_notification(timestamp: str) -> None:
     使用 persist_pipeline_artifacts 寫出的實際 coach_context 路徑，
     不自行掃描資料夾或猜測檔名。
 
-    失敗時 log error，不 raise，確保不影響核心 pipeline exit code。
+    未預期錯誤向上拋出，避免把非 DB 程式錯誤誤判成 degraded mode。
     """
-    import logging
-
     from src.notifications.notifier import run_line_notification
     from src.services.artifacts import pipeline_artifact_paths
-
-    logger = logging.getLogger(__name__)
 
     coach_context_path = pipeline_artifact_paths(
         timestamp,
@@ -140,10 +145,5 @@ def _run_line_notification(timestamp: str) -> None:
         output_dir=OUTPUT_DIR,
     )["coach_context"]
 
-    try:
-        result = run_line_notification(str(coach_context_path))
-        print(f"📱 LINE notification: {result}")
-    except Exception:
-        logger.exception(
-            "LINE notification encountered an unexpected error — pipeline result unaffected"
-        )
+    result = run_line_notification(str(coach_context_path))
+    print(f"📱 LINE notification: {result}")
