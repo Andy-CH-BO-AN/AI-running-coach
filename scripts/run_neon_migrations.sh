@@ -21,7 +21,7 @@ is_connection_failure() {
   fi
 
   grep -Eqi \
-    'could not connect|connection (refused|reset|closed|timed out)|connection timeout( expired)?|connect timeout|timeout expired|network is unreachable|failed to resolve host|could not translate host|name or service not known|server is not accepting|ssl.*connection' \
+    'could not connect|connection (refused|reset|closed|timed out)|connection timeout( expired)?|connect timeout|timeout expired|network is unreachable|failed to resolve host|could not translate host|name or service not known|server closed|server is not accepting|ssl.*connection' \
     "$1"
 }
 

@@ -540,6 +540,31 @@ class TestNotificationCaps:
         assert send.call_count == 20
         assert any("deferring 1 activities" in record.getMessage() for record in caplog.records)
 
+    def test_normal_mode_stops_after_notification_persistence_connection_failure(self, tmp_path, caplog):
+        ctx_path = _write_context(tmp_path, self._many_activity_context(4))
+
+        with patch.dict(os.environ, self._env(database_available="true")), \
+             patch("src.notifications.notifier.get_notified_activity_ids", return_value={9999}), \
+             patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
+             patch("src.notifications.notifier._release_advisory_lock"), \
+             patch("src.notifications.notifier._get_db_session"), \
+             patch(
+                 "src.notifications.notifier.record_notification",
+                 side_effect=_connection_error(),
+             ) as record, \
+             patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT) as send, \
+             caplog.at_level(logging.WARNING, logger="src.notifications.notifier"):
+            result = run_line_notification(str(ctx_path))
+
+        assert result.status == "done"
+        assert result.sent == 0
+        assert result.failed == 1
+        assert send.call_count == 1
+        assert record.call_count == 1
+        messages = " ".join(record.getMessage() for record in caplog.records)
+        assert "stopping delivery" in messages
+        assert "3 activities not sent" in messages
+
     def test_degraded_mode_caps_to_three_without_lock_or_session(self, tmp_path, caplog):
         ctx_path = _write_context(tmp_path, self._many_activity_context(4))
 

@@ -109,7 +109,7 @@ def _send_pairs(
     sent = 0
     failed = 0
 
-    for activity, week in pairs:
+    for index, (activity, week) in enumerate(pairs):
         activity_id = activity["activity_id"]
         message = format_activity_message(activity, week)
         result = send_push_message(token, group_id, message)
@@ -152,7 +152,13 @@ def _send_pairs(
                     type(rollback_exc).__name__,
                 )
             failed += 1
-            continue
+            remaining = len(pairs) - index - 1
+            logger.warning(
+                "LINE notification: persistence unavailable; stopping delivery with "
+                "%d activities not sent this run",
+                remaining,
+            )
+            break
 
         sent += 1
         logger.info("LINE notification: sent and recorded activity %s", activity_id)
