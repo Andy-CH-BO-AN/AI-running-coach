@@ -143,6 +143,40 @@ def test_database_connection_classifier_rejects_statement_timeout():
     assert is_database_connection_error(statement_timeout) is False
 
 
+class _DriverError(Exception):
+    def __init__(self, message: str, *, sqlstate: str | None = None):
+        super().__init__(message)
+        self.sqlstate = sqlstate
+
+
+def test_database_connection_classifier_accepts_connection_timeout_expired():
+    from src.db.settings import is_database_connection_error
+
+    connection_timeout = OperationalError(
+        "SELECT 1",
+        {},
+        _DriverError("connection failed: connection timeout expired"),
+    )
+
+    assert is_database_connection_error(connection_timeout) is True
+
+
+@pytest.mark.parametrize("sqlstate", ["28P01", None])
+def test_database_connection_classifier_rejects_authentication_failures(sqlstate):
+    from src.db.settings import is_database_connection_error
+
+    authentication_failure = OperationalError(
+        "SELECT 1",
+        {},
+        _DriverError(
+            "connection failed: FATAL: password authentication failed for user",
+            sqlstate=sqlstate,
+        ),
+    )
+
+    assert is_database_connection_error(authentication_failure) is False
+
+
 # ---------------------------------------------------------------------------
 # db_settings safety-guard unit tests
 # These do not require a real database connection.

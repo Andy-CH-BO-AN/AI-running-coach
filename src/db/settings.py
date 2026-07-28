@@ -36,6 +36,26 @@ def is_database_connection_error(exc: BaseException) -> bool:
     """Classify only connection-level SQLAlchemy failures as degradable."""
     if not isinstance(exc, SQLAlchemyError):
         return False
+
+    original = getattr(exc, "orig", exc)
+    sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
+    detail = str(original).lower()
+    if isinstance(sqlstate, str):
+        return sqlstate.startswith("08")
+
+    authentication_markers = (
+        "password authentication failed",
+        "authentication failed",
+        "no password supplied",
+        "no pg_hba.conf entry",
+        "certificate verify failed",
+        "unsupported startup parameter",
+    )
+    if any(marker in detail for marker in authentication_markers):
+        return False
+    if "fatal:" in detail and "does not exist" in detail:
+        return False
+
     if isinstance(exc, DisconnectionError):
         return True
     if isinstance(exc, DBAPIError) and exc.connection_invalidated:
@@ -43,25 +63,25 @@ def is_database_connection_error(exc: BaseException) -> bool:
     if not isinstance(exc, (OperationalError, InterfaceError)):
         return False
 
-    original = getattr(exc, "orig", exc)
-    sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
-    if isinstance(sqlstate, str) and sqlstate.startswith("08"):
-        return True
-
-    detail = str(original).lower()
     connection_markers = (
-        "connection",
-        "connect",
-        "network",
+        "could not connect",
+        "connection refused",
+        "connection reset",
+        "connection closed",
+        "connection timed out",
+        "connection timeout",
+        "timeout expired",
+        "network is unreachable",
+        "no route to host",
         "server closed",
         "server is not accepting",
-        "ssl",
+        "ssl connection has been closed",
+        "ssl syscall error",
         "could not translate host",
         "failed to resolve host",
-        "nodename",
-        "not known",
-        "dns",
-        "name or service",
+        "nodename nor servname provided",
+        "name or service not known",
+        "temporary failure in name resolution",
         "database is unavailable",
     )
     return any(marker in detail for marker in connection_markers)

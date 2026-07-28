@@ -9,8 +9,19 @@ chmod 600 "${migration_output}"
 trap 'rm -f "${migration_output}"' EXIT
 
 is_connection_failure() {
+  if grep -Eqi \
+    'password authentication failed|authentication failed|no password supplied|no pg_hba\.conf entry|certificate verify failed|unsupported startup parameter|fatal:.*does not exist' \
+    "$1"; then
+    return 1
+  fi
+
+  if grep -Eqi 'sqlstate[^[:alnum:]]*[[:alnum:]]{5}' "$1"; then
+    grep -Eqi 'sqlstate[^[:alnum:]]*08[[:alnum:]]{3}' "$1"
+    return
+  fi
+
   grep -Eqi \
-    'sqlstate[^[:alnum:]]*08|could not connect|connection (refused|reset|closed|timed out)|connect timeout|network is unreachable|failed to resolve host|could not translate host|name or service not known|server is not accepting|ssl.*connection' \
+    'could not connect|connection (refused|reset|closed|timed out)|connection timeout( expired)?|connect timeout|timeout expired|network is unreachable|failed to resolve host|could not translate host|name or service not known|server is not accepting|ssl.*connection' \
     "$1"
 }
 

@@ -96,6 +96,19 @@ def test_migration_three_failures_enters_degraded_mode_without_failing(tmp_path)
     assert "::warning::Neon database unavailable after 3 attempts. Continuing in degraded mode." in result.stdout
 
 
+def test_connection_timeout_expired_retries_then_enters_degraded_mode(tmp_path):
+    result, env_lines, attempts, sleeps = _run_migration_script(
+        tmp_path,
+        fail_until=3,
+        failure_message="connection timeout expired",
+    )
+
+    assert result.returncode == 0
+    assert len(attempts) == 3
+    assert sleeps == ["10", "20"]
+    assert env_lines == ["DATABASE_AVAILABLE=false", "GARMIN_ACTIVITY_LIMIT=10"]
+
+
 def test_non_connection_migration_failure_stops_without_leaking_output(tmp_path):
     result, env_lines, attempts, sleeps = _run_migration_script(
         tmp_path,
@@ -110,6 +123,26 @@ def test_non_connection_migration_failure_stops_without_leaking_output(tmp_path)
     assert "::error::Database migration failed with a non-connection error. Pipeline stopped." in result.stdout
     assert "migration revision is invalid" not in result.stdout
     assert "migration revision is invalid" not in result.stderr
+
+
+def test_auth_failure_with_connection_prefix_stops_without_leaking_output(tmp_path):
+    failure_message = (
+        "could not connect to server: FATAL: password authentication failed "
+        "for user (SQLSTATE 28P01)"
+    )
+    result, env_lines, attempts, sleeps = _run_migration_script(
+        tmp_path,
+        fail_until=1,
+        failure_message=failure_message,
+    )
+
+    assert result.returncode == 1
+    assert attempts == ["attempt"]
+    assert sleeps == []
+    assert env_lines == []
+    assert "::error::Database migration failed with a non-connection error. Pipeline stopped." in result.stdout
+    assert failure_message not in result.stdout
+    assert failure_message not in result.stderr
 
 
 def test_workflow_runs_pipeline_after_migration_script_without_condition():
