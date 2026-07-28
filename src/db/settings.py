@@ -41,7 +41,8 @@ def is_database_connection_error(exc: BaseException) -> bool:
     sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
     detail = str(original).lower()
     if isinstance(sqlstate, str):
-        return sqlstate.startswith("08")
+        normalized_sqlstate = sqlstate.upper()
+        return normalized_sqlstate.startswith("08") or normalized_sqlstate == "57P03"
 
     authentication_markers = (
         "password authentication failed",

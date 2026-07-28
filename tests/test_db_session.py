@@ -161,6 +161,21 @@ def test_database_connection_classifier_accepts_connection_timeout_expired():
     assert is_database_connection_error(connection_timeout) is True
 
 
+def test_database_connection_classifier_accepts_cannot_connect_now():
+    from src.db.settings import is_database_connection_error
+
+    compute_starting = OperationalError(
+        "SELECT 1",
+        {},
+        _DriverError(
+            "FATAL: the database system is starting up",
+            sqlstate="57P03",
+        ),
+    )
+
+    assert is_database_connection_error(compute_starting) is True
+
+
 @pytest.mark.parametrize("sqlstate", ["28P01", None])
 def test_database_connection_classifier_rejects_authentication_failures(sqlstate):
     from src.db.settings import is_database_connection_error

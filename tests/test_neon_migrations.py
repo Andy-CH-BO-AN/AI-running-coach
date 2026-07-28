@@ -109,6 +109,22 @@ def test_connection_timeout_expired_retries_then_enters_degraded_mode(tmp_path):
     assert env_lines == ["DATABASE_AVAILABLE=false", "GARMIN_ACTIVITY_LIMIT=10"]
 
 
+def test_cannot_connect_now_retries_then_enters_degraded_mode(tmp_path):
+    failure_message = "FATAL: the database system is starting up (SQLSTATE 57P03)"
+    result, env_lines, attempts, sleeps = _run_migration_script(
+        tmp_path,
+        fail_until=3,
+        failure_message=failure_message,
+    )
+
+    assert result.returncode == 0
+    assert len(attempts) == 3
+    assert sleeps == ["10", "20"]
+    assert env_lines == ["DATABASE_AVAILABLE=false", "GARMIN_ACTIVITY_LIMIT=10"]
+    assert failure_message not in result.stdout
+    assert failure_message not in result.stderr
+
+
 def test_non_connection_migration_failure_stops_without_leaking_output(tmp_path):
     result, env_lines, attempts, sleeps = _run_migration_script(
         tmp_path,
