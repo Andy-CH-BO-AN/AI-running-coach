@@ -128,6 +128,14 @@ def test_latest_activity_shows_splits_without_session_type_or_interval_layout():
     assert 'textElement("summary", "", "分段明細")' in source
 
 
+def test_cycling_splits_use_speed_column_and_kmh_unit():
+    source = Path("dashboard/app.js").read_text(encoding="utf-8")
+
+    assert 'var isCycling = String(sourceActivityType || "").toLowerCase() === "cycling";' in source
+    assert 'var performanceHeader = isCycling ? "速度" : "配速";' in source
+    assert 'String(segment.speed_kmh) + " km/h"' in source
+
+
 def test_dashboard_uses_local_font_stack_only():
     index_source = Path("dashboard/index.html").read_text(encoding="utf-8")
     style_source = Path("dashboard/styles.css").read_text(encoding="utf-8")
@@ -1335,6 +1343,7 @@ def test_evidence_sessions_are_enriched_with_source_segments(tmp_path):
             "segment_type_label": "熱身",
             "distance_km": 1.2,
             "avg_pace": "06:10",
+            "speed_kmh": None,
             "avg_hr": 145,
             "cadence": 170.2,
             "stride_length_m": 1.08,
@@ -1346,6 +1355,7 @@ def test_evidence_sessions_are_enriched_with_source_segments(tmp_path):
             "segment_type_label": "主課表",
             "distance_km": 0.4,
             "avg_pace": "03:38",
+            "speed_kmh": None,
             "avg_hr": 181,
             "cadence": 188.4,
             "stride_length_m": 1.22,
@@ -1384,6 +1394,7 @@ def test_evidence_cross_training_segments_strip_running_mechanics(tmp_path):
                                 "segment_type": "lap",
                                 "distance_km": 10,
                                 "avg_pace": None,
+                                "speed_kmh": 20.2,
                                 "avg_hr": 132,
                                 "cadence": 88,
                                 "stride_length_m": 3.5,
@@ -1417,6 +1428,7 @@ def test_evidence_cross_training_segments_strip_running_mechanics(tmp_path):
         segment = session["segments"][0]
         assert segment["cadence"] is None
         assert segment["stride_length_m"] is None
+    assert sessions[1]["segments"][0]["speed_kmh"] == 20.2
 
 
 def test_evidence_source_activity_type_overrides_running_like_session_type(tmp_path):
@@ -1621,6 +1633,7 @@ def test_evidence_source_session_overrides_stale_supporting_session_segments(tmp
         "segment_type_label": "分段",
         "distance_km": 1,
         "avg_pace": "05:00",
+        "speed_kmh": None,
         "avg_hr": 148,
         "cadence": 176,
         "stride_length_m": 1.12,
@@ -1642,6 +1655,7 @@ def test_latest_activity_source_activity_type_overrides_running_like_session_typ
                             {
                                 "segment_type": "lap",
                                 "distance_km": 3.31,
+                                "speed_kmh": 20.2,
                                 "avg_hr": 100,
                                 "cadence": 88,
                                 "stride_length_m": 3.5,
@@ -1658,6 +1672,8 @@ def test_latest_activity_source_activity_type_overrides_running_like_session_typ
     segment = payload["latest"]["work_reps"][0]
 
     assert payload["latest"]["type_label"] == "自行車"
+    assert payload["latest"]["source_activity_type"] == "cycling"
+    assert segment["speed_kmh"] == 20.2
     assert segment["cadence"] is None
     assert segment["stride_length_m"] is None
 
