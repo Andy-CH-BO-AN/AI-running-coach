@@ -54,6 +54,10 @@ For every Python change, including Python test changes, use explicit
 delegation whenever sub-agent tooling is available. This is mandatory;
 the user does not need to request it.
 
+Reviewer agents are read-only. They must report findings or approval without
+modifying workspace files; the implementer owns every patch between review
+and QA.
+
 1. Spawn a fresh reviewer sub-agent for the changed-code review.
 2. Wait for the reviewer to explicitly approve the current patch.
 3. If the reviewer requests any change, implement it and return to step 1
@@ -91,8 +95,8 @@ clearly.
    `ai/shared/reviewer.agent.md`; wait for explicit approval of the current
    patch. If the reviewer requests changes, implement them and repeat this
    step with a new reviewer. Tell the reviewer which tests have already run
-   and ask it to focus on changed code instead of repeating QA's regression
-   work.
+   and ask it to remain read-only and focus on changed code instead of
+   repeating QA's regression work.
 6. Only after reviewer approval, spawn a fresh QA agent using
    `ai/shared/qa.agent.md`; tell QA which tests have already run so it can
    target unvalidated behavior, missing scenarios, and final regression
