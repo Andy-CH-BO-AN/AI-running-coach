@@ -55,9 +55,14 @@ delegation whenever sub-agent tooling is available. This is mandatory;
 the user does not need to request it.
 
 1. Spawn a fresh reviewer sub-agent for the changed-code review.
-2. Wait for the reviewer result and address any blocking findings.
-3. Spawn a fresh QA sub-agent for coverage and regression validation.
-4. Do not treat self-review, a simulated role, or one agent doing both
+2. Wait for the reviewer to explicitly approve the current patch.
+3. If the reviewer requests any change, implement it and return to step 1
+   with a new reviewer. Do not reuse approval for an earlier patch.
+4. Spawn a fresh QA sub-agent only after the fresh reviewer approves the
+   unchanged patch.
+5. If QA requests any change, implement it and return to step 1. Do not send
+   a revised patch directly to QA.
+6. Do not treat self-review, a simulated role, or one agent doing both
    passes as a substitute for Reviewer → QA.
 
 Run reviewer before QA. Use separate agents even when the change is
@@ -83,13 +88,16 @@ clearly.
 4. Capture failures, stack traces, and reproduction steps when tests do
    not pass.
 5. When sub-agents are available, spawn a fresh reviewer using
-   `ai/shared/reviewer.agent.md`; wait for its result and resolve blocking
-   findings. Tell the reviewer which tests have already run and ask it to
-   focus on changed code instead of repeating QA's regression work.
-6. After reviewer completion, spawn a fresh QA agent using
+   `ai/shared/reviewer.agent.md`; wait for explicit approval of the current
+   patch. If the reviewer requests changes, implement them and repeat this
+   step with a new reviewer. Tell the reviewer which tests have already run
+   and ask it to focus on changed code instead of repeating QA's regression
+   work.
+6. Only after reviewer approval, spawn a fresh QA agent using
    `ai/shared/qa.agent.md`; tell QA which tests have already run so it can
    target unvalidated behavior, missing scenarios, and final regression
-   instead of duplicating reviewer checks.
+   instead of duplicating reviewer checks. If QA requests changes, implement
+   them and return to step 5 before another QA pass.
    Save durable artifacts in `tests/reports/` or `tests/scripts/` when helpful.
 7. If security review was triggered, run a separate security pass and
    report those checks explicitly.
