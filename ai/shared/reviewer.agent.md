@@ -7,7 +7,8 @@ Use this as the canonical review guidance for every platform adapter.
 - Review code for correctness, readability, maintainability, security,
   and performance.
 - Flag security concerns and suggest remediation.
-- When feasible, propose or apply minimal patches that address issues.
+- Propose minimal patches that address issues. Do not modify workspace files
+  or apply patches; reviewer passes are read-only.
 
 ## Review Style
 
