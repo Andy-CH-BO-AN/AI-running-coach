@@ -2,10 +2,7 @@
 訊息格式化器測試。
 
 涵蓋：
-- 跑步（easy）格式正確
-- interval 只顯示工作段，不顯示整體 avg_pace
-- interval 正確排除站立恢復（高配速 + 低 cadence）
-- interval 工作段 > 12 段時截斷顯示
+- 跑步格式只依 source_activity_type，忽略推測的 type
 - 游泳配速格式 /100m
 - 自行車速度格式 km/h
 - 距離 < 1km 顯示公尺，≥ 1km 顯示公里
@@ -39,54 +36,6 @@ def _make_easy_running_session(**overrides) -> dict:
         "avg_pace": "6:26",
         "segments": [],
         "environment": {"estimated_temp_c": 30.8, "humidity_pct": None, "hr_impact": None},
-        "data_quality": {"status": "complete", "missing_fields": []},
-    }
-    base.update(overrides)
-    return base
-
-
-def _make_interval_session(**overrides) -> dict:
-    """7/20 的 interval session — 含站立恢復段。"""
-    base = {
-        "activity_id": 23665383280,
-        "date": "2026-07-20",
-        "type": "interval",
-        "source_activity_type": "running",
-        "distance_km": 0.63,
-        "duration_min": 7.7,
-        "training_load": 78.7,
-        "avg_hr": 144,
-        "avg_pace": "12:09",  # 被恢復段拉高，不應顯示
-        "segments": [
-            {"segment_type": "lap", "split_index": 1, "distance_km": 0.100,
-             "duration_min": 0.35, "avg_pace": "3:30", "avg_hr": 131,
-             "temperature_c": 32.0, "cadence": 146.5, "stride_length_m": 1.5, "note": None},
-            {"segment_type": "lap", "split_index": 2, "distance_km": 0.032,
-             "duration_min": 1.51, "avg_pace": "46:29", "avg_hr": 145,
-             "temperature_c": 32.0, "cadence": 17.7, "stride_length_m": 1.0, "note": None},  # 恢復
-            {"segment_type": "lap", "split_index": 3, "distance_km": 0.094,
-             "duration_min": 0.35, "avg_pace": "3:46", "avg_hr": 134,
-             "temperature_c": 32.0, "cadence": 136.7, "stride_length_m": 1.47, "note": None},
-            {"segment_type": "lap", "split_index": 4, "distance_km": 0.036,
-             "duration_min": 1.51, "avg_pace": "42:15", "avg_hr": 147,
-             "temperature_c": 32.0, "cadence": 29.2, "stride_length_m": 1.26, "note": None},  # 恢復
-            {"segment_type": "lap", "split_index": 5, "distance_km": 0.098,
-             "duration_min": 0.35, "avg_pace": "3:33", "avg_hr": 129,
-             "temperature_c": 32.0, "cadence": 145.3, "stride_length_m": 1.47, "note": None},
-            {"segment_type": "lap", "split_index": 6, "distance_km": 0.040,
-             "duration_min": 1.48, "avg_pace": "37:10", "avg_hr": 147,
-             "temperature_c": 32.0, "cadence": 28.3, "stride_length_m": 1.19, "note": None},  # 恢復
-            {"segment_type": "lap", "split_index": 7, "distance_km": 0.095,
-             "duration_min": 0.33, "avg_pace": "3:29", "avg_hr": 137,
-             "temperature_c": 32.0, "cadence": 158.8, "stride_length_m": 1.49, "note": None},
-            {"segment_type": "lap", "split_index": 8, "distance_km": 0.041,
-             "duration_min": 1.50, "avg_pace": "36:11", "avg_hr": 150,
-             "temperature_c": 32.0, "cadence": 38.3, "stride_length_m": 0.99, "note": None},  # 恢復
-            {"segment_type": "lap", "split_index": 9, "distance_km": 0.099,
-             "duration_min": 0.34, "avg_pace": "3:29", "avg_hr": 131,
-             "temperature_c": 32.0, "cadence": 157.0, "stride_length_m": 1.49, "note": None},
-        ],
-        "environment": {"estimated_temp_c": 32.0, "humidity_pct": None, "hr_impact": None},
         "data_quality": {"status": "complete", "missing_fields": []},
     }
     base.update(overrides)
@@ -150,7 +99,7 @@ def _make_week(training_load: float = 727.1, total_distance_km: float = 31.37) -
 class TestEasyRunFormat:
     def test_contains_sport_name(self):
         msg = format_activity_message(_make_easy_running_session(), _make_week())
-        assert "輕鬆跑" in msg
+        assert "跑步" in msg
 
     def test_contains_date(self):
         msg = format_activity_message(_make_easy_running_session(), _make_week())
@@ -214,127 +163,52 @@ class TestDistanceFormat:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Interval — 工作段提取
+# 推測的 type 不影響 LINE 顯示
 # ──────────────────────────────────────────────────────────────────────────────
 
-class TestIntervalFormat:
-    def test_no_overall_avg_pace(self):
-        """整體 avg_pace 12:09 不應出現在 interval 訊息中。"""
-        msg = format_activity_message(_make_interval_session(), _make_week())
-        assert "12:09" not in msg
+class TestInferredTypeIsolation:
+    def test_interval_type_keeps_running_title_and_overall_pace(self):
+        """type=interval 不改標題、不隱藏整體配速、不顯示舊分類分段。"""
+        session = _make_easy_running_session(
+            type="interval",
+            avg_pace="6:08",
+            segments=[{
+                "split_index": 1,
+                "distance_km": 0.621,
+                "duration_min": 3.81,
+                "avg_pace": "6:08",
+            }],
+        )
 
-    def test_work_segments_displayed(self):
-        """5 個工作段（R1-R5）應出現在訊息中。"""
-        msg = format_activity_message(_make_interval_session(), _make_week())
-        assert "R1" in msg
-        assert "R5" in msg
-        # 共有 5 個工作段（奇數 split_index = 1,3,5,7,9）
-        assert "R6" not in msg
+        msg = format_activity_message(session, _make_week())
 
-    def test_recovery_segments_excluded(self):
-        """站立恢復配速（46:29、42:15 等）不應出現。"""
-        msg = format_activity_message(_make_interval_session(), _make_week())
-        assert "46:29" not in msg
-        assert "42:15" not in msg
-        assert "37:10" not in msg
-        assert "36:11" not in msg
+        assert msg.split("\n", maxsplit=1)[0] == "🏃 跑步｜2026-07-21"
+        assert "配速：6:08/km" in msg
+        assert "間歇" not in msg
+        assert "主課分段" not in msg
+        assert "R1" not in msg
+        assert "621m × 1" not in msg
+        assert "（621m × 1）" not in msg
+        assert "分段明細" in msg
+        assert "#1｜621m｜3:49｜配速 6:08/km" in msg
 
-    def test_work_segment_paces_shown(self):
-        """快速段配速應出現。"""
-        msg = format_activity_message(_make_interval_session(), _make_week())
-        assert "3:30" in msg
-        assert "3:46" in msg or "3:29" in msg
+    def test_all_running_splits_are_displayed_without_classifying_them(self):
+        session = _make_easy_running_session(
+            type="interval",
+            segments=[
+                {"split_index": 1, "distance_km": 1.0, "duration_min": 5.0, "avg_pace": "5:00", "avg_hr": 160},
+                {"split_index": 2, "distance_km": 0.2, "duration_min": 3.0, "avg_pace": "15:00", "avg_hr": 120},
+                {"split_index": 3, "distance_km": 1.0, "duration_min": 4.8, "avg_pace": "4:48", "avg_hr": 170},
+            ],
+        )
 
-    def test_work_segments_use_R_numbering(self):
-        """工作段以 R1、R2 顯示。"""
-        msg = format_activity_message(_make_interval_session(), _make_week())
-        assert "R1" in msg
-        assert "R2" in msg
-
-    def test_interval_section_header(self):
-        """應有主課分段標頭。"""
-        msg = format_activity_message(_make_interval_session(), _make_week())
-        assert "主課分段" in msg or "分段" in msg
-
-    def test_interval_without_cadence_uses_pace_threshold(self):
-        """沒有 cadence 欄位時，只依配速閾值排除恢復段。"""
-        session = _make_interval_session()
-        # 移除所有 cadence
-        for seg in session["segments"]:
-            seg.pop("cadence", None)
         msg = format_activity_message(session, None)
-        # 恢復段配速仍應被排除
-        assert "46:29" not in msg
-        assert "42:15" not in msg
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Interval — 超過 12 段截斷顯示
-# ──────────────────────────────────────────────────────────────────────────────
-
-class TestIntervalTruncation:
-    def _make_many_rep_session(self, rep_count: int) -> dict:
-        """建立含 rep_count 個工作段（每段 100m 3:30/km cadence=150）的 interval 課。"""
-        segments = []
-        for i in range(rep_count):
-            seg_idx = i * 2 + 1
-            segments.append({
-                "segment_type": "lap",
-                "split_index": seg_idx,
-                "distance_km": 0.1,
-                "duration_min": 0.35,
-                "avg_pace": "3:30",
-                "avg_hr": 155,
-                "temperature_c": 28.0,
-                "cadence": 180.0,
-                "stride_length_m": 1.5,
-                "note": None,
-            })
-            # 每個工作段後加一個恢復段
-            if i < rep_count - 1:
-                segments.append({
-                    "segment_type": "lap",
-                    "split_index": seg_idx + 1,
-                    "distance_km": 0.05,
-                    "duration_min": 1.5,
-                    "avg_pace": "30:00",
-                    "avg_hr": 140,
-                    "temperature_c": 28.0,
-                    "cadence": 20.0,
-                    "stride_length_m": 1.0,
-                    "note": None,
-                })
-        return {
-            "activity_id": 99999,
-            "date": "2026-07-25",
-            "type": "interval",
-            "source_activity_type": "running",
-            "distance_km": 1.5,
-            "duration_min": 30.0,
-            "training_load": 150.0,
-            "avg_hr": 165,
-            "avg_pace": "15:00",
-            "segments": segments,
-            "environment": {"estimated_temp_c": None, "humidity_pct": None, "hr_impact": None},
-            "data_quality": {"status": "complete", "missing_fields": []},
-        }
-
-    def test_exactly_12_reps_shows_all(self):
-        session = self._make_many_rep_session(12)
-        msg = format_activity_message(session, None)
-        assert "R12" in msg
-        assert "R13" not in msg
-
-    def test_13_reps_truncates(self):
-        """13 段應截斷，顯示前 5 + 後 3 + 統計摘要。"""
-        session = self._make_many_rep_session(13)
-        msg = format_activity_message(session, None)
-        assert "R1" in msg
-        assert "R5" in msg
-        # 前 5 後 3：R11、R12、R13 應出現
-        assert "R11" in msg or "R12" in msg or "R13" in msg
-        # R6-R10 不應顯示
-        assert "R6" not in msg
+        assert "#1｜1 km｜5:00｜配速 5:00/km｜心率 160 bpm" in msg
+        assert "#2｜200m｜3:00｜配速 15:00/km｜心率 120 bpm" in msg
+        assert "#3｜1 km｜4:48｜配速 4:48/km｜心率 170 bpm" in msg
+        assert "間歇" not in msg
+        assert "R1" not in msg
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -356,6 +230,17 @@ class TestSwimFormat:
         msg = format_activity_message(_make_swim_session(), _make_week())
         assert "°C" not in msg and "溫度" not in msg
 
+    def test_all_swimming_splits_show_per_100m_pace(self):
+        session = _make_swim_session(segments=[
+            {"split_index": 1, "distance_km": 0.05, "duration_min": 1.4, "avg_pace": "2:48", "avg_hr": 145},
+            {"split_index": 2, "distance_km": 0.05, "duration_min": 1.5, "avg_pace": "3:00", "avg_hr": 147},
+        ])
+
+        msg = format_activity_message(session, None)
+
+        assert "#1｜50m｜1:24｜配速 2:48/100m｜心率 145 bpm" in msg
+        assert "#2｜50m｜1:30｜配速 3:00/100m｜心率 147 bpm" in msg
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 自行車
@@ -370,6 +255,17 @@ class TestCyclingFormat:
         msg = format_activity_message(_make_cycling_session(), _make_week())
         assert "20" in msg
         assert "km/h" in msg
+
+    def test_all_cycling_splits_show_speed(self):
+        session = _make_cycling_session(segments=[
+            {"split_index": 1, "distance_km": 5.0, "duration_min": 15.0, "speed_kmh": 20.0, "avg_hr": 135},
+            {"split_index": 2, "distance_km": 4.09, "duration_min": 12.3, "speed_kmh": 19.95, "avg_hr": 143},
+        ])
+
+        msg = format_activity_message(session, None)
+
+        assert "#1｜5 km｜15:00｜速度 20 km/h｜心率 135 bpm" in msg
+        assert "#2｜4.09 km｜12:18｜速度 19.9 km/h｜心率 143 bpm" in msg
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -439,11 +335,11 @@ class TestWeeklyStats:
 
 class TestActivityTypeMapping:
     @pytest.mark.parametrize("source_type,session_type,expected_name", [
-        ("running", "easy", "輕鬆跑"),
-        ("running", "interval", "間歇"),
-        ("running", "tempo", "節奏跑"),
-        ("running", "long", "長跑"),
-        ("running", "long_run", "長跑"),
+        ("running", "easy", "跑步"),
+        ("running", "interval", "跑步"),
+        ("running", "tempo", "跑步"),
+        ("running", "long", "跑步"),
+        ("running", "long_run", "跑步"),
         ("swimming", "swim", "游泳"),
         ("cycling", "bike", "自行車"),
     ])
@@ -455,14 +351,14 @@ class TestActivityTypeMapping:
         msg = format_activity_message(session, None)
         assert expected_name in msg
 
-    def test_unknown_type_shows_source_activity_type(self):
-        """未知 type 顯示 source_activity_type 原值，不顯示難懂內部 type。"""
+    def test_unknown_source_activity_type_keeps_raw_value(self):
+        """未知 source_activity_type 保留原始值，不顯示內部 type。"""
         session = _make_easy_running_session(
-            source_activity_type="hiking",
+            source_activity_type="Hiking",
             type="unknown_xyz",
         )
         msg = format_activity_message(session, None)
-        assert "hiking" in msg
+        assert "Hiking" in msg
         assert "unknown_xyz" not in msg
 
 

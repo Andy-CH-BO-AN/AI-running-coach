@@ -45,7 +45,7 @@ def _resolve_resting_heart_rate(
     low_activity_hr_values = [
         avg_hr
         for session in sessions
-        if session.get("type") not in {"interval", "tempo", "race", "swim", "rest"}
+        if session.get("source_activity_type") in {"running", "cycling"}
         for avg_hr in [_safe_float(session.get("avg_hr"))]
         if avg_hr and 80 <= avg_hr <= 170
     ]
@@ -278,12 +278,12 @@ def _build_cross_training(sessions: Sequence[Dict[str, Any]], processed_by_id: D
     swim_records = [
         processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
         for session in sessions
-        if session.get("type") == "swim"
+        if session.get("source_activity_type") in {"swimming", "lap_swimming"}
     ]
     bike_records = [
         processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
         for session in sessions
-        if session.get("type") == "bike"
+        if session.get("source_activity_type") == "cycling"
     ]
     return {
         "swimming": {

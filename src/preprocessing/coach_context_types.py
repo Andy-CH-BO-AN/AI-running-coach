@@ -21,6 +21,7 @@ class CoachSegment(TypedDict, total=False):
     distance_km: float | None
     duration_min: float | None
     avg_pace: str | None
+    speed_kmh: float | None
     avg_hr: int | None
     cadence: float | None
     stride_length_m: float | None
@@ -31,7 +32,6 @@ class CoachSegment(TypedDict, total=False):
 class CoachSession(TypedDict, total=False):
     activity_id: Any
     date: Any
-    type: str
     source_activity_type: str | None
     distance_km: float
     duration_min: float
@@ -48,7 +48,6 @@ class CoachSession(TypedDict, total=False):
 
 class CoachSessionCounts(TypedDict, total=False):
     total: int
-    by_type: dict[str, int]
     by_source_activity_type: dict[str, int]
 
 

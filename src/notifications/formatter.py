@@ -10,18 +10,7 @@ TODO: 未來 coach_context 加入 start_time_local / end_time_local 後，
 """
 from __future__ import annotations
 
-import statistics
 from typing import Any
-
-from src.notifications.constants import (
-    MAX_DISPLAYED_REPS,
-    MAX_WORK_PACE_SEC_PER_KM,
-    MIN_WORK_CADENCE_SPM,
-    MIN_WORK_DISTANCE_KM,
-    REP_DISTANCE_TOLERANCE,
-    TRUNCATED_HEAD_COUNT,
-    TRUNCATED_TAIL_COUNT,
-)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 運動類型對照
@@ -33,30 +22,21 @@ _SPORT_EMOJI = {
     "cycling": "🚴",
 }
 
-_RUNNING_TYPE_NAMES: dict[str, str] = {
-    "easy": "輕鬆跑",
-    "interval": "間歇",
-    "tempo": "節奏跑",
-    "long": "長跑",
-    "long_run": "長跑",
-}
 
-
-def _sport_display_name(source_activity_type: str, session_type: str) -> str:
+def _sport_display_name(source_activity_type: str) -> str:
     """取得顯示名稱。
 
-    優先以 source_activity_type 決定大分類，
-    再以 session_type 做細分（目前只對 running 有細分）。
-    未知類型直接顯示 source_activity_type，不顯示內部 type。
+    只依 source_activity_type 決定顯示名稱。未知類型保留原始值，
+    不使用 coach_context 推測的內部 type。
     """
     sat = source_activity_type.lower()
     if sat == "running":
-        return _RUNNING_TYPE_NAMES.get(session_type.lower(), "跑步")
+        return "跑步"
     if sat == "swimming":
         return "游泳"
     if sat == "cycling":
         return "自行車"
-    return sat  # 未知類型顯示 source_activity_type 原值
+    return source_activity_type
 
 
 def _sport_emoji(source_activity_type: str) -> str:
@@ -146,138 +126,51 @@ def _format_temp(temp_c: float | None) -> str | None:
     return f"{formatted}°C"
 
 
-def _pace_to_sec_per_km(pace_str: str) -> int | None:
-    """將 'MM:SS' 格式配速字串轉換為秒/公里。解析失敗回傳 None。"""
-    if not pace_str:
-        return None
-    # 過濾非跑步配速（含 km/h 的自行車速度）
-    if "km/h" in pace_str:
+def _format_speed(speed_kmh: float | None) -> str | None:
+    """格式化速度，移除無意義尾端零。"""
+    if speed_kmh is None:
         return None
     try:
-        parts = pace_str.strip().split(":")
-        if len(parts) != 2:
-            return None
-        return int(parts[0]) * 60 + int(parts[1])
-    except (ValueError, AttributeError):
+        formatted = f"{float(speed_kmh):.1f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
         return None
+    return f"{formatted} km/h"
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Interval 工作段提取
-# ──────────────────────────────────────────────────────────────────────────────
+def _format_segment(
+    segment: dict[str, Any],
+    position: int,
+    source_activity_type: str,
+) -> str:
+    """以運動原始類型格式化單一 split，不使用推測的 session type。"""
+    split_index = segment.get("split_index")
+    label = split_index if split_index not in (None, "") else position
+    details: list[str] = [f"#{label}"]
 
-def _is_work_segment(seg: dict[str, Any]) -> bool:
-    """判定 segment 是否為工作段（排除站立/慢走恢復段）。
+    distance = _format_distance(segment.get("distance_km"))
+    if distance:
+        details.append(distance)
 
-    多條件組合：
-    1. cadence 有值且 < MIN_WORK_CADENCE_SPM → 排除
-    2. 配速超過 MAX_WORK_PACE_SEC_PER_KM → 排除
-    3. 距離 < MIN_WORK_DISTANCE_KM → 排除
-    4. duration 長但距離極短（cadence 極低暗示站立）→ 排除
-    """
-    distance = seg.get("distance_km") or 0.0
-    if distance < MIN_WORK_DISTANCE_KM:
-        return False
+    duration = _format_duration(segment.get("duration_min"))
+    if duration:
+        details.append(duration)
 
-    cadence = seg.get("cadence")
-    if cadence is not None and cadence < MIN_WORK_CADENCE_SPM:
-        return False
+    source_type = source_activity_type.lower()
+    avg_pace = segment.get("avg_pace")
+    if source_type == "running" and avg_pace:
+        details.append(f"配速 {avg_pace}/km")
+    elif source_type == "swimming" and avg_pace:
+        details.append(f"配速 {avg_pace}/100m")
+    elif source_type == "cycling":
+        speed = _format_speed(segment.get("speed_kmh"))
+        if speed:
+            details.append(f"速度 {speed}")
 
-    avg_pace = seg.get("avg_pace")
-    if avg_pace:
-        pace_sec = _pace_to_sec_per_km(avg_pace)
-        if pace_sec is not None and pace_sec > MAX_WORK_PACE_SEC_PER_KM:
-            return False
+    avg_hr = segment.get("avg_hr")
+    if avg_hr is not None:
+        details.append(f"心率 {avg_hr} bpm")
 
-    return True
-
-
-def _extract_work_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """從 segments 中提取工作段，回傳含 rep_index 與 source_split_index 的 list。"""
-    work = []
-    rep_idx = 1
-    for seg in segments:
-        if _is_work_segment(seg):
-            work.append({
-                "rep_index": rep_idx,
-                "source_split_index": seg.get("split_index"),
-                "distance_km": seg.get("distance_km"),
-                "avg_pace": seg.get("avg_pace"),
-                "avg_hr": seg.get("avg_hr"),
-            })
-            rep_idx += 1
-    return work
-
-
-def _format_rep_line(rep: dict[str, Any]) -> str:
-    """格式化單一工作段為顯示行。"""
-    parts = [f"R{rep['rep_index']}"]
-    dist = _format_distance(rep.get("distance_km"))
-    if dist:
-        parts.append(dist)
-    pace = rep.get("avg_pace")
-    if pace:
-        parts.append(f"{pace}/km")
-    return "｜".join(parts)
-
-
-def _is_uniform_reps(reps: list[dict[str, Any]]) -> tuple[bool, float | None]:
-    """判斷工作段距離是否均一（中位數 ±10%），回傳 (均一, 中位距離)。"""
-    distances = [r["distance_km"] for r in reps if r.get("distance_km") is not None]
-    if not distances:
-        return False, None
-    med = statistics.median(distances)
-    if med == 0:
-        return False, None
-    is_uniform = all(
-        abs(d - med) / med <= REP_DISTANCE_TOLERANCE for d in distances
-    )
-    return is_uniform, med
-
-
-def _format_interval_section(segments: list[dict[str, Any]]) -> str | None:
-    """格式化主課分段區塊。無工作段時回傳 None。"""
-    reps = _extract_work_segments(segments)
-    if not reps:
-        return None
-
-    lines = ["主課分段"]
-
-    if len(reps) <= MAX_DISPLAYED_REPS:
-        for rep in reps:
-            lines.append(_format_rep_line(rep))
-    else:
-        # 截斷顯示：統計摘要 + 前 5 + 後 3
-        paces_sec = [
-            _pace_to_sec_per_km(r["avg_pace"])
-            for r in reps
-            if r.get("avg_pace") and _pace_to_sec_per_km(r["avg_pace"]) is not None
-        ]
-        lines.append(f"共 {len(reps)} 段")
-
-        if paces_sec:
-            avg_sec = round(statistics.mean(paces_sec))
-            avg_pace_str = f"{avg_sec // 60}:{avg_sec % 60:02d}"
-            fastest = min(paces_sec)
-            slowest = max(paces_sec)
-            fastest_str = f"{fastest // 60}:{fastest % 60:02d}"
-            slowest_str = f"{slowest // 60}:{slowest % 60:02d}"
-            lines.append(f"平均 {avg_pace_str}/km｜最快 {fastest_str}｜最慢 {slowest_str}")
-
-        lines.append("— 前段 —")
-        for rep in reps[:TRUNCATED_HEAD_COUNT]:
-            lines.append(_format_rep_line(rep))
-        lines.append("— 後段 —")
-        for rep in reps[-TRUNCATED_TAIL_COUNT:]:
-            lines.append(_format_rep_line(rep))
-
-    # 均一課表摘要
-    is_uniform, med_dist = _is_uniform_reps(reps)
-    if is_uniform and med_dist is not None:
-        med_m = round(med_dist * 1000)
-        lines.insert(1, f"（{med_m}m × {len(reps)}）")
-
-    return "\n".join(lines)
+    return "｜".join(details)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -298,12 +191,11 @@ def format_activity_message(
     Returns:
         LINE 純文字訊息（不含 AI 分析或訓練建議）。
     """
-    source_type = activity.get("source_activity_type", "")
-    session_type = activity.get("type", "")
+    source_type = str(activity.get("source_activity_type") or "")
     date_str = activity.get("date", "")
 
     emoji = _sport_emoji(source_type)
-    display_name = _sport_display_name(source_type, session_type)
+    display_name = _sport_display_name(source_type)
 
     lines: list[str] = []
 
@@ -320,21 +212,16 @@ def format_activity_message(
     if dur_str:
         lines.append(f"時間：{dur_str}")
 
-    # 配速/速度：interval 跑步不顯示整體 avg_pace
-    is_interval_running = (
-        session_type.lower() == "interval"
-        and source_type.lower() == "running"
-    )
-    if not is_interval_running:
-        avg_pace = activity.get("avg_pace")
-        if avg_pace:
-            if source_type.lower() == "running":
-                lines.append(f"配速：{avg_pace}/km")
-            elif source_type.lower() == "swimming":
-                lines.append(f"配速：{avg_pace}/100m")
-            elif source_type.lower() == "cycling":
-                # avg_pace 對自行車已含 km/h（如 "20.0 km/h"）
-                lines.append(f"速度：{avg_pace}")
+    # 配速單位只依原始運動類型，跑步一律顯示整體 avg_pace。
+    avg_pace = activity.get("avg_pace")
+    if avg_pace:
+        if source_type.lower() == "running":
+            lines.append(f"配速：{avg_pace}/km")
+        elif source_type.lower() == "swimming":
+            lines.append(f"配速：{avg_pace}/100m")
+        elif source_type.lower() == "cycling":
+            # avg_pace 對自行車已含 km/h（如 "20.0 km/h"）
+            lines.append(f"速度：{avg_pace}")
 
     avg_hr = activity.get("avg_hr")
     if avg_hr is not None:
@@ -349,13 +236,14 @@ def format_activity_message(
     if temp_str:
         lines.append(f"溫度：{temp_str}")
 
-    # ── Interval 主課分段
-    if is_interval_running:
-        segments = activity.get("segments") or []
-        interval_section = _format_interval_section(segments)
-        if interval_section:
-            lines.append("")
-            lines.append(interval_section)
+    # ── 所有分段：只依原始運動類型決定配速／速度單位。
+    segments = activity.get("segments")
+    if isinstance(segments, list) and segments:
+        lines.append("")
+        lines.append("分段明細")
+        for position, segment in enumerate(segments, start=1):
+            if isinstance(segment, dict):
+                lines.append(_format_segment(segment, position, source_type))
 
     # ── 本週累積
     if week is not None:

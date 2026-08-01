@@ -98,9 +98,9 @@ def test_builds_monday_week_buckets_and_derived_weekly_metrics():
     assert current_week["derived_training_load"] == 42.3
     assert current_week["session_counts"] == {
         "total": 2,
-        "by_type": {"easy": 2},
         "by_source_activity_type": {"running": 2},
     }
+    assert all("type" not in session for session in current_week["sessions"])
     assert current_week["data_quality"]["status"] == "partial"
     assert current_week["data_quality"]["missing_fields"] == ["training_load"]
     assert "heat_stress" in current_week["risk_flags"]
@@ -557,9 +557,67 @@ def test_weekly_session_counts_include_cross_training_distribution():
     counts = context["weekly_analysis"][0]["session_counts"]
     assert counts == {
         "total": 3,
-        "by_type": {"bike": 1, "easy": 1, "swim": 1},
         "by_source_activity_type": {"cycling": 1, "running": 1, "swimming": 1},
     }
+
+
+def test_context_and_enforced_report_exclude_inferred_session_type():
+    context = build_deterministic_coach_context(
+        processed_data=[
+            {
+                "activity_id": 210,
+                "type": "running",
+                "date": "2026-05-12",
+                "distance_km": 0.62,
+                "performance_value": 6.14,
+                "performance_formatted": "06:08 /km",
+                "avg_hr": 166,
+            }
+        ],
+        user_data=_sample_user_data(),
+        raw_activities=[{"activity_id": 210, "type": "running", "duration": 3.8}],
+        today="2026-05-14",
+    )
+
+    context_session = context["weekly_analysis"][0]["sessions"][0]
+    assert context_session["source_activity_type"] == "running"
+    assert "type" not in context_session
+    assert "by_type" not in context["weekly_analysis"][0]["session_counts"]
+
+    report = enforce_deterministic_report_fields(
+        {
+            "weekly_analysis": [
+                {
+                    "week_start": "2026-05-11",
+                    "sessions": [{"activity_id": 210, "type": "interval"}],
+                }
+            ],
+            "evidence_links": [
+                {
+                    "supporting_sessions": [
+                        {"activity_id": 210, "type": "interval"},
+                        {
+                            "date": "2026-05-12",
+                            "source_activity_type": "running",
+                            "distance_km": 0.62,
+                            "duration_min": 3.8,
+                            "avg_pace": "06:08",
+                            "type": "interval",
+                        },
+                        {"date": "2026-05-09", "type": "interval"},
+                    ]
+                }
+            ],
+        },
+        context,
+    )
+
+    assert "type" not in report["weekly_analysis"][0]["sessions"][0]
+    assert "type" not in report["evidence_links"][0]["supporting_sessions"][0]
+    fallback_session = report["evidence_links"][0]["supporting_sessions"][1]
+    assert fallback_session["source_path"] == "weekly_analysis[0].sessions[0]"
+    assert "type" not in fallback_session
+    assert "type" not in report["evidence_links"][0]["supporting_sessions"][2]
 
 
 def test_cross_training_segments_do_not_emit_running_mechanics():
@@ -608,9 +666,12 @@ def test_cross_training_segments_do_not_emit_running_mechanics():
         today="2026-05-14",
     )
 
-    sessions = {session["type"]: session for session in context["weekly_analysis"][0]["sessions"]}
-    for session_type in ("bike", "swim"):
-        segment = sessions[session_type]["segments"][0]
+    sessions = {
+        session["source_activity_type"]: session
+        for session in context["weekly_analysis"][0]["sessions"]
+    }
+    for source_activity_type in ("cycling", "swimming"):
+        segment = sessions[source_activity_type]["segments"][0]
         assert "cadence" not in segment
         assert "stride_length_m" not in segment
 
@@ -789,6 +850,7 @@ def test_enforce_deterministic_report_fields_restores_pruned_sessions_and_metric
     assert "total_distance_km" not in restored_week
     assert [session["activity_id"] for session in restored_week["sessions"]] == [301, 302]
     assert restored_week["sessions"][1]["coaching_note"] == "保留單次活動教練備註"
+    assert all("type" not in session for session in restored_week["sessions"])
     assert report["hr_zone_distribution"]["assessment"] == "保留 HR 解讀"
     assert report["hr_zone_distribution"]["zones"] == context["hr_zone_distribution"]["zones"]
     assert report["physio_metrics"]["vo2max"]["value"] == 53

@@ -13,7 +13,6 @@ from src.preprocessing.data_processor import preprocess_data
 SESSION_OUTPUT_KEYS = {
     "activity_id",
     "date",
-    "type",
     "source_activity_type",
     "distance_km",
     "duration_min",
@@ -155,13 +154,14 @@ def test_processed_to_deterministic_context_contract():
     assert current_week["derived_training_load"] == 72.4
     assert current_week["session_counts"] == {
         "total": 2,
-        "by_type": {"bike": 1, "easy": 1},
         "by_source_activity_type": {"cycling": 1, "running": 1},
     }
+    assert all("type" not in session for session in current_week["sessions"])
     assert "heat_stress" in current_week["risk_flags"]
     assert current_week["sessions"][0]["activity_id"] == 9001
     assert current_week["sessions"][0]["segments"][0]["avg_pace"] == "5:00"
     assert current_week["sessions"][0]["segments"][0]["stride_length_m"] == 1.12
+    assert current_week["sessions"][1]["segments"][0]["speed_kmh"] == 20.0
 
     zones = context["hr_zone_distribution"]["zones"]
     assert [zone["zone"] for zone in zones] == [1, 2, 3, 4, 5]
@@ -249,6 +249,9 @@ def test_enforced_report_preserves_dashboard_json_contract():
     assert current_week["sessions"][1]["coaching_note"] == "Keep bike note"
     assert "cadence" not in current_week["sessions"][1]["segments"][0]
     assert "stride_length_m" not in current_week["sessions"][1]["segments"][0]
+    assert current_week["sessions"][1]["segments"][0]["split_index"] == 1
+    assert current_week["sessions"][1]["segments"][0]["duration_min"] == 60.0
+    assert current_week["sessions"][1]["segments"][0]["speed_kmh"] == 20.0
 
     assert report["hr_zone_distribution"]["assessment"] == "Keep HR assessment"
     assert report["hr_zone_distribution"]["zones"] == context["hr_zone_distribution"]["zones"]

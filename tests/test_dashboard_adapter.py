@@ -1654,6 +1654,34 @@ def test_latest_activity_source_activity_type_overrides_running_like_session_typ
     assert segment["stride_length_m"] is None
 
 
+def test_latest_activity_without_session_type_uses_source_activity_type(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "source_activity_type": "running",
+                        "distance_km": 0.62,
+                        "duration_min": 3.8,
+                        "avg_pace": "06:08",
+                        "segments": [
+                            {"segment_type": "lap", "distance_km": 0.621, "avg_pace": "06:08"}
+                        ],
+                    }
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+
+    assert payload["latest"]["type_label"] == "跑步"
+    assert payload["latest"]["layout"] == "easy"
+
+
 def test_latest_activity_uses_most_recent_session_day(tmp_path):
     report = {
         "weekly_analysis": [

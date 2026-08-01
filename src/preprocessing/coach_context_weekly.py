@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Sequence
 
 from src.preprocessing.coach_context_types import (
     CoachSession,
@@ -23,7 +23,7 @@ from src.preprocessing.coach_context_utils import (
 )
 
 
-def _risk_flags_for_week(week: Dict[str, Any], max_hr: Optional[float], baseline_load: Optional[float]) -> List[str]:
+def _risk_flags_for_week(week: Dict[str, Any], baseline_load: float | None) -> List[str]:
     flags = set()
     sessions = week["sessions"]
     running_distance = sum(session["distance_km"] for session in sessions if session.get("source_activity_type") == "running")
@@ -34,25 +34,17 @@ def _risk_flags_for_week(week: Dict[str, Any], max_hr: Optional[float], baseline
         temp = _safe_float((session.get("environment") or {}).get("estimated_temp_c"))
         if temp is not None and temp >= 27:
             flags.add("heat_stress")
-        avg_hr = _safe_float(session.get("avg_hr"))
-        if session.get("type") == "long" and max_hr and avg_hr and avg_hr >= max_hr * 0.86:
-            flags.add("high_intensity_long_run")
-
     load = _safe_float(week.get("derived_training_load")) or 0.0
     if baseline_load and load > baseline_load * 1.35 and load >= 80:
         flags.add("overreaching_risk")
-    if "high_intensity_long_run" in flags or "overreaching_risk" in flags:
+    if "overreaching_risk" in flags:
         flags.add("fatigue_risk")
     return sorted(flags)
 
 
 def _build_week_session_counts(week_sessions: Sequence[CoachSession]) -> CoachSessionCounts:
-    by_type: Dict[str, int] = {}
     by_source_activity_type: Dict[str, int] = {}
     for session in week_sessions:
-        session_type = str(session.get("type") or "unknown")
-        by_type[session_type] = by_type.get(session_type, 0) + 1
-
         source_activity_type = session.get("source_activity_type")
         if source_activity_type:
             normalized_source = str(source_activity_type)
@@ -60,7 +52,6 @@ def _build_week_session_counts(week_sessions: Sequence[CoachSession]) -> CoachSe
 
     return {
         "total": len(week_sessions),
-        "by_type": dict(sorted(by_type.items())),
         "by_source_activity_type": dict(sorted(by_source_activity_type.items())),
     }
 
@@ -93,7 +84,6 @@ def _build_12week_summary(
 def _build_weekly_analysis(
     sessions: Sequence[CoachSession],
     today: date,
-    max_hr: Optional[float],
 ) -> List[CoachWeek]:
     current_week_start = _week_start_for(today)
     buckets: List[CoachWeek] = []
@@ -143,7 +133,7 @@ def _build_weekly_analysis(
     nonzero_loads = [week["derived_training_load"] for week in buckets[1:] if week["derived_training_load"] > 0]
     baseline_load = sum(nonzero_loads) / len(nonzero_loads) if nonzero_loads else None
     for week in buckets:
-        week["risk_flags"] = _risk_flags_for_week(week, max_hr=max_hr, baseline_load=baseline_load)
+        week["risk_flags"] = _risk_flags_for_week(week, baseline_load=baseline_load)
     return buckets
 
 

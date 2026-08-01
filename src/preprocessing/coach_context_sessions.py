@@ -18,8 +18,6 @@ from src.preprocessing.coach_context_utils import (
     _sum_numbers,
 )
 
-RUNNING_SESSION_TYPES = {"easy", "tempo", "interval", "long", "race"}
-
 
 def _build_raw_lookup(raw_activities: Optional[Sequence[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
     lookup: Dict[str, Dict[str, Any]] = {}
@@ -28,31 +26,8 @@ def _build_raw_lookup(raw_activities: Optional[Sequence[Dict[str, Any]]]) -> Dic
     return lookup
 
 
-def _activity_type(processed: Dict[str, Any], raw: Dict[str, Any]) -> str:
+def _source_activity_type(processed: Dict[str, Any], raw: Dict[str, Any]) -> str:
     return str(processed.get("type") or raw.get("type") or "").lower()
-
-
-def _session_type(processed: Dict[str, Any], raw: Dict[str, Any], max_hr: Optional[float]) -> str:
-    activity_type = _activity_type(processed, raw)
-    if activity_type in {"swimming", "lap_swimming"}:
-        return "swim"
-    if activity_type == "cycling":
-        return "bike"
-    if activity_type != "running":
-        return "easy"
-
-    distance_km = _safe_float(processed.get("distance_km")) or _safe_float(raw.get("distance")) or 0.0
-    duration_min = _safe_float(raw.get("duration")) or _duration_from_splits(processed.get("splits")) or 0.0
-    avg_hr = _safe_float(processed.get("avg_hr")) or _safe_float(raw.get("average_heart_rate"))
-    avg_pace = _safe_float(processed.get("performance_value")) or _safe_float(raw.get("average_pace"))
-
-    if distance_km >= 12 or duration_min >= 75:
-        return "long"
-    if max_hr and avg_hr and avg_hr >= max_hr * 0.88:
-        return "interval" if duration_min <= 25 or distance_km <= 5 else "tempo"
-    if avg_pace and duration_min <= 20 and (distance_km <= 1.5 or (max_hr and avg_hr and avg_hr >= max_hr * 0.82)):
-        return "interval"
-    return "easy"
 
 
 def _duration_from_splits(splits: Any) -> Optional[float]:
@@ -86,8 +61,8 @@ def _training_effect(processed: Dict[str, Any], metric: str) -> Optional[float]:
     )
 
 
-def _is_running_session_type(session_type: Optional[str]) -> bool:
-    return (session_type or "") in RUNNING_SESSION_TYPES
+def _is_running_source_activity(source_activity_type: Optional[str]) -> bool:
+    return (source_activity_type or "").lower() == "running"
 
 
 def _segment_from_split(split: Dict[str, Any], *, include_running_metrics: bool) -> CoachSegment:
@@ -97,6 +72,7 @@ def _segment_from_split(split: Dict[str, Any], *, include_running_metrics: bool)
         "distance_km": _round_or_none(split.get("distance"), 3),
         "duration_min": _round_or_none(split.get("duration"), 2),
         "avg_pace": _format_pace_minutes(split.get("pace")),
+        "speed_kmh": _round_or_none(split.get("speed_kmh"), 1),
         "avg_hr": _round_or_none(split.get("average_heart_rate"), 0),
         "temperature_c": _round_or_none(split.get("temperature"), 1),
         "note": None,
@@ -107,11 +83,11 @@ def _segment_from_split(split: Dict[str, Any], *, include_running_metrics: bool)
     return segment
 
 
-def _build_segments(processed: Dict[str, Any], session_type: Optional[str]) -> List[CoachSegment]:
+def _build_segments(processed: Dict[str, Any], source_activity_type: Optional[str]) -> List[CoachSegment]:
     splits = processed.get("splits")
     if not isinstance(splits, list):
         return []
-    include_running_metrics = _is_running_session_type(session_type)
+    include_running_metrics = _is_running_source_activity(source_activity_type)
     return [
         _segment_from_split(split, include_running_metrics=include_running_metrics)
         for split in splits
@@ -150,7 +126,6 @@ def _build_environment(processed: Dict[str, Any], raw: Dict[str, Any]) -> CoachE
 def _build_session(
     processed: Dict[str, Any],
     raw_lookup: Dict[str, Dict[str, Any]],
-    max_hr: Optional[float],
 ) -> CoachSession:
     activity_id = processed.get("activity_id")
     raw = raw_lookup.get(_normalize_activity_id(activity_id), {})
@@ -170,8 +145,8 @@ def _build_session(
         if value is None
     ]
 
-    session_type = _session_type(processed, raw, max_hr)
-    segments = _build_segments(processed, session_type)
+    source_activity_type = _source_activity_type(processed, raw) or None
+    segments = _build_segments(processed, source_activity_type)
     aerobic_te = _training_effect(processed, "aerobic")
     anaerobic_te = _training_effect(processed, "anaerobic")
     environment = _build_environment(processed, raw)
@@ -179,8 +154,7 @@ def _build_session(
     return {
         "activity_id": activity_id,
         "date": processed.get("date") or raw.get("date"),
-        "type": session_type,
-        "source_activity_type": _activity_type(processed, raw) or None,
+        "source_activity_type": source_activity_type,
         "distance_km": distance if distance is not None else 0,
         "duration_min": duration if duration is not None else 0,
         "training_load": load if load is not None else 0,
