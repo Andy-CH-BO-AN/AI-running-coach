@@ -120,6 +120,14 @@ def test_splits_table_hides_running_mechanics_columns_when_missing():
     assert 'var showStrideLength' in source
 
 
+def test_latest_activity_shows_splits_without_session_type_or_interval_layout():
+    source = Path("dashboard/app.js").read_text(encoding="utf-8")
+
+    assert 'if (latest.work_reps.length > 0)' in source
+    assert 'latest.layout === "interval" && latest.work_reps.length > 0' not in source
+    assert 'textElement("summary", "", "分段明細")' in source
+
+
 def test_dashboard_uses_local_font_stack_only():
     index_source = Path("dashboard/index.html").read_text(encoding="utf-8")
     style_source = Path("dashboard/styles.css").read_text(encoding="utf-8")

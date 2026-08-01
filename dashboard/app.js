@@ -314,13 +314,13 @@
     stats.appendChild(renderActivityStat("氣溫", latest.temperature_c !== null ? latest.temperature_c : "--", "°C"));
     elements.latestActivity.appendChild(stats);
 
-    if (latest.layout === "interval" && latest.work_reps.length > 0) {
+    if (latest.work_reps.length > 0) {
       var trend = document.createElement("details");
       trend.className = "rep-trend-details";
       trend.open = true;
-      trend.appendChild(textElement("summary", "", "split 比較"));
+      trend.appendChild(textElement("summary", "", "分段明細"));
 
-      var splitTable = renderSessionSplitsTable(latest.work_reps, "全部分段");
+      var splitTable = renderSessionSplitsTable(latest.work_reps, "分段明細");
       if (splitTable) {
         trend.appendChild(splitTable);
         elements.latestActivity.appendChild(trend);

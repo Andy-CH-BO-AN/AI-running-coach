@@ -89,17 +89,13 @@ class ActivityPayloadProvider:
         except (TypeError, ValueError):
             current_resting_hr = None
 
-        if latest_resting_hr is None:
+        if current_resting_hr is not None and 30 <= current_resting_hr <= 100:
+            return user_data
+        if latest_resting_hr is None or not 30 <= latest_resting_hr <= 100:
             return user_data
 
-        resolved_resting_hr = (
-            latest_resting_hr
-            if current_resting_hr is None
-            else min(current_resting_hr, latest_resting_hr)
-        )
-        if current_resting_hr != resolved_resting_hr:
-            user_data["resting_heart_rate"] = resolved_resting_hr
-            user_data["resting_heart_rate_source"] = "db_latest_profile_history"
+        user_data["resting_heart_rate"] = latest_resting_hr
+        user_data["resting_heart_rate_source"] = "db_latest_profile_history"
         return user_data
 
     def _fetch_garmin_updates(

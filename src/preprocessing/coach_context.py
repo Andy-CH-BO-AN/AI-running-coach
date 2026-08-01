@@ -136,7 +136,7 @@ def build_deterministic_coach_context(
             "available_training_days": user_data.get("available_training_days") or [],
             "preferred_long_training_days": user_data.get("preferred_long_training_days") or [],
         },
-        "physio_metrics": _build_physio_metrics(user_data, sessions),
+        "physio_metrics": _build_physio_metrics(user_data),
         "pb_validation_seed": _build_pb_validation_seed(user_data),
         "weekly_analysis": weekly_analysis,
         "hr_zone_distribution": hr_zone_distribution,
