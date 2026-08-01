@@ -95,6 +95,16 @@ Run a regression scope that matches the change risk.
   `http://127.0.0.1:8765/`, inspect accessibility snapshots, console errors,
   network failures, desktop/mobile viewports, key interactions, and screenshots.
 - QA port is fixed to `8765`. Do not reuse the UI/UX review port `8766`.
+- For every UI QA task, send proactive progress reports at these three
+  checkpoints so the coordinating agent is not left waiting:
+  1. **Environment started** — report that the QA server is reachable on
+     port `8765`, or report the specific startup blocker.
+  2. **Case loaded** — report which report, fixture, or user-flow case is
+     loaded and ready for verification, or report why it could not be loaded.
+  3. **Visual verification complete** — report the result of desktop/mobile
+     checks, key interactions, console/network status, and any artifact paths.
+- Send each checkpoint report as soon as it is reached; do not wait until the
+  full UI QA run is complete or for the coordinating agent to ask.
 - Keep Chrome MCP on the isolated/default automation profile. Do not inspect
   private user browser sessions unless explicitly requested.
 - If Chrome MCP is unavailable, use the headless Chrome commands in
