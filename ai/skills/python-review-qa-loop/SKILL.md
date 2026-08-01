@@ -48,11 +48,27 @@ Instead, apply the repo's review loop explicitly:
    password/account flows, perform one security pass using
    `ai/shared/security.agent.md`.
 
-If the runtime supports explicit delegation and the user asked for it,
-you must delegate those passes to separate reviewer / QA / security
-agents instead of only simulating those roles yourself. If the user
-also asks for UI/UX review and the runtime supports delegation, spawn a
-separate UI/UX agent too.
+## Mandatory Reviewer → QA delegation
+
+For every Python change, including Python test changes, use explicit
+delegation whenever sub-agent tooling is available. This is mandatory;
+the user does not need to request it.
+
+1. Spawn a fresh reviewer sub-agent for the changed-code review.
+2. Wait for the reviewer result and address any blocking findings.
+3. Spawn a fresh QA sub-agent for coverage and regression validation.
+4. Do not treat self-review, a simulated role, or one agent doing both
+   passes as a substitute for Reviewer → QA.
+
+Run reviewer before QA. Use separate agents even when the change is
+small. If a worker slot is temporarily unavailable, wait for a slot and
+continue the sequence; only run the passes yourself when sub-agent
+tooling is actually unavailable for the whole task. Report that fallback
+clearly.
+
+For security review, delegate to a separate security agent whenever the
+runtime supports it. If the user also asks for UI/UX review and the
+runtime supports delegation, spawn a separate UI/UX agent too.
 
 Only execute the passes in a single Codex run when sub-agent tooling is
 actually unavailable. In that fallback case, report the limitation
@@ -66,12 +82,14 @@ clearly.
    commands before broader suites.
 4. Capture failures, stack traces, and reproduction steps when tests do
    not pass.
-5. Run a reviewer pass using `ai/shared/reviewer.agent.md`; tell the reviewer
-   which tests have already run and ask them to focus on changed code instead
-   of repeating QA's regression work.
-6. Run a QA pass using `ai/shared/qa.agent.md`; tell QA which tests have
-   already run so QA can target unvalidated behavior, missing scenarios, and
-   final regression instead of duplicating reviewer checks.
+5. When sub-agents are available, spawn a fresh reviewer using
+   `ai/shared/reviewer.agent.md`; wait for its result and resolve blocking
+   findings. Tell the reviewer which tests have already run and ask it to
+   focus on changed code instead of repeating QA's regression work.
+6. After reviewer completion, spawn a fresh QA agent using
+   `ai/shared/qa.agent.md`; tell QA which tests have already run so it can
+   target unvalidated behavior, missing scenarios, and final regression
+   instead of duplicating reviewer checks.
    Save durable artifacts in `tests/reports/` or `tests/scripts/` when helpful.
 7. If security review was triggered, run a separate security pass and
    report those checks explicitly.
