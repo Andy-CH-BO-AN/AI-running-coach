@@ -314,13 +314,17 @@
     stats.appendChild(renderActivityStat("氣溫", latest.temperature_c !== null ? latest.temperature_c : "--", "°C"));
     elements.latestActivity.appendChild(stats);
 
-    if (latest.layout === "interval" && latest.work_reps.length > 0) {
+    if (latest.work_reps.length > 0) {
       var trend = document.createElement("details");
       trend.className = "rep-trend-details";
       trend.open = true;
-      trend.appendChild(textElement("summary", "", "split 比較"));
+      trend.appendChild(textElement("summary", "", "分段明細"));
 
-      var splitTable = renderSessionSplitsTable(latest.work_reps, "全部分段");
+      var splitTable = renderSessionSplitsTable(
+        latest.work_reps,
+        "分段明細",
+        latest.source_activity_type
+      );
       if (splitTable) {
         trend.appendChild(splitTable);
         elements.latestActivity.appendChild(trend);
@@ -1206,10 +1210,12 @@
     elements.physioMetrics.appendChild(grid);
   }
 
-  function renderSessionSplitsTable(segments, titleText) {
+  function renderSessionSplitsTable(segments, titleText, sourceActivityType) {
     if (!segments || !segments.length) {
       return null;
     }
+    var isCycling = String(sourceActivityType || "").toLowerCase() === "cycling";
+    var performanceHeader = isCycling ? "速度" : "配速";
     var showCadence = segments.some(function hasCadence(segment) {
       return segment && segment.cadence !== null && segment.cadence !== undefined;
     });
@@ -1229,7 +1235,7 @@
     table.className = "evidence-splits-table";
     var thead = document.createElement("thead");
     var headerRow = document.createElement("tr");
-    ["#", "類型", "距離", "配速", "心率"].forEach(function addHeader(label) {
+    ["#", "類型", "距離", performanceHeader, "心率"].forEach(function addHeader(label) {
       headerRow.appendChild(textElement("th", "", label));
     });
     if (showCadence) {
@@ -1249,7 +1255,11 @@
         String(segment.index),
         segment.segment_type_label || segment.segment_type || "—",
         segment.distance_km !== null ? segment.distance_km + " km" : "—",
-        segment.avg_pace || "—",
+        isCycling
+          ? segment.speed_kmh !== null && segment.speed_kmh !== undefined
+            ? String(segment.speed_kmh) + " km/h"
+            : "—"
+          : segment.avg_pace || "—",
         segment.avg_hr !== null ? String(segment.avg_hr) + " bpm" : "—"
       ];
       if (showCadence) {
@@ -1402,7 +1412,11 @@
             var splitDetails = document.createElement("details");
             splitDetails.className = "evidence-session-splits";
             splitDetails.appendChild(textElement("summary", "", "查看 " + splitCount + " 筆分段"));
-            var splits = renderSessionSplitsTable(session.segments, "全部分段");
+            var splits = renderSessionSplitsTable(
+              session.segments,
+              "全部分段",
+              session.source_activity_type
+            );
             if (splits) {
               splitDetails.appendChild(splits);
               advanced.appendChild(splitDetails);

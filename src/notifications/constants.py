@@ -5,35 +5,6 @@
 from __future__ import annotations
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Interval 工作段判定閾值
-# ──────────────────────────────────────────────────────────────────────────────
-
-# 有 cadence 欄位時，低於此值視為站立/慢走恢復段（spm）
-MIN_WORK_CADENCE_SPM: int = 100
-
-# 配速超過此值（秒/公里）視為恢復段：15:00/km = 900 sec/km
-MAX_WORK_PACE_SEC_PER_KM: int = 900
-
-# 距離過短視為恢復段（km）
-MIN_WORK_DISTANCE_KM: float = 0.05
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 工作段顯示限制
-# ──────────────────────────────────────────────────────────────────────────────
-
-# 超過此數量時截斷顯示
-MAX_DISPLAYED_REPS: int = 12
-
-# 截斷時顯示頭部段數
-TRUNCATED_HEAD_COUNT: int = 5
-
-# 截斷時顯示尾部段數
-TRUNCATED_TAIL_COUNT: int = 3
-
-# 距離摘要容差：各段距離落在中位數 ±此比例內，才摘要為固定距離
-REP_DISTANCE_TOLERANCE: float = 0.10
-
-# ──────────────────────────────────────────────────────────────────────────────
 # LINE API
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -41,6 +12,9 @@ LINE_PUSH_URL: str = "https://api.line.me/v2/bot/message/push"
 
 # LINE Messaging API text-message ceiling.
 LINE_MAX_TEXT_LENGTH: int = 5000
+
+# A Push Message request can carry up to five message objects.
+LINE_MAX_MESSAGES_PER_PUSH: int = 5
 
 # Per-run safety caps. Degraded mode has no persistent deduplication.
 MAX_LINE_NOTIFICATIONS_PER_RUN: int = 20

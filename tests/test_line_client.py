@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from src.notifications.line_client import LineSendResult, send_push_message
+from src.notifications.line_client import LineSendResult, _utf16_length, send_push_message
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -87,7 +87,7 @@ class TestSendPushMessageSuccess:
 # ──────────────────────────────────────────────────────────────────────────────
 
 class TestNoRetryErrors:
-    @pytest.mark.parametrize("status_code", [400, 401, 403, 404, 409, 413, 422])
+    @pytest.mark.parametrize("status_code", [400, 401, 403, 404, 413, 422])
     def test_client_error_no_retry(self, status_code: int):
         resp = _make_response(status_code)
 
@@ -122,6 +122,22 @@ class TestNoRetryErrors:
         assert result.status_code == status_code
         assert result.attempts == 1  # 3xx 狀態碼只嘗試一次，不重試
         assert result.error_type == "unexpected_http_status"
+
+    def test_409_retry_key_already_accepted_is_success(self):
+        resp_409 = _make_response(409)
+
+        with patch("src.notifications.line_client.requests.Session") as mock_session_cls:
+            session = MagicMock()
+            session.__enter__ = MagicMock(return_value=session)
+            session.__exit__ = MagicMock(return_value=False)
+            session.post.return_value = resp_409
+            mock_session_cls.return_value = session
+
+            result = send_push_message(TOKEN, GROUP_ID, "msg")
+
+        assert result.success is True
+        assert result.attempts == 1
+        assert "X-Line-Retry-Key" in session.post.call_args.kwargs["headers"]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -199,6 +215,23 @@ class TestRetryableErrors:
 
         assert result.success is True
         assert result.attempts == 2
+
+    def test_timeout_retry_reuses_the_same_retry_key_and_409_is_success(self):
+        resp_409 = _make_response(409)
+        with patch("src.notifications.line_client.requests.Session") as mock_session_cls, \
+             patch("src.notifications.line_client.time.sleep"):
+            session = MagicMock()
+            session.__enter__ = MagicMock(return_value=session)
+            session.__exit__ = MagicMock(return_value=False)
+            session.post.side_effect = [requests.Timeout(), resp_409]
+            mock_session_cls.return_value = session
+
+            result = send_push_message(TOKEN, GROUP_ID, "msg")
+
+        assert result.success is True
+        assert result.attempts == 2
+        headers = [call.kwargs["headers"] for call in session.post.call_args_list]
+        assert headers[0]["X-Line-Retry-Key"] == headers[1]["X-Line-Retry-Key"]
 
     def test_connection_error_retries(self):
         with patch("src.notifications.line_client.requests.Session") as mock_session_cls, \
@@ -283,7 +316,7 @@ class TestTokenSecurity:
 
 
 class TestMessageLength:
-    def test_overlong_text_is_truncated_before_request_and_content_stays_private(self, caplog):
+    def test_overlong_text_is_split_without_losing_content_and_stays_private(self, caplog):
         long_text = "秘密內容" * 2000
         with patch("src.notifications.line_client.requests.Session") as mock_session_cls, \
              caplog.at_level(logging.WARNING, logger="src.notifications.line_client"):
@@ -296,14 +329,61 @@ class TestMessageLength:
             result = send_push_message(TOKEN, GROUP_ID, long_text)
 
         assert result.success is True
-        sent_text = session.post.call_args.kwargs["json"]["messages"][0]["text"]
-        assert len(sent_text) <= 5000
-        assert sent_text.endswith("…訊息過長，後續內容已截斷。")
+        sent_texts = [message["text"] for message in session.post.call_args.kwargs["json"]["messages"]]
+        assert "".join(sent_texts) == long_text
+        assert all(_utf16_length(sent_text) <= 5000 for sent_text in sent_texts)
         log_messages = " ".join(record.getMessage() for record in caplog.records)
-        assert "truncated" in log_messages
         assert "秘密內容" not in log_messages
         assert TOKEN not in log_messages
         assert GROUP_ID not in log_messages
+
+    def test_emoji_uses_utf16_limit_and_more_than_five_messages_use_multiple_pushes(self):
+        long_text = "😀" * 15000
+        with patch("src.notifications.line_client.requests.Session") as mock_session_cls:
+            session = MagicMock()
+            session.__enter__ = MagicMock(return_value=session)
+            session.__exit__ = MagicMock(return_value=False)
+            session.post.return_value = _make_response(200)
+            mock_session_cls.return_value = session
+
+            result = send_push_message(TOKEN, GROUP_ID, long_text)
+
+        assert result.success is True
+        assert result.attempts == 2
+        assert session.post.call_count == 2
+        sent_texts = [
+            message["text"]
+            for call in session.post.call_args_list
+            for message in call.kwargs["json"]["messages"]
+        ]
+        assert "".join(sent_texts) == long_text
+        assert all(_utf16_length(sent_text) <= 5000 for sent_text in sent_texts)
+        assert len(sent_texts) == 6
+        retry_keys = [call.kwargs["headers"]["X-Line-Retry-Key"] for call in session.post.call_args_list]
+        assert len(set(retry_keys)) == 2
+
+    def test_later_batch_failure_rerun_reuses_accepted_batch_retry_key(self):
+        """後批失敗後重跑時，前批 409 代表不重複推送。"""
+        long_text = "x" * 26000  # 六則 text message，分成兩個 Push batch。
+        resp_200 = _make_response(200)
+        resp_400 = _make_response(400)
+        resp_409 = _make_response(409)
+
+        with patch("src.notifications.line_client.requests.Session") as mock_session_cls:
+            session = MagicMock()
+            session.__enter__ = MagicMock(return_value=session)
+            session.__exit__ = MagicMock(return_value=False)
+            session.post.side_effect = [resp_200, resp_400, resp_409, resp_200]
+            mock_session_cls.return_value = session
+
+            first_result = send_push_message(TOKEN, GROUP_ID, long_text)
+            rerun_result = send_push_message(TOKEN, GROUP_ID, long_text)
+
+        assert first_result.success is False
+        assert rerun_result.success is True
+        retry_keys = [call.kwargs["headers"]["X-Line-Retry-Key"] for call in session.post.call_args_list]
+        assert retry_keys[0] == retry_keys[2]
+        assert retry_keys[1] == retry_keys[3]
 
 
 # ──────────────────────────────────────────────────────────────────────────────

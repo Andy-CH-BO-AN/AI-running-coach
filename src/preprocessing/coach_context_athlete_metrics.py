@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence
 
-from src.preprocessing.coach_context_types import CoachSession
 from src.preprocessing.coach_context_utils import (
     _average,
     _format_pace_minutes,
@@ -29,7 +28,6 @@ PACE_ZONE_NAMES = {
 
 def _resolve_resting_heart_rate(
     user_data: Dict[str, Any],
-    sessions: Sequence[CoachSession],
 ) -> tuple[float | None, str | None]:
     resting_hr = _safe_float(
         _get_any(
@@ -41,19 +39,7 @@ def _resolve_resting_heart_rate(
     )
     if resting_hr and 30 <= resting_hr <= 100:
         return resting_hr, str(user_data.get("resting_heart_rate_source") or "garmin")
-
-    low_activity_hr_values = [
-        avg_hr
-        for session in sessions
-        if session.get("type") not in {"interval", "tempo", "race", "swim", "rest"}
-        for avg_hr in [_safe_float(session.get("avg_hr"))]
-        if avg_hr and 80 <= avg_hr <= 170
-    ]
-    if not low_activity_hr_values:
-        return None, None
-
-    estimated = min(max(min(low_activity_hr_values) - 40, 40), 70)
-    return estimated, "estimated_from_lowest_activity_avg_hr"
+    return None, None
 
 
 def _build_pace_zones(
@@ -106,9 +92,8 @@ def _build_pace_zones(
 
 def _build_physio_metrics(
     user_data: Dict[str, Any],
-    sessions: Sequence[CoachSession] | None = None,
 ) -> Dict[str, Any]:
-    resting_hr, resting_hr_source = _resolve_resting_heart_rate(user_data, sessions or [])
+    resting_hr, resting_hr_source = _resolve_resting_heart_rate(user_data)
     return {
         "vo2max": {
             "value": _round_or_none(user_data.get("vo2max_running") or user_data.get("vo2max"), 1),
@@ -278,12 +263,12 @@ def _build_cross_training(sessions: Sequence[Dict[str, Any]], processed_by_id: D
     swim_records = [
         processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
         for session in sessions
-        if session.get("type") == "swim"
+        if session.get("source_activity_type") in {"swimming", "lap_swimming"}
     ]
     bike_records = [
         processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
         for session in sessions
-        if session.get("type") == "bike"
+        if session.get("source_activity_type") == "cycling"
     ]
     return {
         "swimming": {

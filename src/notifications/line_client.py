@@ -7,14 +7,17 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
+import uuid
 from dataclasses import dataclass
 
 import requests
 
 from src.notifications.constants import (
     CONNECT_TIMEOUT_SEC,
+    LINE_MAX_MESSAGES_PER_PUSH,
     LINE_MAX_TEXT_LENGTH,
     LINE_PUSH_URL,
     MAX_ATTEMPTS,
@@ -52,91 +55,120 @@ def send_push_message(token: str, group_id: str, text: str) -> LineSendResult:
     Args:
         token: LINE Channel Access Token（不會出現在 log）。
         group_id: LINE 群組 ID（不會出現在 error log）。
-        text: 訊息文字（最多 5000 字元；超長安全截斷）。
+        text: 訊息文字。超過單一文字訊息上限時，保留所有內容並分批傳送。
 
     Returns:
         LineSendResult — 不含任何敏感資訊。
     """
-    safe_text = _truncate_text(text)
-    payload = {
-        "to": group_id,
-        "messages": [{"type": "text", "text": safe_text}],
-    }
+    messages = _split_text_messages(text)
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}",
     }
 
+    with requests.Session() as http:
+        total_attempts = 0
+        batch_count = (len(messages) + LINE_MAX_MESSAGES_PER_PUSH - 1) // LINE_MAX_MESSAGES_PER_PUSH
+        for batch_index in range(batch_count):
+            batch_messages = messages[
+                batch_index * LINE_MAX_MESSAGES_PER_PUSH:(batch_index + 1) * LINE_MAX_MESSAGES_PER_PUSH
+            ]
+            payload = {
+                "to": group_id,
+                "messages": [{"type": "text", "text": message} for message in batch_messages],
+            }
+            # key 對完全相同的收件人與 payload 穩定：同次重試與 24 小時內
+            # 後續排程重跑，都不會重複推送已被 LINE 受理的前一批。
+            batch_headers = {**headers, "X-Line-Retry-Key": _retry_key(group_id, batch_messages)}
+            result = _send_payload(http, payload, batch_headers)
+            total_attempts += result.attempts
+            if not result.success:
+                logger.error(
+                    "LINE push batch %d/%d failed (status=%s, error=%s)",
+                    batch_index + 1,
+                    batch_count,
+                    result.status_code,
+                    result.error_type,
+                )
+                return LineSendResult(
+                    success=False,
+                    status_code=result.status_code,
+                    attempts=total_attempts,
+                    error_type=result.error_type,
+                )
+
+    return LineSendResult(
+        success=True,
+        status_code=200,
+        attempts=total_attempts,
+        error_type=None,
+    )
+
+
+def _send_payload(
+    http: requests.Session,
+    payload: dict[str, object],
+    headers: dict[str, str],
+) -> LineSendResult:
+    """送出單一 LINE Push payload，保留既有的重試規則。"""
     last_status_code: int | None = None
     last_error_type: str | None = None
 
-    with requests.Session() as http:
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            try:
-                resp = http.post(
-                    LINE_PUSH_URL,
-                    json=payload,
-                    headers=headers,
-                    timeout=(CONNECT_TIMEOUT_SEC, READ_TIMEOUT_SEC),
-                )
-                last_status_code = resp.status_code
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            resp = http.post(
+                LINE_PUSH_URL,
+                json=payload,
+                headers=headers,
+                timeout=(CONNECT_TIMEOUT_SEC, READ_TIMEOUT_SEC),
+            )
+            last_status_code = resp.status_code
 
-                if resp.status_code == 200:
-                    logger.info("LINE push sent successfully (attempt %d)", attempt)
-                    return LineSendResult(
-                        success=True,
-                        status_code=200,
-                        attempts=attempt,
-                        error_type=None,
-                    )
+            if resp.status_code == 200:
+                logger.info("LINE push sent successfully (attempt %d)", attempt)
+                return LineSendResult(True, 200, attempt, None)
 
-                # 重試條件：僅限 429 (Rate Limit) 與 500-599 (Server Error)
-                if resp.status_code == 429 or 500 <= resp.status_code < 600:
-                    last_error_type = "rate_limited" if resp.status_code == 429 else "server_error"
-                    logger.warning(
-                        "LINE push returned status %d (attempt %d/%d)",
-                        resp.status_code,
-                        attempt,
-                        MAX_ATTEMPTS,
-                    )
-                    if attempt < MAX_ATTEMPTS:
-                        if resp.status_code == 429:
-                            retry_after = _parse_retry_after(resp.headers)
-                            backoff = retry_after if retry_after is not None else RETRY_BACKOFF_SECONDS[attempt - 1]
-                        else:
-                            backoff = RETRY_BACKOFF_SECONDS[attempt - 1]
-                        time.sleep(backoff)
-                    continue
+            # 使用同一 retry key 的前一個 request 已被 LINE 接受。
+            if resp.status_code == 409:
+                logger.info("LINE push was already accepted (attempt %d)", attempt)
+                return LineSendResult(True, 409, attempt, None)
 
-                # 其餘所有非 200 狀態碼（例如 4xx 除了 429 外、3xx 等）— 不重試，立即回傳
-                logger.error(
-                    "LINE push rejected with status %d (no retry, attempt %d)",
+            if resp.status_code == 429 or 500 <= resp.status_code < 600:
+                last_error_type = "rate_limited" if resp.status_code == 429 else "server_error"
+                logger.warning(
+                    "LINE push returned status %d (attempt %d/%d)",
                     resp.status_code,
                     attempt,
-                )
-                error_type = "http_client_error" if 400 <= resp.status_code < 500 else "unexpected_http_status"
-                return LineSendResult(
-                    success=False,
-                    status_code=resp.status_code,
-                    attempts=attempt,
-                    error_type=error_type,
-                )
-
-            except requests.Timeout:
-                last_error_type = "timeout"
-                logger.warning(
-                    "LINE push timed out (attempt %d/%d)", attempt, MAX_ATTEMPTS
+                    MAX_ATTEMPTS,
                 )
                 if attempt < MAX_ATTEMPTS:
-                    time.sleep(RETRY_BACKOFF_SECONDS[attempt - 1])
+                    if resp.status_code == 429:
+                        retry_after = _parse_retry_after(resp.headers)
+                        backoff = retry_after if retry_after is not None else RETRY_BACKOFF_SECONDS[attempt - 1]
+                    else:
+                        backoff = RETRY_BACKOFF_SECONDS[attempt - 1]
+                    time.sleep(backoff)
+                continue
 
-            except requests.ConnectionError:
-                last_error_type = "connection_error"
-                logger.warning(
-                    "LINE push connection error (attempt %d/%d)", attempt, MAX_ATTEMPTS
-                )
-                if attempt < MAX_ATTEMPTS:
-                    time.sleep(RETRY_BACKOFF_SECONDS[attempt - 1])
+            logger.error(
+                "LINE push rejected with status %d (no retry, attempt %d)",
+                resp.status_code,
+                attempt,
+            )
+            error_type = "http_client_error" if 400 <= resp.status_code < 500 else "unexpected_http_status"
+            return LineSendResult(False, resp.status_code, attempt, error_type)
+
+        except requests.Timeout:
+            last_error_type = "timeout"
+            logger.warning("LINE push timed out (attempt %d/%d)", attempt, MAX_ATTEMPTS)
+            if attempt < MAX_ATTEMPTS:
+                time.sleep(RETRY_BACKOFF_SECONDS[attempt - 1])
+
+        except requests.ConnectionError:
+            last_error_type = "connection_error"
+            logger.warning("LINE push connection error (attempt %d/%d)", attempt, MAX_ATTEMPTS)
+            if attempt < MAX_ATTEMPTS:
+                time.sleep(RETRY_BACKOFF_SECONDS[attempt - 1])
 
     logger.error(
         "LINE push failed after %d attempts (last error: %s, status: %s)",
@@ -163,16 +195,58 @@ def _parse_retry_after(headers: dict) -> float | None:
         return None
 
 
-def _truncate_text(text: str) -> str:
-    """Keep payloads within LINE's limit without logging message contents."""
-    if len(text) <= LINE_MAX_TEXT_LENGTH:
-        return text
-
-    suffix = "\n…訊息過長，後續內容已截斷。"
-    safe_length = LINE_MAX_TEXT_LENGTH - len(suffix)
-    logger.warning(
-        "LINE push text truncated from %d to %d characters",
-        len(text),
-        LINE_MAX_TEXT_LENGTH,
+def _retry_key(group_id: str, messages: list[str]) -> str:
+    """為相同的收件人和 LINE batch 產生穩定的 UUID retry key。"""
+    payload = json.dumps(
+        {"to": group_id, "messages": messages},
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
-    return f"{text[:safe_length]}{suffix}"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, payload))
+
+
+def _utf16_length(text: str) -> int:
+    """LINE 的文字長度以 UTF-16 code units 計算。"""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _split_text_messages(text: str) -> list[str]:
+    """依換行優先切割，保留所有文字且每則都符合 LINE 長度上限。"""
+    if _utf16_length(text) <= LINE_MAX_TEXT_LENGTH:
+        return [text]
+
+    messages: list[str] = []
+    current = ""
+    for line in text.splitlines(keepends=True):
+        if _utf16_length(line) > LINE_MAX_TEXT_LENGTH:
+            if current:
+                messages.append(current)
+                current = ""
+            messages.extend(_split_long_text(line))
+        elif current and _utf16_length(current) + _utf16_length(line) > LINE_MAX_TEXT_LENGTH:
+            messages.append(current)
+            current = line
+        else:
+            current += line
+
+    if current:
+        messages.append(current)
+    return messages or [text]
+
+
+def _split_long_text(text: str) -> list[str]:
+    """將無法按換行切割的文字安全切成 UTF-16 長度上限內的片段。"""
+    messages: list[str] = []
+    current: list[str] = []
+    current_length = 0
+    for char in text:
+        char_length = _utf16_length(char)
+        if current and current_length + char_length > LINE_MAX_TEXT_LENGTH:
+            messages.append("".join(current))
+            current = []
+            current_length = 0
+        current.append(char)
+        current_length += char_length
+    if current:
+        messages.append("".join(current))
+    return messages

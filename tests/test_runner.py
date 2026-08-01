@@ -349,7 +349,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(user_data["resting_heart_rate"], 49)
         self.assertNotIn("resting_heart_rate_source", user_data)
 
-    def test_apply_resting_heart_rate_history_uses_db_value_when_smaller_than_current(self):
+    def test_apply_resting_heart_rate_history_keeps_current_day_value_when_db_is_lower(self):
         session = Mock()
         provider = ActivityPayloadProvider()
         with patch.object(activity_payloads, "get_latest_resting_heart_rate", return_value=48.0):
@@ -359,8 +359,8 @@ class RunnerTests(unittest.TestCase):
                 user_data={"max_heart_rate": 190, "resting_heart_rate": 51},
             )
 
-        self.assertEqual(user_data["resting_heart_rate"], 48.0)
-        self.assertEqual(user_data["resting_heart_rate_source"], "db_latest_profile_history")
+        self.assertEqual(user_data["resting_heart_rate"], 51)
+        self.assertNotIn("resting_heart_rate_source", user_data)
 
     def test_run_pipeline_uses_db_loaded_activities_and_filters_all_data(self):
         with tempfile.TemporaryDirectory() as temp_dir:

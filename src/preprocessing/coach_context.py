@@ -12,7 +12,6 @@ from src.preprocessing.coach_context_utils import (
     _normalize_activity_id,
     _resolve_today,
     _round_or_none,
-    _safe_float,
 )
 from src.preprocessing.coach_context_athlete_metrics import (
     _build_cross_training,
@@ -89,17 +88,16 @@ def build_deterministic_coach_context(
     user_data = user_data or {}
     raw_lookup = _build_raw_lookup(raw_activities)
     resolved_today = _resolve_today(today, processed_data)
-    max_hr = _safe_float(user_data.get("max_heart_rate"))
 
     sessions = [
-        _build_session(processed, raw_lookup=raw_lookup, max_hr=max_hr)
+        _build_session(processed, raw_lookup=raw_lookup)
         for processed in processed_data
     ]
     processed_by_id = {
         _normalize_activity_id(processed.get("activity_id")): processed
         for processed in processed_data
     }
-    weekly_analysis = _build_weekly_analysis(sessions, today=resolved_today, max_hr=max_hr)
+    weekly_analysis = _build_weekly_analysis(sessions, today=resolved_today)
     four_week_sessions = [
         session
         for week in weekly_analysis
@@ -138,7 +136,7 @@ def build_deterministic_coach_context(
             "available_training_days": user_data.get("available_training_days") or [],
             "preferred_long_training_days": user_data.get("preferred_long_training_days") or [],
         },
-        "physio_metrics": _build_physio_metrics(user_data, sessions),
+        "physio_metrics": _build_physio_metrics(user_data),
         "pb_validation_seed": _build_pb_validation_seed(user_data),
         "weekly_analysis": weekly_analysis,
         "hr_zone_distribution": hr_zone_distribution,

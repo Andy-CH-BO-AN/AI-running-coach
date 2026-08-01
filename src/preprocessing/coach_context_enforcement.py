@@ -8,7 +8,7 @@ from src.preprocessing.coach_context_athlete_metrics import (
     _mechanics_assessment,
     _mechanics_tips,
 )
-from src.preprocessing.coach_context_sessions import _is_running_session_type
+from src.preprocessing.coach_context_sessions import _is_running_source_activity
 from src.preprocessing.coach_context_utils import (
     _normalize_activity_id,
     _round_or_none,
@@ -25,7 +25,6 @@ WEEKLY_TOTAL_KEYS = {
 SESSION_OUTPUT_KEYS = (
     "activity_id",
     "date",
-    "type",
     "source_activity_type",
     "distance_km",
     "duration_min",
@@ -40,8 +39,11 @@ SESSION_OUTPUT_KEYS = (
 )
 SEGMENT_OUTPUT_KEYS = (
     "segment_type",
+    "split_index",
     "distance_km",
+    "duration_min",
     "avg_pace",
+    "speed_kmh",
     "avg_hr",
     "cadence",
     "stride_length_m",
@@ -111,7 +113,7 @@ def _output_session(
     if not isinstance(ai_segments, list):
         ai_segments = []
     context_segments = context_session.get("segments") or []
-    include_running_metrics = _is_running_session_type(context_session.get("type"))
+    include_running_metrics = _is_running_source_activity(context_session.get("source_activity_type"))
     output_segments: List[Dict[str, Any]] = []
     for index, segment in enumerate(context_segments):
         if not isinstance(segment, dict):
@@ -241,12 +243,13 @@ def _enforce_next_week_plan(
     return ai_plan
 
 
-def _session_identity(session: Dict[str, Any]) -> tuple[Any, Any, Any, Any]:
+def _session_identity(session: Dict[str, Any]) -> tuple[Any, Any, Any, Any, Any]:
     return (
         session.get("date"),
-        session.get("type"),
+        session.get("source_activity_type"),
         _round_or_none(session.get("distance_km"), 2),
         _round_or_none(session.get("duration_min"), 1),
+        session.get("avg_pace"),
     )
 
 
@@ -271,9 +274,9 @@ def _read_path_value(payload: Dict[str, Any], path: str) -> Any:
 
 def _weekly_session_references(
     report: Dict[str, Any],
-) -> tuple[Dict[str, tuple[str, Dict[str, Any]]], Dict[tuple[Any, Any, Any, Any], tuple[str, Dict[str, Any]]]]:
+) -> tuple[Dict[str, tuple[str, Dict[str, Any]]], Dict[tuple[Any, Any, Any, Any, Any], tuple[str, Dict[str, Any]]]]:
     by_activity_id: Dict[str, tuple[str, Dict[str, Any]]] = {}
-    by_identity: Dict[tuple[Any, Any, Any, Any], tuple[str, Dict[str, Any]]] = {}
+    by_identity: Dict[tuple[Any, Any, Any, Any, Any], tuple[str, Dict[str, Any]]] = {}
     for week_index, week in enumerate(report.get("weekly_analysis") or []):
         if not isinstance(week, dict):
             continue
@@ -296,6 +299,7 @@ def _enforce_evidence_source_paths(report: Dict[str, Any]) -> None:
         for session in evidence.get("supporting_sessions") or []:
             if not isinstance(session, dict):
                 continue
+            session.pop("type", None)
 
             reference = None
             activity_id = session.get("activity_id")
@@ -310,7 +314,6 @@ def _enforce_evidence_source_paths(report: Dict[str, Any]) -> None:
             session["source_path"] = source_path
             for key in (
                 "date",
-                "type",
                 "source_activity_type",
                 "distance_km",
                 "duration_min",
