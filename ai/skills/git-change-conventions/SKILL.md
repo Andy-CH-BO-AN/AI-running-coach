@@ -78,6 +78,13 @@ Examples:
 - Branch: `docs/add-shared-git-naming-conventions`
 - PR title: `DOCS: add shared Git naming conventions for branch, PR, and commits`
 
+## GitHub CLI environment
+
+- Run all `gh` commands in the local host environment, using its credential
+  store and GitHub configuration.
+- Do not use sandboxed `gh` credentials or fall back to them. If local-host
+  `gh` authentication fails, stop and report the authentication blocker.
+
 ## PR creation with GitHub CLI
 
 When creating a pull request via `gh`, apply the conventions above:
@@ -99,7 +106,7 @@ gh pr create \
   --base main
 ```
 
-- Use `--draft` for work-in-progress PRs that are not ready for review.
+- Do not use `--draft`. Every pull request must be created ready for review.
 - Add `--reviewer <handle>` when the team requires explicit reviewer
   assignment.
 - Add `--label <label>` to categorise the PR when project labels exist.
@@ -118,6 +125,12 @@ gh pr create \
 | `perf`        | `PERF`        |
 | `chore`       | `CHORE`       |
 | `ci`          | `CI`          |
+
+## PR review follow-ups
+
+When completing requested PR review changes, commit and push the fix, then use
+the PR's **Add a comment** action to post `@codex review`. This requests a new
+automatic Codex reviewer pass for the updated changes.
 
 ## Output expectations
 
