@@ -48,6 +48,7 @@ def test_persistence_loss_merges_incremental_garmin_updates_into_materialized_wi
     provider = activity_payloads.ActivityPayloadProvider(
         session_factory=session_factory,
         database_available=lambda: available["value"],
+        preserve_activity_window_on_connection_loss=True,
     )
 
     monkeypatch.setattr(
