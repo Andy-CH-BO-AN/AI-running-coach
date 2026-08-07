@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Any, Dict, List
 
-from src.agents.coach import coach
 from src.pipeline.goal_prompt import GoalPromptOverrides, render_goal_prompt
 from src.preprocessing.coach_context import enforce_deterministic_report_fields
 
@@ -15,6 +14,8 @@ def generate_coach_report(
     goal_overrides: GoalPromptOverrides | None = None,
     goal_prompt_path: str | Path = DEFAULT_GOAL_PROMPT_PATH,
 ) -> Dict[str, Any]:
+    from src.agents.coach import coach
+
     goal_path = Path(goal_prompt_path)
     goal_text = render_goal_prompt(goal_path, goal_overrides)
     response = coach(
