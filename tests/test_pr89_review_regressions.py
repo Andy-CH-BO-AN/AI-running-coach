@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import date
 from inspect import signature
 from types import SimpleNamespace
 
@@ -64,7 +65,7 @@ def test_persistence_loss_merges_incremental_garmin_updates_into_materialized_wi
     monkeypatch.setattr(
         provider,
         "_get_latest_activity_date",
-        lambda *_args, **_kwargs: None,
+        lambda *_args, **_kwargs: date(2026, 8, 1),
     )
     monkeypatch.setattr(
         provider,
