@@ -606,7 +606,7 @@ class RunnerTests(unittest.TestCase):
             raw_payload = json.loads((raw_dir / "garmin_user_20260510.json").read_text(encoding="utf-8"))
             self.assertEqual(raw_payload["max_heart_rate"], 190)
 
-    def test_degraded_mode_skips_session_and_uses_latest_ten_activities(self):
+    def test_explicit_stateless_payload_load_skips_session_and_uses_latest_ten_activities(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             session_factory = Mock(side_effect=AssertionError("DB session must not be created"))
             garmin_fetcher = Mock(
@@ -626,15 +626,15 @@ class RunnerTests(unittest.TestCase):
             provider = ActivityPayloadProvider(
                 session_factory=session_factory,
                 garmin_fetcher=garmin_fetcher,
+                database_available=lambda: False,
                 raw_data_dir=Path(temp_dir) / "raw",
             )
 
-            with patch.dict(os.environ, {"DATABASE_AVAILABLE": "false"}, clear=False):
-                raw_activities, user_data = provider.load_or_fetch(
-                    activity_limit=10,
-                    fetch_limit=10,
-                    timestamp="20260510",
-                )
+            raw_activities, user_data = provider.load_or_fetch(
+                activity_limit=10,
+                fetch_limit=10,
+                timestamp="20260510",
+            )
 
             session_factory.assert_not_called()
             garmin_fetcher.assert_called_once_with(10, progress=True)
@@ -668,17 +668,17 @@ class RunnerTests(unittest.TestCase):
         assert len(raw_activities) == 75
         assert [item["activity_id"] for item in raw_activities] == list(range(80, 5, -1))
 
-    def test_degraded_mode_does_not_swallow_garmin_errors(self):
+    def test_explicit_stateless_payload_load_does_not_swallow_garmin_errors(self):
         provider = ActivityPayloadProvider(
             session_factory=Mock(side_effect=AssertionError("DB session must not be created")),
             garmin_fetcher=Mock(side_effect=ValueError("Garmin failed")),
+            database_available=lambda: False,
         )
 
-        with patch.dict(os.environ, {"DATABASE_AVAILABLE": "false"}, clear=False), \
-             self.assertRaisesRegex(ValueError, "Garmin failed"):
+        with self.assertRaisesRegex(ValueError, "Garmin failed"):
             provider.load_or_fetch(activity_limit=10, fetch_limit=10, timestamp="20260510")
 
-    def test_run_pipeline_reads_garmin_limit_from_environment_when_not_explicit(self):
+    def test_manual_run_pipeline_ignores_daily_mode_environment(self):
         with patch.dict(
             os.environ,
             {"GARMIN_ACTIVITY_LIMIT": "10", "DATABASE_AVAILABLE": "false"},
@@ -691,8 +691,8 @@ class RunnerTests(unittest.TestCase):
             self.assertIsNone(runner.run_pipeline())
 
         load_payloads.assert_called_once_with(
-            activity_limit=10,
-            fetch_limit=10,
+            activity_limit=75,
+            fetch_limit=75,
             timestamp="20260510",
         )
 

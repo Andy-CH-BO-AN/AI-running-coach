@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
@@ -27,7 +28,13 @@ import pytest
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 
 from src.notifications.line_client import LineSendResult
-from src.notifications.notifier import NotificationResult, run_line_notification
+from src.db.settings import is_database_connection_error
+from src.notifications.notifier import (
+    NotificationDatabaseAccess,
+    NotificationResult,
+    run_daily_line_notification,
+    run_line_notification,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -460,7 +467,7 @@ class TestAdvisoryLock:
              patch("src.notifications.notifier.send_push_messages", return_value=SUCCESS_RESULT) as send:
             result = run_line_notification(str(ctx_path))
 
-        assert result.status == "degraded_done"
+        assert result.status == "stateless_done"
         assert result.sent == 1
         send.assert_called_once()
         mock_release.assert_called_once()
@@ -512,11 +519,10 @@ class TestDbCommitFailure:
 
 
 class TestNotificationCaps:
-    def _env(self, *, database_available: str) -> dict[str, str]:
+    def _env(self) -> dict[str, str]:
         return {
             "LINE_CHANNEL_ACCESS_TOKEN": DUMMY_TOKEN,
             "LINE_GROUP_ID": DUMMY_GROUP,
-            "DATABASE_AVAILABLE": database_available,
         }
 
     @staticmethod
@@ -543,7 +549,7 @@ class TestNotificationCaps:
     def test_normal_mode_caps_to_twenty_and_defers_remaining(self, tmp_path, caplog):
         ctx_path = _write_context(tmp_path, self._many_activity_context(21))
 
-        with patch.dict(os.environ, self._env(database_available="true")), \
+        with patch.dict(os.environ, self._env()), \
              patch("src.notifications.notifier.get_notified_activity_ids", return_value={9999}), \
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
              patch("src.notifications.notifier._release_advisory_lock"), \
@@ -561,7 +567,7 @@ class TestNotificationCaps:
     def test_normal_mode_stops_after_notification_persistence_connection_failure(self, tmp_path, caplog):
         ctx_path = _write_context(tmp_path, self._many_activity_context(4))
 
-        with patch.dict(os.environ, self._env(database_available="true")), \
+        with patch.dict(os.environ, self._env()), \
              patch("src.notifications.notifier.get_notified_activity_ids", return_value={9999}), \
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
              patch("src.notifications.notifier._release_advisory_lock"), \
@@ -583,24 +589,24 @@ class TestNotificationCaps:
         assert "stopping delivery" in messages
         assert "3 activities not sent" in messages
 
-    def test_degraded_mode_caps_to_three_without_lock_or_session(self, tmp_path, caplog):
+    def test_explicit_stateless_mode_caps_to_three_without_lock_or_session(self, tmp_path, caplog):
         ctx_path = _write_context(tmp_path, self._many_activity_context(4))
 
-        with patch.dict(os.environ, self._env(database_available="false")), \
+        with patch.dict(os.environ, self._env()), \
              patch("src.notifications.notifier._get_lock_connection") as lock, \
              patch("src.notifications.notifier._get_db_session") as session, \
              patch("src.notifications.notifier.send_push_messages", return_value=SUCCESS_RESULT) as send, \
              caplog.at_level(logging.WARNING, logger="src.notifications.notifier"):
-            result = run_line_notification(str(ctx_path))
+            result = run_daily_line_notification(str(ctx_path), database=None)
 
-        assert result.status == "degraded_done"
+        assert result.status == "stateless_done"
         assert result.sent == 3
         assert send.call_count == 3
         lock.assert_not_called()
         session.assert_not_called()
         messages = " ".join(record.getMessage() for record in caplog.records)
         assert "Repeated notifications are possible" in messages
-        assert "capped at 3" in messages
+        assert "stateless notification capped" in messages
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -612,7 +618,7 @@ class TestBadJson:
         return {"LINE_CHANNEL_ACCESS_TOKEN": DUMMY_TOKEN, "LINE_GROUP_ID": DUMMY_GROUP}
 
     def test_bad_json_raises_to_fail_workflow(self, tmp_path):
-        """非 DB context 資料錯誤不能被 degraded mode 吞掉。"""
+        """非 DB context 資料錯誤不能被 stateless fallback 吞掉。"""
         p = tmp_path / "bad.json"
         p.write_text("{not valid json", encoding="utf-8")
 
@@ -647,7 +653,7 @@ class TestFormatterException:
         return {"LINE_CHANNEL_ACCESS_TOKEN": DUMMY_TOKEN, "LINE_GROUP_ID": DUMMY_GROUP}
 
     def test_formatter_exception_raises_to_fail_workflow(self, tmp_path):
-        """非 DB formatter 錯誤不能被 degraded mode 吞掉。"""
+        """非 DB formatter 錯誤不能被 stateless fallback 吞掉。"""
         ctx_path = _write_context(tmp_path, _make_coach_context())
 
         with patch.dict(os.environ, self._env()), \
@@ -658,3 +664,237 @@ class TestFormatterException:
             patch("src.notifications.notifier.format_activity_messages", side_effect=Exception("Formatter crash")):
             with pytest.raises(Exception, match="Formatter crash"):
                 run_line_notification(str(ctx_path))
+
+
+class TestCloudDailyRunNotificationPolicy:
+    @staticmethod
+    def _many_activity_context(count: int) -> dict:
+        sessions = [
+            {
+                "activity_id": activity_id,
+                "date": f"2026-07-{activity_id:02d}",
+                "type": "easy",
+                "source_activity_type": "running",
+                "distance_km": 5.0,
+                "duration_min": 30.0,
+                "training_load": 50.0,
+                "avg_hr": 140,
+                "avg_pace": "6:00",
+                "segments": [],
+                "environment": {},
+                "data_quality": {"status": "complete", "missing_fields": []},
+            }
+            for activity_id in range(1, count + 1)
+        ]
+        return _make_coach_context([sessions])
+
+    @staticmethod
+    def _database_access():
+        state = {"available": True, "revocations": 0}
+        session = MagicMock()
+        connection = MagicMock()
+
+        def revoke(_exc):
+            if state["available"]:
+                state["available"] = False
+                state["revocations"] += 1
+                session.invalidate()
+                connection.invalidate()
+
+        @contextmanager
+        def session_context():
+            try:
+                yield session
+            except SQLAlchemyError as exc:
+                if is_database_connection_error(exc):
+                    revoke(exc)
+                raise
+
+        @contextmanager
+        def connection_context():
+            try:
+                yield connection
+            except SQLAlchemyError as exc:
+                if is_database_connection_error(exc):
+                    revoke(exc)
+                raise
+
+        access = NotificationDatabaseAccess(
+            is_available=lambda: state["available"],
+            session=session_context,
+            lock_connection=connection_context,
+            revoke=revoke,
+        )
+        return access, state, session, connection
+
+    @staticmethod
+    def _env():
+        return {
+            "LINE_CHANNEL_ACCESS_TOKEN": DUMMY_TOKEN,
+            "LINE_GROUP_ID": DUMMY_GROUP,
+        }
+
+    def test_degraded_daily_notification_is_stateless_and_capped_at_three(
+        self,
+        tmp_path,
+    ):
+        ctx_path = _write_context(tmp_path, self._many_activity_context(4))
+
+        with patch.dict(os.environ, self._env(), clear=True), patch(
+            "src.notifications.notifier._acquire_advisory_lock"
+        ) as lock, patch(
+            "src.notifications.notifier.send_push_messages",
+            return_value=SUCCESS_RESULT,
+        ) as send:
+            result = run_daily_line_notification(str(ctx_path), database=None)
+
+        assert result.status == "stateless_done"
+        assert result.sent == 3
+        assert send.call_count == 3
+        lock.assert_not_called()
+
+    def test_sent_but_unrecorded_consumes_one_stateless_slot_without_resend(
+        self,
+        tmp_path,
+    ):
+        ctx_path = _write_context(tmp_path, self._many_activity_context(5))
+        access, state, session, _connection = self._database_access()
+
+        with patch.dict(os.environ, self._env(), clear=True), patch(
+            "src.notifications.notifier.get_notified_activity_ids",
+            return_value={9999},
+        ), patch(
+            "src.notifications.notifier._acquire_advisory_lock",
+            return_value=True,
+        ), patch(
+            "src.notifications.notifier._release_advisory_lock"
+        ) as release, patch(
+            "src.notifications.notifier.format_activity_messages",
+            side_effect=lambda activity, _week: [str(activity["activity_id"])],
+        ), patch(
+            "src.notifications.notifier.send_push_messages",
+            return_value=SUCCESS_RESULT,
+        ) as send, patch(
+            "src.notifications.notifier.record_notification",
+            side_effect=_connection_error(),
+        ) as record:
+            result = run_daily_line_notification(str(ctx_path), database=access)
+
+        sent_ids = [call_args.args[2][0] for call_args in send.call_args_list]
+        assert result.status == "persistence_loss_done"
+        assert result.sent == 3
+        assert result.failed == 0
+        assert len(sent_ids) == 3
+        assert len(set(sent_ids)) == 3
+        assert record.call_count == 1
+        assert state == {"available": False, "revocations": 1}
+        release.assert_not_called()
+        session.rollback.assert_not_called()
+
+    def test_connection_loss_before_send_revokes_before_unlock_and_sends_three_stateless(
+        self,
+        tmp_path,
+    ):
+        ctx_path = _write_context(tmp_path, self._many_activity_context(4))
+        access, state, _session, _connection = self._database_access()
+
+        with patch.dict(os.environ, self._env(), clear=True), patch(
+            "src.notifications.notifier._acquire_advisory_lock",
+            return_value=True,
+        ), patch(
+            "src.notifications.notifier._release_advisory_lock"
+        ) as release, patch(
+            "src.notifications.notifier.get_notified_activity_ids",
+            side_effect=_connection_error(),
+        ), patch(
+            "src.notifications.notifier.send_push_messages",
+            return_value=SUCCESS_RESULT,
+        ) as send:
+            result = run_daily_line_notification(str(ctx_path), database=access)
+
+        assert result.status == "persistence_loss_done"
+        assert result.sent == 3
+        assert state == {"available": False, "revocations": 1}
+        assert send.call_count == 3
+        release.assert_not_called()
+
+    def test_release_connection_loss_revokes_without_second_unlock_or_resend(
+        self,
+        tmp_path,
+    ):
+        ctx_path = _write_context(tmp_path, self._many_activity_context(1))
+        access, state, _session, _connection = self._database_access()
+
+        with patch.dict(os.environ, self._env(), clear=True), patch(
+            "src.notifications.notifier._acquire_advisory_lock",
+            return_value=True,
+        ), patch(
+            "src.notifications.notifier._release_advisory_lock",
+            side_effect=_connection_error(),
+        ) as release, patch(
+            "src.notifications.notifier.get_notified_activity_ids",
+            return_value={9999},
+        ), patch(
+            "src.notifications.notifier.record_notification"
+        ), patch(
+            "src.notifications.notifier.send_push_messages",
+            return_value=SUCCESS_RESULT,
+        ) as send:
+            result = run_daily_line_notification(str(ctx_path), database=access)
+
+        assert result.status == "done"
+        assert result.sent == 1
+        assert state == {"available": False, "revocations": 1}
+        assert release.call_count == 1
+        assert send.call_count == 1
+
+    def test_nontransient_persistence_error_fails_closed_without_mode_change(
+        self,
+        tmp_path,
+    ):
+        ctx_path = _write_context(tmp_path, self._many_activity_context(1))
+        access, state, _session, _connection = self._database_access()
+
+        with patch.dict(os.environ, self._env(), clear=True), patch(
+            "src.notifications.notifier._acquire_advisory_lock",
+            return_value=True,
+        ), patch(
+            "src.notifications.notifier._release_advisory_lock"
+        ) as release, patch(
+            "src.notifications.notifier.get_notified_activity_ids",
+            return_value={9999},
+        ), patch(
+            "src.notifications.notifier.record_notification",
+            side_effect=IntegrityError("INSERT", {}, Exception("constraint failed")),
+        ), patch(
+            "src.notifications.notifier.send_push_messages",
+            return_value=SUCCESS_RESULT,
+        ), pytest.raises(IntegrityError):
+            run_daily_line_notification(str(ctx_path), database=access)
+
+        assert state == {"available": True, "revocations": 0}
+        assert release.call_count == 1
+
+    def test_formatter_error_propagates_without_revoking_persistence(
+        self,
+        tmp_path,
+    ):
+        ctx_path = _write_context(tmp_path, self._many_activity_context(1))
+        access, state, _session, _connection = self._database_access()
+
+        with patch.dict(os.environ, self._env(), clear=True), patch(
+            "src.notifications.notifier._acquire_advisory_lock",
+            return_value=True,
+        ), patch(
+            "src.notifications.notifier._release_advisory_lock"
+        ) as release, patch(
+            "src.notifications.notifier.get_notified_activity_ids",
+            return_value={9999},
+        ), patch(
+            "src.notifications.notifier.format_activity_messages",
+            side_effect=ValueError("formatter failed"),
+        ), pytest.raises(ValueError, match="formatter failed"):
+            run_daily_line_notification(str(ctx_path), database=access)
+
+        assert state == {"available": True, "revocations": 0}
+        assert release.call_count == 1

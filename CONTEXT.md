@@ -5,19 +5,23 @@ AI Running Coach converts Garmin activity data into deterministic training conte
 ## Language
 
 **Normal mode**:
-Daily pipeline state where Neon persistence is available. It processes a 75-activity window and uses persistent LINE notification deduplication.
+Cloud Daily Run state where Neon persistence is available. It processes a 75-activity window and uses persistent LINE notification deduplication.
 _Avoid_: standard mode, online mode
 
 **Degraded mode**:
-Daily pipeline state entered after Neon migration fails three times. It skips all Neon access, processes a 10-activity window, and continues Garmin, AI, report, and stateless LINE work.
+Cloud Daily Run state entered after Neon migration fails three times. It skips all later Neon access, processes a 10-activity window, and continues Garmin, AI, report, and stateless LINE work.
 _Avoid_: partial mode, fallback database mode
+
+**Persistence-loss mode**:
+Cloud Daily Run state entered when Neon becomes unavailable after Normal mode starts. It retains the already-selected 75-activity window, stops Neon use for the rest of that run, and allows at most three stateless notifications.
+_Avoid_: degraded mode, database retry mode
 
 **Activity window**:
 Newest bounded set of Garmin activities used by every downstream pipeline stage for one run.
 _Avoid_: history, activity backlog
 
 **Stateless notification**:
-LINE notification sent without Neon-backed deduplication. It may repeat on later degraded or recovery runs.
+LINE notification sent without Neon-backed deduplication. A sent-but-unrecorded notification counts toward the current run's stateless limit and may repeat on a later run.
 _Avoid_: durable notification, exactly-once notification
 
 **Swimming rest interval**:

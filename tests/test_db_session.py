@@ -6,6 +6,7 @@ pytest.importorskip("sqlalchemy")
 
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
+from unittest.mock import Mock
 
 
 def _load_session_module(monkeypatch, **env):
@@ -15,7 +16,6 @@ def _load_session_module(monkeypatch, **env):
 
     for key in (
         "DATABASE_MODE",
-        "DATABASE_AVAILABLE",
         "DATABASE_URL",
         "LOCAL_DATABASE_URL",
         "NEON_DATABASE_URL",
@@ -121,16 +121,6 @@ def test_get_database_mode_rejects_unknown_value(monkeypatch):
         module.get_database_mode()
 
 
-def test_degraded_mode_does_not_create_engine_or_session(monkeypatch):
-    module = _load_session_module(monkeypatch, DATABASE_AVAILABLE="false")
-    monkeypatch.setattr(module, "create_engine", lambda *_args, **_kwargs: pytest.fail("engine must stay lazy"))
-
-    with pytest.raises(module.DatabaseUnavailableError):
-        module.get_engine()
-    with pytest.raises(module.DatabaseUnavailableError):
-        module.SessionLocal()
-
-
 def test_database_connection_classifier_rejects_statement_timeout():
     from src.db.settings import is_database_connection_error
 
@@ -224,6 +214,84 @@ def test_database_connection_classifier_rejects_authentication_failures(sqlstate
     )
 
     assert is_database_connection_error(authentication_failure) is False
+
+
+@pytest.mark.parametrize("error_name", ["AdminShutdown", "CrashShutdown", "CannotConnectNow"])
+def test_database_connection_classifier_accepts_exact_restart_error_classes(error_name):
+    from src.db.settings import is_database_connection_error
+
+    driver_error_type = type(error_name, (Exception,), {})
+    restart_error = OperationalError(
+        "SELECT 1",
+        {},
+        driver_error_type("temporary database restart"),
+    )
+
+    assert is_database_connection_error(restart_error) is True
+
+
+@pytest.mark.parametrize(
+    "error_name",
+    ["AdminShutdownSomething", "CrashShutdownHelper", "CannotConnectNow2"],
+)
+def test_database_connection_classifier_rejects_similar_restart_error_classes(error_name):
+    from src.db.settings import is_database_connection_error
+
+    driver_error_type = type(error_name, (Exception,), {})
+    other_error = OperationalError(
+        "SELECT 1",
+        {},
+        driver_error_type("unrelated migration failure"),
+    )
+
+    assert is_database_connection_error(other_error) is False
+
+
+def test_authentication_marker_fails_closed_even_with_connection_sqlstate():
+    from src.db.settings import is_database_connection_error
+
+    contradictory_error = OperationalError(
+        "SELECT 1",
+        {},
+        _DriverError(
+            "password authentication failed during connection",
+            sqlstate="08006",
+        ),
+    )
+
+    assert is_database_connection_error(contradictory_error) is False
+
+
+def test_unknown_invalidated_operational_error_fails_closed():
+    from src.db.settings import is_database_connection_error
+
+    unknown_error = OperationalError(
+        "SELECT 1",
+        {},
+        _DriverError("unclassified operational failure"),
+        connection_invalidated=True,
+    )
+
+    assert is_database_connection_error(unknown_error) is False
+
+
+def test_dispose_database_connections_clears_cached_engines_and_factories(monkeypatch):
+    module = _load_session_module(monkeypatch)
+    primary_engine = Mock()
+    shadow_engine = Mock()
+    module._engine = primary_engine
+    module._shadow_engine = shadow_engine
+    module._session_factory = Mock()
+    module._shadow_session_factory = Mock()
+
+    module.dispose_database_connections()
+
+    primary_engine.dispose.assert_called_once_with()
+    shadow_engine.dispose.assert_called_once_with()
+    assert module._engine is None
+    assert module._shadow_engine is None
+    assert module._session_factory is None
+    assert module._shadow_session_factory is None
 
 
 # ---------------------------------------------------------------------------

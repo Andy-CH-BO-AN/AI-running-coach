@@ -83,16 +83,16 @@ TEST_DATABASE_URL=postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@localhost:5
 
 `DATABASE_MODE` 支援三種：
 
-- `local`: app / pipeline / dashboard 走本機 PostgreSQL。
+- `local`: app / 手動 pipeline / dashboard 走本機 PostgreSQL。
 - `mirror`: app 仍走本機 PostgreSQL，但 `run_pipeline.py`、`src.scripts.import_garmin_files`、`src.scripts.fetch_garmin_raw --import-db` 會在 local commit 後把 mirror tables sync 到 Neon，並做 parity check。
-- `cloud`: app 改走 `NEON_DATABASE_URL`；Alembic migration 會改走 `NEON_DATABASE_DIRECT_URL`。
+- `cloud`: cloud-scheduled Daily Run 與 dashboard 走 `NEON_DATABASE_URL`；Daily Run migration 走 `NEON_DATABASE_DIRECT_URL`。
 
 建議 Neon app 連線用 pooler URL，migration / bulk sync / parity validation 用 direct URL。
 
 > 💡 **跨裝置/跨電腦同步與 GitHub Actions**：當切換為 `DATABASE_MODE=cloud` 時，不同電腦上的 Dashboard、CLI 流程與 GitHub Actions 自動化排程皆會直接存取中心化的 Neon Cloud DB，實現多端數據無縫同步。
 
 
-### 3. 跑主流程
+### 3. 跑手動主流程
 
 ```bash
 python run_pipeline.py
@@ -104,6 +104,17 @@ python run_pipeline.py
 ```bash
 python run_pipeline.py --help
 ```
+
+此入口只供 `local` / `mirror` 手動執行，可自訂 Activity window 與 fetch
+範圍。GitHub Actions 的 `cloud` 排程使用單一入口：
+
+```bash
+DATABASE_MODE=cloud python -m src.scripts.run_daily_pipeline
+```
+
+Cloud Daily Run 不接受 `--activity-limit` 或 `--fetch-limit`：Normal mode
+固定 75 筆、Degraded mode 固定 10 筆；Normal mode 開始後若 Neon 中斷，
+Persistence-loss mode 保留原本 75 筆 Activity window。
 
 ### 4. 開本機 Dashboard
 
@@ -269,12 +280,13 @@ Garmin login API 很容易先顯示兩次 `429` rate limit 訊息，之後才繼
 
 ## 進階：PostgreSQL（選用）
 
-`python run_pipeline.py` 會優先嘗試 DB mode：先查 PostgreSQL 中最新
+手動 `python run_pipeline.py` 會優先嘗試 DB：先查 PostgreSQL 中最新
 活動日期，再向 Garmin 補抓該日期之後的 `running`、`lap_swimming`、
 `cycling` 活動，靠 `garmin_activity_id` upsert 避免重複。user profile
 匯入時也會保存每日靜止心率；同一天已有資料時採較低值，coach context
-會取最近一筆可用靜止心率。若 DB 無法連線，pipeline 會 fallback 成直接
-從 Garmin 抓近期活動並輸出檔案。
+會取最近一筆可用靜止心率。若 DB 無法連線，手動流程會 fallback 成直接
+從 Garmin 抓近期活動並輸出檔案；這個 fallback 不屬於 Cloud Daily Run
+的 Degraded mode 或 Persistence-loss mode。
 
 啟動本機 PostgreSQL：
 
@@ -380,7 +392,9 @@ DB tests 會以環境缺失 skip；連到主 DB 或非 test DB 時，則屬安�
 
 | 路徑 | 角色 |
 | --- | --- |
-| `run_pipeline.py` | CLI 入口，串接目標覆蓋參數與 pipeline runner。 |
+| `run_pipeline.py` | local / mirror 手動 CLI，可自訂 activity / fetch limits。 |
+| `src/scripts/run_daily_pipeline.py` | cloud-scheduled Daily Run CLI；只接受 goal / training overrides。 |
+| `src/pipeline/daily_run.py` | Daily Run 深 module：migration preflight、三態轉移、固定 Activity window、Neon 撤銷與通知政策。 |
 | `src/pipeline/runner.py` | 主流程 orchestration：timestamp、payload provider、preprocessing、deterministic context、Gemini 分析與 artifact persistence。 |
 | `src/pipeline/activity_payloads.py` | DB/Garmin 活動 payload provider，集中 DB-backed load/fetch/sync 與 fallback policy。 |
 | `src/services/artifacts.py` | 統一本機 artifacts 寫入規則，包含 raw/user JSON、processed CSV、coach context 與 AI report。 |
@@ -447,6 +461,8 @@ python3 -m pytest -q \
   tests/test_garmin_client_details.py \
   tests/test_garmin_client_activity_types.py \
   tests/test_fetch_garmin_raw.py \
+  tests/test_daily_run.py \
+  tests/test_run_daily_pipeline.py \
   tests/test_goal_prompt.py \
   tests/test_runner.py \
   tests/test_coach.py \

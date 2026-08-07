@@ -15,7 +15,8 @@ fi
   tests/test_fetch_garmin_raw.py \
   tests/test_contracts.py \
   tests/test_goal_prompt.py \
-  tests/test_neon_migrations.py \
+  tests/test_daily_run.py \
+  tests/test_run_daily_pipeline.py \
   tests/test_runner.py \
   tests/test_coach.py \
   tests/test_coach_context.py \
