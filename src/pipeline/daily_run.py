@@ -12,7 +12,7 @@ from typing import Any, Callable, Generator
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import ArgumentError, SQLAlchemyError
 
 from src.db import session as database_session
 from src.db.settings import (
@@ -247,7 +247,7 @@ def _validate_cloud_configuration() -> None:
             raise ValueError("Cloud Daily Run requires DATABASE_MODE=cloud.")
         get_cloud_database_url(purpose="app")
         get_cloud_database_url(purpose="direct")
-    except Exception:
+    except (ArgumentError, ValueError):
         raise DailyRunBlocked(
             DailyRunBlockReason.CONFIGURATION,
             "Cloud Daily Run database configuration is missing or invalid.",
