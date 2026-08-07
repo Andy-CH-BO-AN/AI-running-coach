@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 from sqlalchemy.engine import URL, make_url
-from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError, SQLAlchemyError
 
 DEFAULT_DATABASE_URL = "postgresql+psycopg://postgres@localhost:5432/ai_running_coach"
 VALID_DATABASE_MODES = {"local", "mirror", "cloud"}
@@ -11,6 +11,30 @@ VALID_DATABASE_TARGETS = {"primary", "shadow", "local", "cloud"}
 VALID_DATABASE_PURPOSES = {"app", "direct"}
 POSTGRES_DRIVER_ALIASES = {"postgres", "postgresql", "postgresql+psycopg2"}
 TRANSIENT_POSTGRES_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
+AUTHENTICATION_FAILURE_MARKERS = (
+    "password authentication failed",
+    "authentication failed",
+    "no password supplied",
+    "no pg_hba.conf entry",
+)
+CONFIGURATION_FAILURE_MARKERS = (
+    "certificate verify failed",
+    "unsupported startup parameter",
+)
+TRANSIENT_RESTART_ERROR_NAMES = frozenset(
+    {
+        "adminshutdown",
+        "cannotconnectnow",
+        "crashshutdown",
+    }
+)
+TRANSIENT_RESTART_MARKERS = (
+    "the database system is starting up",
+    "the database system is shutting down",
+    "the database system is in recovery mode",
+    "terminating connection due to administrator command",
+    "terminating connection because of crash of another server process",
+)
 
 
 def env_value(name: str) -> str | None:
@@ -21,26 +45,18 @@ def env_value(name: str) -> str | None:
     return value or None
 
 
-def is_database_available() -> bool:
-    """Return workflow DB availability; unspecified keeps local runs in normal mode."""
-    value = env_value("DATABASE_AVAILABLE")
-    if value is None:
-        return True
-    if value.lower() == "true":
-        return True
-    if value.lower() == "false":
-        return False
-    raise ValueError("DATABASE_AVAILABLE must be 'true' or 'false'.")
-
-
-def is_database_connection_error(exc: BaseException) -> bool:
-    """Classify connection outages, including PostgreSQL restart states, as degradable."""
-    if not isinstance(exc, SQLAlchemyError):
-        return False
-
+def _is_sqlalchemy_connection_error(exc: SQLAlchemyError) -> bool:
     original = getattr(exc, "orig", exc)
     sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
     detail = str(original).lower()
+    if any(
+        marker in detail
+        for marker in AUTHENTICATION_FAILURE_MARKERS + CONFIGURATION_FAILURE_MARKERS
+    ):
+        return False
+    if "fatal:" in detail and "does not exist" in detail:
+        return False
+
     if isinstance(sqlstate, str):
         normalized_sqlstate = sqlstate.upper()
         return (
@@ -48,22 +64,13 @@ def is_database_connection_error(exc: BaseException) -> bool:
             or normalized_sqlstate in TRANSIENT_POSTGRES_SQLSTATES
         )
 
-    authentication_markers = (
-        "password authentication failed",
-        "authentication failed",
-        "no password supplied",
-        "no pg_hba.conf entry",
-        "certificate verify failed",
-        "unsupported startup parameter",
-    )
-    if any(marker in detail for marker in authentication_markers):
-        return False
-    if "fatal:" in detail and "does not exist" in detail:
-        return False
+    original_error_name = type(original).__name__.lower()
+    if original_error_name in TRANSIENT_RESTART_ERROR_NAMES:
+        return True
+    if any(marker in detail for marker in TRANSIENT_RESTART_MARKERS):
+        return True
 
     if isinstance(exc, DisconnectionError):
-        return True
-    if isinstance(exc, DBAPIError) and exc.connection_invalidated:
         return True
     if not isinstance(exc, (OperationalError, InterfaceError)):
         return False
@@ -75,6 +82,7 @@ def is_database_connection_error(exc: BaseException) -> bool:
         "connection closed",
         "connection timed out",
         "connection timeout",
+        "connect timeout",
         "timeout expired",
         "network is unreachable",
         "no route to host",
@@ -89,7 +97,64 @@ def is_database_connection_error(exc: BaseException) -> bool:
         "temporary failure in name resolution",
         "database is unavailable",
     )
-    return any(marker in detail for marker in connection_markers)
+    return any(marker in detail for marker in connection_markers) or (
+        "ssl" in detail and "connection" in detail
+    )
+
+
+def _exception_chain(exc: BaseException) -> list[BaseException]:
+    """Follow explicit wrapping and DBAPI origins, not unrelated implicit context."""
+    chain: list[BaseException] = []
+    pending = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        chain.append(current)
+        for related in (
+            getattr(current, "orig", None),
+            current.__cause__,
+        ):
+            if isinstance(related, BaseException):
+                pending.append(related)
+    return chain
+
+
+def is_database_connection_error(exc: BaseException) -> bool:
+    """Classify transient PostgreSQL connectivity loss through wrapped exceptions."""
+    chain = _exception_chain(exc)
+    if is_database_authentication_error(exc) or is_database_configuration_error(exc):
+        return False
+    return any(
+        _is_sqlalchemy_connection_error(candidate)
+        for candidate in chain
+        if isinstance(candidate, SQLAlchemyError)
+    )
+
+
+def is_database_authentication_error(exc: BaseException) -> bool:
+    """Recognize PostgreSQL authentication failures without exposing their details."""
+    for candidate in _exception_chain(exc):
+        sqlstate = getattr(candidate, "sqlstate", None) or getattr(candidate, "pgcode", None)
+        if isinstance(sqlstate, str) and sqlstate.upper().startswith("28"):
+            return True
+        detail = str(candidate).lower()
+        if any(marker in detail for marker in AUTHENTICATION_FAILURE_MARKERS):
+            return True
+    return False
+
+
+def is_database_configuration_error(exc: BaseException) -> bool:
+    """Recognize PostgreSQL connection configuration failures."""
+    for candidate in _exception_chain(exc):
+        detail = str(candidate).lower()
+        if any(marker in detail for marker in CONFIGURATION_FAILURE_MARKERS):
+            return True
+        if "fatal:" in detail and "does not exist" in detail:
+            return True
+    return False
 
 
 def postgres_env_database_url(prefix: str = "POSTGRES_") -> str | None:

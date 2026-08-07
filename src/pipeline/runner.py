@@ -1,5 +1,4 @@
 from datetime import datetime
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -71,12 +70,7 @@ def run_pipeline(
     print("🚀 Starting Garmin AI Coach Pipeline...")
 
     if activity_limit is None:
-        activity_limit = int(os.getenv("GARMIN_ACTIVITY_LIMIT", "75"))
-    if os.getenv("DATABASE_AVAILABLE", "true").lower() == "false":
-        print(
-            "⚠️ Running in degraded mode: DB persistence is disabled; "
-            f"Garmin activity limit={activity_limit}."
-        )
+        activity_limit = 75
 
     timestamp = _build_timestamp()
     raw_activities, user_data = _load_or_fetch_activity_payloads(
@@ -84,6 +78,28 @@ def run_pipeline(
         fetch_limit=activity_limit if fetch_limit is None else fetch_limit,
         timestamp=timestamp,
     )
+
+    report_path = _run_pipeline_from_payloads(
+        timestamp=timestamp,
+        raw_activities=raw_activities,
+        user_data=user_data,
+        goal_overrides=goal_overrides,
+    )
+    if report_path is None:
+        return None
+
+    _run_line_notification(timestamp)
+    return str(report_path)
+
+
+def _run_pipeline_from_payloads(
+    *,
+    timestamp: str,
+    raw_activities: List[Dict[str, Any]],
+    user_data: Dict[str, Any],
+    goal_overrides: GoalPromptOverrides | None = None,
+) -> Path | None:
+    """Run deterministic report stages for an already-selected Activity window."""
 
     if not raw_activities:
         print("❌ No activities found.")
@@ -121,20 +137,16 @@ def run_pipeline(
 
     print("✨ Pipeline completed!")
     print(f"📄 JSON Report: {report_path}")
-
-    # ── LINE 通知
-    _run_line_notification(timestamp)
-
-    return str(report_path)
+    return report_path
 
 
-def _run_line_notification(timestamp: str) -> None:
+def _run_line_notification(timestamp: str) -> Any:
     """執行 LINE 群組通知（pipeline 最後一步）。
 
     使用 persist_pipeline_artifacts 寫出的實際 coach_context 路徑，
     不自行掃描資料夾或猜測檔名。
 
-    未預期錯誤向上拋出，避免把非 DB 程式錯誤誤判成 degraded mode。
+    未預期錯誤向上拋出，避免把非 DB 程式錯誤誤判成 persistence loss。
     """
     from src.notifications.notifier import run_line_notification
     from src.services.artifacts import pipeline_artifact_paths
@@ -147,3 +159,4 @@ def _run_line_notification(timestamp: str) -> None:
 
     result = run_line_notification(str(coach_context_path))
     print(f"📱 LINE notification: {result}")
+    return result

@@ -12,15 +12,10 @@ from src.db.settings import (
     get_local_database_url,
     get_migration_database_url,
     get_shadow_database_url,
-    is_database_available,
     resolve_database_url,
 )
 
 load_dotenv()
-
-
-class DatabaseUnavailableError(RuntimeError):
-    """Raised before any engine or session is created in degraded mode."""
 
 
 _engine: Engine | None = None
@@ -29,18 +24,12 @@ _shadow_engine: Engine | None = None
 _shadow_session_factory: sessionmaker[Session] | None = None
 
 
-def _require_database_available() -> None:
-    if not is_database_available():
-        raise DatabaseUnavailableError("Database access is disabled because DATABASE_AVAILABLE=false.")
-
-
 def build_engine(
     database_url: str | None = None,
     *,
     target: str = "primary",
     purpose: str = "app",
 ) -> Engine:
-    _require_database_available()
     return create_engine(
         database_url or resolve_database_url(target, purpose=purpose),
         future=True,
@@ -49,9 +38,8 @@ def build_engine(
 
 
 def get_engine() -> Engine:
-    """Lazily create primary engine only when normal-mode code needs it."""
+    """Lazily create the primary engine when a caller needs it."""
     global _engine
-    _require_database_available()
     if _engine is None:
         _engine = build_engine()
     return _engine
@@ -76,7 +64,6 @@ def SessionLocal() -> Session:
 
 def get_shadow_session_factory() -> sessionmaker[Session]:
     global _shadow_engine, _shadow_session_factory
-    _require_database_available()
     if _shadow_session_factory is not None:
         return _shadow_session_factory
 
@@ -102,3 +89,17 @@ def get_session() -> Generator[Session, None, None]:
 def get_shadow_session() -> Generator[Session, None, None]:
     with get_shadow_session_factory()() as session:
         yield session
+
+
+def dispose_database_connections() -> None:
+    """Dispose cached engines and force later callers to build fresh connections."""
+    global _engine, _session_factory, _shadow_engine, _shadow_session_factory
+
+    engines = [engine for engine in (_engine, _shadow_engine) if engine is not None]
+    _engine = None
+    _session_factory = None
+    _shadow_engine = None
+    _shadow_session_factory = None
+
+    for engine in dict.fromkeys(engines):
+        engine.dispose()

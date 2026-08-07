@@ -28,16 +28,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run database migrations
-        env:
-          DATABASE_MODE: cloud
-          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
-          NEON_DATABASE_DIRECT_URL: ${{ secrets.NEON_DATABASE_DIRECT_URL }}
-          NEON_POSTGRES_USER: ${{ secrets.NEON_POSTGRES_USER }}
-          NEON_POSTGRES_PASSWORD: ${{ secrets.NEON_POSTGRES_PASSWORD }}
-        run: bash scripts/run_neon_migrations.sh
-
-      - name: Run AI Coach Pipeline
+      - name: Run Cloud Daily Pipeline
         env:
           GARMIN_ACCOUNT: ${{ secrets.GARMIN_ACCOUNT }}
           GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
@@ -46,13 +37,11 @@ jobs:
           DATABASE_MODE: cloud
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           NEON_DATABASE_DIRECT_URL: ${{ secrets.NEON_DATABASE_DIRECT_URL }}
-          NEON_POSTGRES_USER: ${{ secrets.NEON_POSTGRES_USER }}
-          NEON_POSTGRES_PASSWORD: ${{ secrets.NEON_POSTGRES_PASSWORD }}
           CORE_GOAL: ${{ vars.CORE_GOAL }}
           TRAINING_PREFERENCES: ${{ vars.TRAINING_PREFERENCES }}
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_GROUP_ID: ${{ secrets.LINE_GROUP_ID }}
         run: |
-          python run_pipeline.py \
+          python -m src.scripts.run_daily_pipeline \
             --core-goal "$CORE_GOAL" \
             --training-preferences "$TRAINING_PREFERENCES"
