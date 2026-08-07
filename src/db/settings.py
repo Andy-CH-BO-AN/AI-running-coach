@@ -103,6 +103,7 @@ def _is_sqlalchemy_connection_error(exc: SQLAlchemyError) -> bool:
 
 
 def _exception_chain(exc: BaseException) -> list[BaseException]:
+    """Follow explicit wrapping and DBAPI origins, not unrelated implicit context."""
     chain: list[BaseException] = []
     pending = [exc]
     seen: set[int] = set()
@@ -115,7 +116,6 @@ def _exception_chain(exc: BaseException) -> list[BaseException]:
         for related in (
             getattr(current, "orig", None),
             current.__cause__,
-            current.__context__,
         ):
             if isinstance(related, BaseException):
                 pending.append(related)
