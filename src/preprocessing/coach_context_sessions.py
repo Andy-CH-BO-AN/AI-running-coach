@@ -88,6 +88,18 @@ def _rest_duration_from_splits(splits: Any) -> Optional[float]:
     return _round_or_none(total, 4) if found else None
 
 
+def _pace_seconds_per_100m(
+    duration_min: Any,
+    distance_km: Any,
+) -> Optional[int]:
+    """Calculate an aggregate swimming pace from deterministic context facts."""
+    duration = _safe_float(duration_min)
+    distance = _safe_float(distance_km)
+    if duration is None or distance is None or duration < 0 or distance <= 0:
+        return None
+    return round(duration * 60 / (distance * 10))
+
+
 def _segment_from_split(
     split: Dict[str, Any],
     *,
@@ -210,16 +222,28 @@ def _build_session(
         },
     }
     if _is_swimming_source_activity(source_activity_type):
-        swim_timings = {
-            "elapsed_duration_min": _round_or_none(raw.get("elapsed_duration"), 4),
-            "swim_duration_min": _round_or_none(raw.get("moving_duration"), 4),
-        }
+        elapsed_duration = _round_or_none(raw.get("elapsed_duration"), 4)
+        swim_duration = _round_or_none(raw.get("moving_duration"), 4)
         direct_rest_duration = _round_or_none(raw.get("rest_duration"), 4)
-        swim_timings["rest_duration_min"] = (
+        rest_duration = (
             direct_rest_duration
             if direct_rest_duration is not None
             else _rest_duration_from_splits(processed.get("splits"))
         )
+        swim_timings = {
+            "elapsed_duration_min": elapsed_duration,
+            "swim_duration_min": swim_duration,
+            "rest_duration_min": rest_duration,
+            "elapsed_pace_seconds_per_100m": _pace_seconds_per_100m(
+                elapsed_duration,
+                distance,
+            ),
+        }
+        if swim_duration is not None:
+            swim_timings["swim_pace_seconds_per_100m"] = _pace_seconds_per_100m(
+                swim_duration,
+                distance,
+            )
         session.update(
             (key, value)
             for key, value in swim_timings.items()

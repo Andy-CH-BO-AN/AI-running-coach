@@ -740,6 +740,8 @@ def test_swimming_context_preserves_reliable_timings_and_rest_segment_order():
     assert session["elapsed_duration_min"] == 7.4
     assert session["swim_duration_min"] == 6.3833
     assert session["rest_duration_min"] == 0.75
+    assert session["swim_pace_seconds_per_100m"] == 128
+    assert session["elapsed_pace_seconds_per_100m"] == 148
     assert [segment["split_index"] for segment in session["segments"]] == [1, 2, 3, 4]
     assert [segment["segment_type"] for segment in session["segments"]] == ["lap", "rest", "lap", "lap"]
     assert session["segments"][1]["elapsed_duration_min"] == 0.5083
@@ -747,7 +749,16 @@ def test_swimming_context_preserves_reliable_timings_and_rest_segment_order():
     report = enforce_deterministic_report_fields(
         {
             "weekly_analysis": [
-                {"week_start": "2026-05-11", "sessions": [{"activity_id": 211}]}
+                {
+                    "week_start": "2026-05-11",
+                    "sessions": [
+                        {
+                            "activity_id": 211,
+                            "swim_pace_seconds_per_100m": 1,
+                            "elapsed_pace_seconds_per_100m": 1,
+                        }
+                    ],
+                }
             ]
         },
         context,
@@ -756,6 +767,8 @@ def test_swimming_context_preserves_reliable_timings_and_rest_segment_order():
     assert enforced["elapsed_duration_min"] == 7.4
     assert enforced["swim_duration_min"] == 6.3833
     assert enforced["rest_duration_min"] == 0.75
+    assert enforced["swim_pace_seconds_per_100m"] == 128
+    assert enforced["elapsed_pace_seconds_per_100m"] == 148
     assert enforced["segments"][1]["elapsed_duration_min"] == 0.5083
 
 
@@ -802,6 +815,38 @@ def test_swimming_context_sums_only_explicit_rest_segments_before_rounding():
     assert session["rest_duration_min"] == 0.7608
     assert "elapsed_duration_min" not in session
     assert "swim_duration_min" not in session
+    assert "swim_pace_seconds_per_100m" not in session
+    assert "elapsed_pace_seconds_per_100m" not in session
+
+
+def test_swimming_context_keeps_reliable_swim_pace_without_rest_breakdown():
+    context = build_deterministic_coach_context(
+        processed_data=[
+            {
+                "activity_id": 215,
+                "type": "swimming",
+                "date": "2026-05-13",
+                "distance_km": 0.2,
+                "splits": [],
+            }
+        ],
+        user_data=_sample_user_data(),
+        raw_activities=[
+            {
+                "activity_id": 215,
+                "type": "swimming",
+                "duration": 5.25,
+                "elapsed_duration": 5.5,
+                "moving_duration": 4.75,
+            }
+        ],
+        today="2026-05-14",
+    )
+    session = context["weekly_analysis"][0]["sessions"][0]
+
+    assert session["swim_pace_seconds_per_100m"] == 142
+    assert session["elapsed_pace_seconds_per_100m"] == 165
+    assert "rest_duration_min" not in session
 
 
 def test_legacy_swimming_context_does_not_infer_missing_times_from_index_gaps():
@@ -827,6 +872,8 @@ def test_legacy_swimming_context_does_not_infer_missing_times_from_index_gaps():
     assert "elapsed_duration_min" not in session
     assert "swim_duration_min" not in session
     assert "rest_duration_min" not in session
+    assert "swim_pace_seconds_per_100m" not in session
+    assert "elapsed_pace_seconds_per_100m" not in session
     assert [segment["segment_type"] for segment in session["segments"]] == ["lap", "lap"]
 
 
@@ -859,6 +906,8 @@ def test_non_swimming_context_does_not_gain_optional_swim_timing_keys():
     assert "elapsed_duration_min" not in session
     assert "swim_duration_min" not in session
     assert "rest_duration_min" not in session
+    assert "swim_pace_seconds_per_100m" not in session
+    assert "elapsed_pace_seconds_per_100m" not in session
     assert "elapsed_duration_min" not in session["segments"][0]
 
 

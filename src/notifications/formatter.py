@@ -183,20 +183,17 @@ def _format_segment(
     return "｜".join(details)
 
 
-def _format_pace_per_100m(
-    duration_min: Any,
-    distance_km: Any,
-) -> str | None:
-    """Calculate deterministic pace only from an explicitly supplied duration."""
+def _format_pace_seconds_per_100m(value: Any) -> str | None:
+    """Render a coach-context pace fact without deriving a new aggregate."""
+    if isinstance(value, bool):
+        return None
     try:
-        duration = float(duration_min)
-        distance = float(distance_km)
+        total_seconds = int(value)
     except (TypeError, ValueError):
         return None
-    if duration < 0 or distance <= 0:
+    if total_seconds < 0:
         return None
 
-    total_seconds = round(duration * 60 / (distance * 10))
     minutes, seconds = divmod(total_seconds, 60)
     return f"{minutes}:{seconds:02d}"
 
@@ -278,11 +275,15 @@ def _build_swimming_overview_lines(
         if rest is not None:
             lines.append(f"休息時間：{rest}")
 
-        swim_pace = _format_pace_per_100m(swim_duration, distance_km)
+        swim_pace = _format_pace_seconds_per_100m(
+            activity.get("swim_pace_seconds_per_100m")
+        )
         if swim_pace:
             lines.append(f"平均游泳配速：{swim_pace}/100m")
 
-    elapsed_pace = _format_pace_per_100m(elapsed_duration, distance_km)
+    elapsed_pace = _format_pace_seconds_per_100m(
+        activity.get("elapsed_pace_seconds_per_100m")
+    )
     if elapsed_pace:
         lines.append(f"含休息平均配速：{elapsed_pace}/100m")
 

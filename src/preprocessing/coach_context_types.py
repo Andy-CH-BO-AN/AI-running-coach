@@ -39,6 +39,8 @@ class CoachSession(TypedDict, total=False):
     elapsed_duration_min: float
     swim_duration_min: float
     rest_duration_min: float
+    swim_pace_seconds_per_100m: int
+    elapsed_pace_seconds_per_100m: int
     training_load: float
     avg_hr: int | None
     avg_pace: str | None

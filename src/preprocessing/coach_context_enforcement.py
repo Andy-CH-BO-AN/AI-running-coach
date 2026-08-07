@@ -41,6 +41,8 @@ OPTIONAL_SWIM_SESSION_OUTPUT_KEYS = (
     "elapsed_duration_min",
     "swim_duration_min",
     "rest_duration_min",
+    "swim_pace_seconds_per_100m",
+    "elapsed_pace_seconds_per_100m",
 )
 SEGMENT_OUTPUT_KEYS = (
     "segment_type",

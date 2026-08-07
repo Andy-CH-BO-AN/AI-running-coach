@@ -324,11 +324,22 @@ def test_swimming_timing_contract_survives_preprocessing_and_enforcement():
     assert session["elapsed_duration_min"] == 5.5
     assert session["swim_duration_min"] == 4.75
     assert session["rest_duration_min"] == 0.5083
+    assert session["swim_pace_seconds_per_100m"] == 142
+    assert session["elapsed_pace_seconds_per_100m"] == 165
 
     report = enforce_deterministic_report_fields(
         {
             "weekly_analysis": [
-                {"week_start": "2026-05-11", "sessions": [{"activity_id": 9500}]}
+                {
+                    "week_start": "2026-05-11",
+                    "sessions": [
+                        {
+                            "activity_id": 9500,
+                            "swim_pace_seconds_per_100m": 1,
+                            "elapsed_pace_seconds_per_100m": 1,
+                        }
+                    ],
+                }
             ]
         },
         context,
@@ -337,4 +348,6 @@ def test_swimming_timing_contract_survives_preprocessing_and_enforcement():
     assert enforced["elapsed_duration_min"] == 5.5
     assert enforced["swim_duration_min"] == 4.75
     assert enforced["rest_duration_min"] == 0.5083
+    assert enforced["swim_pace_seconds_per_100m"] == 142
+    assert enforced["elapsed_pace_seconds_per_100m"] == 165
     assert enforced["segments"][1]["elapsed_duration_min"] == 0.5083

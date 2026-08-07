@@ -55,6 +55,8 @@ def _make_swim_session(**overrides) -> dict:
         "elapsed_duration_min": 68.9,
         "swim_duration_min": 52.75,
         "rest_duration_min": 16.15,
+        "swim_pace_seconds_per_100m": 132,
+        "elapsed_pace_seconds_per_100m": 172,
         "training_load": 158.5,
         "avg_hr": 149,
         "avg_pace": "2:52",
@@ -338,6 +340,8 @@ class TestSwimFormat:
             elapsed_duration_min=78.4,
             swim_duration_min=(52 * 60 + 16) / 60,
             rest_duration_min=(26 * 60 + 8) / 60,
+            swim_pace_seconds_per_100m=125,
+            elapsed_pace_seconds_per_100m=188,
         )
 
         msg = format_activity_messages(session, None)[0]
@@ -354,6 +358,8 @@ class TestSwimFormat:
             elapsed_duration_min=None,
             swim_duration_min=None,
             rest_duration_min=None,
+            swim_pace_seconds_per_100m=None,
+            elapsed_pace_seconds_per_100m=None,
             duration_min=68.9,
             avg_pace="2:52",
         )
@@ -368,6 +374,17 @@ class TestSwimFormat:
         assert "時間：68:54" not in msg
         assert "配速：2:52/100m" not in msg
 
+    def test_formatter_does_not_derive_missing_swimming_pace_facts(self):
+        session = _make_swim_session(
+            swim_pace_seconds_per_100m=None,
+            elapsed_pace_seconds_per_100m=None,
+        )
+
+        msg = format_activity_messages(session, None)[0]
+
+        assert "平均游泳配速：" not in msg
+        assert "含休息平均配速：" not in msg
+
     @pytest.mark.parametrize("missing_field", ["swim_duration_min", "rest_duration_min"])
     def test_partial_time_breakdown_is_not_displayed(self, missing_field):
         session = _make_swim_session(**{missing_field: None})
@@ -377,6 +394,7 @@ class TestSwimFormat:
         assert "游泳時間：" not in msg
         assert "休息時間：" not in msg
         assert "平均游泳配速：" not in msg
+        assert "含休息平均配速：2:52/100m" in msg
 
     def test_overlong_rich_swim_message_compacts_without_dropping_segments(self):
         segment = {
