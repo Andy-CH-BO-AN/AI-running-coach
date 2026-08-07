@@ -37,6 +37,11 @@ SESSION_OUTPUT_KEYS = (
     "environment",
     "coaching_note",
 )
+OPTIONAL_SWIM_SESSION_OUTPUT_KEYS = (
+    "elapsed_duration_min",
+    "swim_duration_min",
+    "rest_duration_min",
+)
 SEGMENT_OUTPUT_KEYS = (
     "segment_type",
     "split_index",
@@ -49,6 +54,7 @@ SEGMENT_OUTPUT_KEYS = (
     "stride_length_m",
     "note",
 )
+OPTIONAL_SWIM_SEGMENT_OUTPUT_KEYS = ("elapsed_duration_min",)
 
 
 def overlay_deterministic(ai_value: Any, deterministic_value: Any) -> Any:
@@ -96,6 +102,9 @@ def _output_segment(
     ai_segment: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     segment = {key: deepcopy(context_segment.get(key)) for key in SEGMENT_OUTPUT_KEYS}
+    for key in OPTIONAL_SWIM_SEGMENT_OUTPUT_KEYS:
+        if key in context_segment:
+            segment[key] = deepcopy(context_segment.get(key))
     if ai_segment and segment.get("note") in (None, "") and ai_segment.get("note"):
         segment["note"] = ai_segment.get("note")
     return segment
@@ -106,6 +115,9 @@ def _output_session(
     ai_session: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     session = {key: deepcopy(context_session.get(key)) for key in SESSION_OUTPUT_KEYS}
+    for key in OPTIONAL_SWIM_SESSION_OUTPUT_KEYS:
+        if key in context_session:
+            session[key] = deepcopy(context_session.get(key))
     if ai_session and ai_session.get("coaching_note"):
         session["coaching_note"] = ai_session.get("coaching_note")
 

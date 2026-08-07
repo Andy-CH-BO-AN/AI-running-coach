@@ -12,6 +12,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.notifications.constants import LINE_SAFE_TEXT_LENGTH
+from src.notifications.text_utils import utf16_length
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 運動類型對照
 # ──────────────────────────────────────────────────────────────────────────────
@@ -21,6 +24,11 @@ _SPORT_EMOJI = {
     "swimming": "🏊",
     "cycling": "🚴",
 }
+_SWIMMING_SOURCE_TYPES = frozenset({"swimming", "lap_swimming"})
+
+
+def _is_swimming_source_type(source_activity_type: str) -> bool:
+    return source_activity_type.lower() in _SWIMMING_SOURCE_TYPES
 
 
 def _sport_display_name(source_activity_type: str) -> str:
@@ -32,7 +40,7 @@ def _sport_display_name(source_activity_type: str) -> str:
     sat = source_activity_type.lower()
     if sat == "running":
         return "跑步"
-    if sat == "swimming":
+    if sat in _SWIMMING_SOURCE_TYPES:
         return "游泳"
     if sat == "cycling":
         return "自行車"
@@ -40,6 +48,8 @@ def _sport_display_name(source_activity_type: str) -> str:
 
 
 def _sport_emoji(source_activity_type: str) -> str:
+    if _is_swimming_source_type(source_activity_type):
+        return _SPORT_EMOJI["swimming"]
     return _SPORT_EMOJI.get(source_activity_type.lower(), "🏋️")
 
 
@@ -159,7 +169,7 @@ def _format_segment(
     avg_pace = segment.get("avg_pace")
     if source_type == "running" and avg_pace:
         details.append(f"配速 {avg_pace}/km")
-    elif source_type == "swimming" and avg_pace:
+    elif source_type in _SWIMMING_SOURCE_TYPES and avg_pace:
         details.append(f"配速 {avg_pace}/100m")
     elif source_type == "cycling":
         speed = _format_speed(segment.get("speed_kmh"))
@@ -173,11 +183,221 @@ def _format_segment(
     return "｜".join(details)
 
 
+def _format_pace_per_100m(
+    duration_min: Any,
+    distance_km: Any,
+) -> str | None:
+    """Calculate deterministic pace only from an explicitly supplied duration."""
+    try:
+        duration = float(duration_min)
+        distance = float(distance_km)
+    except (TypeError, ValueError):
+        return None
+    if duration < 0 or distance <= 0:
+        return None
+
+    total_seconds = round(duration * 60 / (distance * 10))
+    minutes, seconds = divmod(total_seconds, 60)
+    return f"{minutes}:{seconds:02d}"
+
+
+def _swimming_pace_detail(avg_pace: Any) -> str | None:
+    if avg_pace in (None, ""):
+        return None
+    pace = str(avg_pace)
+    return pace if pace.endswith("/100m") else f"{pace}/100m"
+
+
+def _format_swimming_segment(
+    segment: dict[str, Any],
+    *,
+    compact: bool,
+) -> str:
+    """Format one swim segment without exposing Garmin's source index."""
+    if str(segment.get("segment_type") or "").lower() == "rest":
+        duration_min = segment.get("elapsed_duration_min")
+        if duration_min is None:
+            duration_min = segment.get("duration_min")
+        duration = _format_duration(duration_min)
+        return f"休息｜{duration}" if duration is not None else "休息"
+
+    details: list[str] = []
+    distance = _format_distance(segment.get("distance_km"))
+    if distance:
+        details.append(distance)
+
+    duration = _format_duration(segment.get("duration_min"))
+    if duration:
+        details.append(duration)
+
+    pace = _swimming_pace_detail(segment.get("avg_pace"))
+    if pace:
+        details.append(pace if compact else f"配速 {pace}")
+
+    avg_hr = segment.get("avg_hr")
+    if avg_hr is not None:
+        details.append(f"HR {avg_hr}" if compact else f"心率 {avg_hr} bpm")
+
+    # A valid dict always remains visible, even when Garmin supplied no metrics.
+    return "｜".join(details) or "分段"
+
+
+def _append_blank_line(lines: list[str], *, dense: bool) -> None:
+    if not dense and lines and lines[-1] != "":
+        lines.append("")
+
+
+def _build_swimming_overview_lines(
+    activity: dict[str, Any],
+    week: dict[str, Any] | None,
+    *,
+    dense: bool,
+) -> list[str]:
+    date_str = activity.get("date", "")
+    lines = [f"{_sport_emoji('swimming')} 游泳｜{date_str}"]
+    _append_blank_line(lines, dense=dense)
+
+    distance_km = activity.get("distance_km")
+    distance = _format_distance(distance_km)
+    if distance:
+        lines.append(f"距離：{distance}")
+
+    elapsed_duration = activity.get("elapsed_duration_min")
+    elapsed = _format_duration(elapsed_duration)
+    if elapsed is not None:
+        lines.append(f"總時間：{elapsed}")
+
+    swim_duration = activity.get("swim_duration_min")
+    rest_duration = activity.get("rest_duration_min")
+    has_reliable_breakdown = swim_duration is not None and rest_duration is not None
+    if has_reliable_breakdown:
+        swim = _format_duration(swim_duration)
+        rest = _format_duration(rest_duration)
+        if swim is not None:
+            lines.append(f"游泳時間：{swim}")
+        if rest is not None:
+            lines.append(f"休息時間：{rest}")
+
+        swim_pace = _format_pace_per_100m(swim_duration, distance_km)
+        if swim_pace:
+            lines.append(f"平均游泳配速：{swim_pace}/100m")
+
+    elapsed_pace = _format_pace_per_100m(elapsed_duration, distance_km)
+    if elapsed_pace:
+        lines.append(f"含休息平均配速：{elapsed_pace}/100m")
+
+    avg_hr = activity.get("avg_hr")
+    if avg_hr is not None:
+        lines.append(f"平均心率：{avg_hr} bpm")
+
+    load_str = _format_load(activity.get("training_load"))
+    if load_str:
+        lines.append(f"訓練負荷：{load_str}")
+
+    env = activity.get("environment") or {}
+    temp_str = _format_temp(env.get("estimated_temp_c"))
+    if temp_str:
+        lines.append(f"溫度：{temp_str}")
+
+    if week is not None and week.get("derived_training_load") is not None:
+        _append_blank_line(lines, dense=dense)
+        lines.append("📊 本週累積")
+        lines.append(f"訓練負荷：{_format_load(week.get('derived_training_load'))}")
+
+    url = _garmin_activity_url(activity.get("activity_id"))
+    if url:
+        _append_blank_line(lines, dense=dense)
+        lines.append(f"🔗 {url}")
+
+    return lines
+
+
+def _build_swimming_detail_lines(
+    activity: dict[str, Any],
+    *,
+    compact: bool,
+) -> list[str]:
+    segments = activity.get("segments")
+    if not isinstance(segments, list):
+        return []
+
+    segment_lines = [
+        _format_swimming_segment(segment, compact=compact)
+        for segment in segments
+        if isinstance(segment, dict)
+    ]
+    return ["分段明細", *segment_lines] if segment_lines else []
+
+
+def _combine_message_lines(
+    overview_lines: list[str],
+    detail_lines: list[str],
+    *,
+    dense: bool,
+) -> str:
+    lines = list(overview_lines)
+    if detail_lines:
+        _append_blank_line(lines, dense=dense)
+        lines.extend(detail_lines)
+    return "\n".join(line for line in lines if not dense or line != "")
+
+
+def _paginate_complete_lines(lines: list[str]) -> list[str]:
+    """Paginate without deleting, merging, or splitting any output line."""
+    pages: list[str] = []
+    current: list[str] = []
+    current_length = 0
+
+    for line in lines:
+        line_length = utf16_length(line)
+        if line_length > LINE_SAFE_TEXT_LENGTH:
+            raise ValueError("A formatted LINE output line exceeds the safe length limit")
+        added_length = line_length + (1 if current else 0)
+        if current and current_length + added_length > LINE_SAFE_TEXT_LENGTH:
+            pages.append("\n".join(current))
+            current = [line]
+            current_length = line_length
+        else:
+            current.append(line)
+            current_length += added_length
+
+    if current:
+        pages.append("\n".join(current))
+    return pages
+
+
+def _format_swimming_messages(
+    activity: dict[str, Any],
+    week: dict[str, Any] | None,
+) -> list[str]:
+    rich_overview = _build_swimming_overview_lines(activity, week, dense=False)
+    rich_details = _build_swimming_detail_lines(activity, compact=False)
+    rich_message = _combine_message_lines(rich_overview, rich_details, dense=False)
+    if utf16_length(rich_message) <= LINE_SAFE_TEXT_LENGTH:
+        return [rich_message]
+
+    compact_details = _build_swimming_detail_lines(activity, compact=True)
+    compact_message = _combine_message_lines(rich_overview, compact_details, dense=False)
+    if utf16_length(compact_message) <= LINE_SAFE_TEXT_LENGTH:
+        return [compact_message]
+
+    dense_overview = _build_swimming_overview_lines(activity, week, dense=True)
+    dense_message = _combine_message_lines(dense_overview, compact_details, dense=True)
+    if utf16_length(dense_message) <= LINE_SAFE_TEXT_LENGTH:
+        return [dense_message]
+
+    overview_message = "\n".join(dense_overview)
+    if utf16_length(overview_message) > LINE_SAFE_TEXT_LENGTH:
+        raise ValueError("Swimming activity overview exceeds the safe LINE length limit")
+
+    return [overview_message, *_paginate_complete_lines(compact_details)]
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 主格式化函式
 # ──────────────────────────────────────────────────────────────────────────────
 
-def format_activity_message(
+def _format_legacy_activity_message(
     activity: dict[str, Any],
     week: dict[str, Any] | None,
 ) -> str:
@@ -217,7 +437,7 @@ def format_activity_message(
     if avg_pace:
         if source_type.lower() == "running":
             lines.append(f"配速：{avg_pace}/km")
-        elif source_type.lower() == "swimming":
+        elif _is_swimming_source_type(source_type):
             lines.append(f"配速：{avg_pace}/100m")
         elif source_type.lower() == "cycling":
             # avg_pace 對自行車已含 km/h（如 "20.0 km/h"）
@@ -264,3 +484,31 @@ def format_activity_message(
         lines.append(f"🔗 {url}")
 
     return "\n".join(lines)
+
+
+def format_activity_messages(
+    activity: dict[str, Any],
+    week: dict[str, Any] | None,
+) -> list[str]:
+    """Format one activity into transport-ready LINE text messages.
+
+    Swimming owns its compact formatting and safe pagination here. Other
+    sports retain the legacy single-message output byte for byte.
+    """
+    source_type = str(activity.get("source_activity_type") or "").lower()
+    if source_type in _SWIMMING_SOURCE_TYPES:
+        return _format_swimming_messages(activity, week)
+
+    legacy_message = _format_legacy_activity_message(activity, week)
+    if utf16_length(legacy_message) <= LINE_SAFE_TEXT_LENGTH:
+        return [legacy_message]
+    return _paginate_complete_lines(legacy_message.split("\n"))
+
+
+def format_activity_message(
+    activity: dict[str, Any],
+    week: dict[str, Any] | None,
+) -> str:
+    """Backward-compatible single-string formatter interface."""
+    messages = format_activity_messages(activity, week)
+    return "\n".join(messages)

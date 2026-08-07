@@ -11,6 +11,7 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import requests
@@ -24,6 +25,7 @@ from src.notifications.constants import (
     READ_TIMEOUT_SEC,
     RETRY_BACKOFF_SECONDS,
 )
+from src.notifications.text_utils import utf16_length
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,30 @@ def send_push_message(token: str, group_id: str, text: str) -> LineSendResult:
     Returns:
         LineSendResult — 不含任何敏感資訊。
     """
-    messages = _split_text_messages(text)
+    return send_push_messages(token, group_id, [text])
+
+
+def send_push_messages(
+    token: str,
+    group_id: str,
+    texts: Sequence[str],
+) -> LineSendResult:
+    """Send an explicitly grouped sequence of LINE text messages.
+
+    Caller-provided message boundaries are retained. Any item above LINE's
+    hard limit is additionally split before batching.
+    """
+    if isinstance(texts, str):
+        raise TypeError("texts must be a sequence of strings, not a single string")
+
+    messages: list[str] = []
+    for text in texts:
+        if not isinstance(text, str):
+            raise TypeError("all LINE messages must be strings")
+        messages.extend(_split_text_messages(text))
+    if not messages:
+        raise ValueError("at least one LINE message is required")
+
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}",
@@ -79,7 +104,10 @@ def send_push_message(token: str, group_id: str, text: str) -> LineSendResult:
             }
             # key 對完全相同的收件人與 payload 穩定：同次重試與 24 小時內
             # 後續排程重跑，都不會重複推送已被 LINE 受理的前一批。
-            batch_headers = {**headers, "X-Line-Retry-Key": _retry_key(group_id, batch_messages)}
+            batch_headers = {
+                **headers,
+                "X-Line-Retry-Key": _retry_key(group_id, messages, batch_index),
+            }
             result = _send_payload(http, payload, batch_headers)
             total_attempts += result.attempts
             if not result.success:
@@ -195,10 +223,10 @@ def _parse_retry_after(headers: dict) -> float | None:
         return None
 
 
-def _retry_key(group_id: str, messages: list[str]) -> str:
-    """為相同的收件人和 LINE batch 產生穩定的 UUID retry key。"""
+def _retry_key(group_id: str, messages: list[str], batch_index: int) -> str:
+    """Create a stable, position-specific retry key for one logical send."""
     payload = json.dumps(
-        {"to": group_id, "messages": messages},
+        {"to": group_id, "messages": messages, "batch_index": batch_index},
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -207,7 +235,7 @@ def _retry_key(group_id: str, messages: list[str]) -> str:
 
 def _utf16_length(text: str) -> int:
     """LINE 的文字長度以 UTF-16 code units 計算。"""
-    return len(text.encode("utf-16-le")) // 2
+    return utf16_length(text)
 
 
 def _split_text_messages(text: str) -> list[str]:

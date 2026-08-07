@@ -17,7 +17,13 @@ except ImportError:
 from datetime import date
 from unittest.mock import patch
 
-from src.ingestion.garmin_client import TARGET_ACTIVITY_TYPES, format_garmin_value, get_garmin_activities, get_user_biometric_data
+from src.ingestion.garmin_client import (
+    TARGET_ACTIVITY_TYPES,
+    format_garmin_value,
+    get_activity_splits,
+    get_garmin_activities,
+    get_user_biometric_data,
+)
 
 
 class GarminClientActivityTypeTests(unittest.TestCase):
@@ -48,6 +54,133 @@ class GarminClientActivityTypeTests(unittest.TestCase):
             TARGET_ACTIVITY_TYPES,
             {"running": "running", "lap_swimming": "swimming", "cycling": "cycling"},
         )
+
+    def test_swimming_splits_preserve_order_and_only_mark_strict_rest(self):
+        class FakeGarminClient:
+            def get_activity_splits(self, _activity_id):
+                return {
+                    "lapDTOs": [
+                        {
+                            "distance": 100,
+                            "duration": 120,
+                            "elapsedDuration": 121,
+                            "movingDuration": 119,
+                            "numberOfActiveLengths": 2,
+                            "swimStroke": "FREESTYLE",
+                        },
+                        {
+                            "distance": 0,
+                            "duration": 30,
+                            "elapsedDuration": 30,
+                            "movingDuration": 0,
+                            "numberOfActiveLengths": 0,
+                        },
+                        {
+                            "distance": 0,
+                            "duration": 15,
+                            "elapsedDuration": 15,
+                            "movingDuration": 0,
+                            # Missing active-length evidence: do not guess rest.
+                        },
+                        {
+                            "distance": 25,
+                            "duration": 0.5,
+                            "elapsedDuration": 0.5,
+                            "movingDuration": 0.5,
+                            "numberOfActiveLengths": 1,
+                            "swimStroke": "BREASTSTROKE",
+                        },
+                    ]
+                }
+
+        splits = get_activity_splits(FakeGarminClient(), 123, "swimming")
+
+        self.assertEqual([split["split_index"] for split in splits], [1, 2, 3, 4])
+        self.assertEqual([split["interval_type"] for split in splits], [None, "rest", None, None])
+        self.assertAlmostEqual(splits[0]["elapsed_duration"], 121 / 60)
+        self.assertAlmostEqual(splits[0]["moving_duration"], 119 / 60)
+        self.assertEqual(splits[0]["active_lengths"], 2)
+        self.assertEqual(splits[0]["swim_stroke"], "FREESTYLE")
+        self.assertEqual(splits[1]["distance"], 0)
+        self.assertEqual(splits[1]["duration"], 0.5)
+
+    def test_non_swimming_splits_keep_existing_distance_duration_filter(self):
+        class FakeGarminClient:
+            def get_activity_splits(self, _activity_id):
+                return {
+                    "lapDTOs": [
+                        {"distance": 0, "duration": 30},
+                        {"distance": 100, "duration": 0.5},
+                        {"distance": 100, "duration": 60},
+                    ]
+                }
+
+        for activity_type in ("running", "cycling"):
+            with self.subTest(activity_type=activity_type):
+                splits = get_activity_splits(FakeGarminClient(), 123, activity_type)
+                self.assertEqual([split["split_index"] for split in splits], [3])
+
+    def test_swimming_activity_preserves_explicit_duration_fields_only_for_swimming(self):
+        class FakeGarminClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def login(self):
+                pass
+
+            def get_rhr_day(self, _date):
+                return {}
+
+            def get_user_profile(self):
+                return {}
+
+            def get_personal_record(self):
+                return []
+
+            def get_activities(self, _start, _limit):
+                common_times = {
+                    "elapsedDuration": 1816.95,
+                    "movingDuration": 1782.561,
+                    "restDuration": 26.547,
+                }
+                return [
+                    {
+                        "activityId": 2,
+                        "activityType": {"typeKey": "lap_swimming"},
+                        "startTimeLocal": "2026-05-10 08:00:00",
+                        "distance": 1250,
+                        "duration": 1809.107,
+                        **common_times,
+                    },
+                    {
+                        "activityId": 1,
+                        "activityType": {"typeKey": "running"},
+                        "startTimeLocal": "2026-05-10 07:00:00",
+                        "distance": 5000,
+                        "duration": 1500,
+                        **common_times,
+                    },
+                ]
+
+            def get_activity_splits(self, _activity_id):
+                return {"lapDTOs": []}
+
+            def get_activity(self, _activity_id):
+                return {}
+
+        with patch.dict(os.environ, {"GARMIN_ACCOUNT": "user@example.com", "GARMIN_PASSWORD": "secret"}), patch(
+            "src.ingestion.garmin_client.Garmin", FakeGarminClient
+        ):
+            payload = get_garmin_activities(n=2)
+
+        activities = {item["type"]: item for item in payload["activities"]}
+        swimming = activities["swimming"]
+        self.assertAlmostEqual(swimming["elapsed_duration"], 1816.95 / 60)
+        self.assertAlmostEqual(swimming["moving_duration"], 1782.561 / 60)
+        self.assertAlmostEqual(swimming["rest_duration"], 26.547 / 60)
+        self.assertNotIn("elapsed_duration", activities["running"])
+        self.assertNotIn("moving_duration", activities["running"])
+        self.assertNotIn("rest_duration", activities["running"])
 
     def test_since_date_fetch_includes_same_day_and_stops_before_older_day(self):
         class FakeGarminClient:

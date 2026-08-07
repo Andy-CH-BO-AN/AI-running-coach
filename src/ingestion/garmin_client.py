@@ -39,6 +39,7 @@ GARMIN_PR_MAPS = {
     }
 }
 TARGET_ACTIVITY_TYPES = {'running': 'running', 'lap_swimming': 'swimming', 'cycling': 'cycling'}
+_ACTIVITY_SUMMARY_WRAPPERS = ('summaryDTO', 'activity_info', 'activityInfo')
 _find_nested_value = find_nested_value
 _get_activity_value = get_activity_value
 _extract_zone_seconds = extract_zone_seconds
@@ -59,6 +60,47 @@ def safe_api_call(func, *args, **kwargs) -> Any:
             else:
                 logger.error(f"API 呼叫徹底失敗: {e}")
                 return None
+
+
+def _duration_seconds_to_minutes(value: Any) -> Optional[float]:
+    """Normalize Garmin duration values from seconds to minutes."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds / 60
+
+
+def _strict_swimming_rest(lap: Dict[str, Any]) -> bool:
+    """Recognize rest only when Garmin's lap fields agree unambiguously."""
+    duration = lap.get('duration')
+    return (
+        isinstance(duration, (int, float))
+        and not isinstance(duration, bool)
+        and duration > 0
+        and lap.get('distance') == 0
+        and lap.get('movingDuration') == 0
+        and lap.get('numberOfActiveLengths') == 0
+        and lap.get('swimStroke') in (None, '')
+    )
+
+
+def _get_activity_summary_value(payload: Any, *keys: str) -> Any:
+    """Read aggregate activity fields without descending into lap collections."""
+    if not isinstance(payload, dict):
+        return None
+
+    for key in keys:
+        if key in payload and payload[key] is not None:
+            return payload[key]
+
+    for wrapper in _ACTIVITY_SUMMARY_WRAPPERS:
+        value = _get_activity_summary_value(payload.get(wrapper), *keys)
+        if value is not None:
+            return value
+    return None
 
 def get_user_biometric_data(client):
     data = {
@@ -240,6 +282,15 @@ def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -
             'avg_swolf': get_value('averageSWOLF', 'avgSWOLF', 'averageSwolf'),
             'total_strokes': get_value('totalNumberOfStrokes'),
             'avg_stroke_cadence': get_value('averageSwimCadence', 'averageSwimCadenceInStrokesPerMinute'),
+            'elapsed_duration': _duration_seconds_to_minutes(
+                _get_activity_summary_value(full_detail, 'elapsedDuration')
+            ),
+            'moving_duration': _duration_seconds_to_minutes(
+                _get_activity_summary_value(full_detail, 'movingDuration')
+            ),
+            'rest_duration': _duration_seconds_to_minutes(
+                _get_activity_summary_value(full_detail, 'restTime', 'restDuration')
+            ),
         })
     elif activity_type == 'cycling':
         details.update({
@@ -258,7 +309,21 @@ def get_activity_splits(client: Garmin, activity_id: int, activity_type: str = '
     lap_dtos = splits_data.get('lapDTOs', [])
     for idx, lap in enumerate(lap_dtos, 1):
         dist, dur = lap.get('distance', 0), lap.get('duration', 0)
-        if dur < 1 or dist < 1: continue
+        if activity_type != 'swimming' and (dur < 1 or dist < 1):
+            continue
+
+        if activity_type == 'swimming':
+            distance_km = dist / 1000 if isinstance(dist, (int, float)) else None
+            duration_min = dur / 60 if isinstance(dur, (int, float)) else None
+            pace = (
+                calculate_pace(dur * 1000, dist, activity_type)
+                if isinstance(dur, (int, float)) and isinstance(dist, (int, float))
+                else None
+            )
+        else:
+            distance_km = dist / 1000
+            duration_min = dur / 60
+            pace = None if activity_type == 'cycling' else calculate_pace(dur * 1000, dist, activity_type)
 
         # 步頻：Garmin averageRunCadence 已經是雙腳 spm，直接用
         # 低步頻（間歇休息/走路）屬於正常數據，不過濾
@@ -268,9 +333,9 @@ def get_activity_splits(client: Garmin, activity_id: int, activity_type: str = '
 
         split = {
             'split_index': idx,
-            'distance': dist / 1000,
-            'duration': dur / 60,
-            'pace': None if activity_type == 'cycling' else calculate_pace(dur * 1000, dist, activity_type),
+            'distance': distance_km,
+            'duration': duration_min,
+            'pace': pace,
             'average_heart_rate': lap.get('averageHR'),
             'max_heart_rate': lap.get('maxHR'),
             'avg_cadence': raw_cad,
@@ -290,6 +355,9 @@ def get_activity_splits(client: Garmin, activity_id: int, activity_type: str = '
         elif activity_type == 'swimming':
             # 每圈的泳姿、SWOLF、划手數
             split.update({
+                'interval_type': 'rest' if _strict_swimming_rest(lap) else None,
+                'elapsed_duration': _duration_seconds_to_minutes(lap.get('elapsedDuration')),
+                'moving_duration': _duration_seconds_to_minutes(lap.get('movingDuration')),
                 'swim_stroke': lap.get('swimStroke'),
                 'avg_swolf': lap.get('averageSWOLF'),
                 'total_strokes': lap.get('totalNumberOfStrokes'),
@@ -439,7 +507,7 @@ def get_garmin_activities(
                         f"({len(collected_activities) + 1}/{target_count})",
                         flush=True,
                     )
-                collected_activities.append({
+                collected_activity = {
                     'type': act_type,
                     'date': activity.get('startTimeLocal', '')[:10],
                     'started_at': activity.get('startTimeLocal'),
@@ -450,7 +518,31 @@ def get_garmin_activities(
                     'activity_id': act_id,
                     'splits': get_activity_splits(client, act_id, act_type),
                     'raw_data': raw_details,
-                })
+                }
+                if act_type == 'swimming':
+                    elapsed_duration = _duration_seconds_to_minutes(activity.get('elapsedDuration'))
+                    moving_duration = _duration_seconds_to_minutes(activity.get('movingDuration'))
+                    rest_seconds = activity.get('restTime')
+                    if rest_seconds is None:
+                        rest_seconds = activity.get('restDuration')
+                    rest_duration = _duration_seconds_to_minutes(rest_seconds)
+                    swimming_durations = {
+                        'elapsed_duration': elapsed_duration
+                        if elapsed_duration is not None
+                        else raw_details.get('elapsed_duration'),
+                        'moving_duration': moving_duration
+                        if moving_duration is not None
+                        else raw_details.get('moving_duration'),
+                        'rest_duration': rest_duration
+                        if rest_duration is not None
+                        else raw_details.get('rest_duration'),
+                    }
+                    collected_activity.update(
+                        (key, value)
+                        for key, value in swimming_durations.items()
+                        if value is not None
+                    )
+                collected_activities.append(collected_activity)
         
         start += page_size
         if stop_after_page: break

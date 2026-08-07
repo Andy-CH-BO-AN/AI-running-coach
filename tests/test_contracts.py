@@ -269,3 +269,72 @@ def test_enforced_report_preserves_dashboard_json_contract():
     assert next_week["days"][0]["title"] == "Keep workout"
     assert next_week["days"][1]["title"] == "恢復日"
     assert next_week["total_distance_km"] == 4.5
+
+
+def test_swimming_timing_contract_survives_preprocessing_and_enforcement():
+    raw_activities = [
+        {
+            "activity_id": 9500,
+            "type": "swimming",
+            "date": "2026-05-13",
+            "distance": 0.2,
+            "duration": 5.25,
+            "elapsed_duration": 5.5,
+            "moving_duration": 4.75,
+            "splits": [
+                {
+                    "split_index": 1,
+                    "distance": 0.1,
+                    "duration": 2.25,
+                    "elapsed_duration": 2.25,
+                    "moving_duration": 2.25,
+                    "pace": 2.25,
+                },
+                {
+                    "split_index": 2,
+                    "interval_type": "rest",
+                    "distance": 0,
+                    "duration": 0.5,
+                    "elapsed_duration": 0.5083333333,
+                    "moving_duration": 0,
+                },
+                {
+                    "split_index": 3,
+                    "distance": 0.1,
+                    "duration": 2.5,
+                    "elapsed_duration": 2.5,
+                    "moving_duration": 2.5,
+                    "pace": 2.5,
+                },
+            ],
+            "raw_data": {},
+        }
+    ]
+
+    processed = preprocess_data(raw_activities)
+    context = build_deterministic_coach_context(
+        processed_data=processed,
+        user_data={},
+        raw_activities=raw_activities,
+        today="2026-05-14",
+    )
+    session = context["weekly_analysis"][0]["sessions"][0]
+
+    assert [segment["segment_type"] for segment in session["segments"]] == ["lap", "rest", "lap"]
+    assert session["elapsed_duration_min"] == 5.5
+    assert session["swim_duration_min"] == 4.75
+    assert session["rest_duration_min"] == 0.5083
+
+    report = enforce_deterministic_report_fields(
+        {
+            "weekly_analysis": [
+                {"week_start": "2026-05-11", "sessions": [{"activity_id": 9500}]}
+            ]
+        },
+        context,
+    )
+    enforced = report["weekly_analysis"][0]["sessions"][0]
+    assert enforced["elapsed_duration_min"] == 5.5
+    assert enforced["swim_duration_min"] == 4.75
+    assert enforced["rest_duration_min"] == 0.5083
+    assert enforced["segments"][1]["elapsed_duration_min"] == 0.5083

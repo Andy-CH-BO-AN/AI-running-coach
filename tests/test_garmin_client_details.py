@@ -89,6 +89,9 @@ class GarminClientDetailTests(unittest.TestCase):
                 'averageSwimCadenceInStrokesPerMinute': 20.0,
                 'averageSWOLF': 47.0,
                 'totalNumberOfStrokes': 583,
+                'elapsedDuration': 1816.95,
+                'movingDuration': 1782.561,
+                'restTime': 26.547,
                 'hrTimeInZone_1': 925.493,
                 'hrTimeInZone_2': 584.993,
                 'hrTimeInZone_3': 0.0,
@@ -104,6 +107,29 @@ class GarminClientDetailTests(unittest.TestCase):
         self.assertEqual(details['avg_swolf'], 47.0)
         self.assertEqual(details['total_strokes'], 583)
         self.assertEqual(details['avg_stroke_cadence'], 20.0)
+        self.assertAlmostEqual(details['elapsed_duration'], 1816.95 / 60)
+        self.assertAlmostEqual(details['moving_duration'], 1782.561 / 60)
+        self.assertAlmostEqual(details['rest_duration'], 26.547 / 60)
+
+    def test_swimming_activity_does_not_treat_nested_lap_timing_as_summary(self):
+        payload = {
+            'activity_info': {
+                'activityTrainingLoad': 91.48,
+                'lapDTOs': [
+                    {
+                        'elapsedDuration': 120.0,
+                        'movingDuration': 110.0,
+                        'restTime': 10.0,
+                    }
+                ],
+            }
+        }
+
+        details = get_activity_details(FakeGarminClient(payload), 123, 'swimming')
+
+        self.assertIsNone(details['elapsed_duration'])
+        self.assertIsNone(details['moving_duration'])
+        self.assertIsNone(details['rest_duration'])
 
     def test_cycling_activity_extracts_power_and_hr_zones(self):
         payload = {
