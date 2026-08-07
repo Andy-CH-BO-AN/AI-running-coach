@@ -35,6 +35,7 @@ class ActivityPayloadProvider:
         raw_artifact_persister: Callable[..., tuple[Path, Path]] = persist_raw_artifacts,
         import_service: Callable[..., Dict[str, Any]] = import_fetched_garmin_payload,
         database_available: Callable[[], bool] = _database_enabled,
+        preserve_activity_window_on_connection_loss: bool = False,
         raw_data_dir: Path = Path("data/raw"),
     ) -> None:
         self.session_factory = session_factory
@@ -42,6 +43,9 @@ class ActivityPayloadProvider:
         self.raw_artifact_persister = raw_artifact_persister
         self.import_service = import_service
         self.database_available = database_available
+        self.preserve_activity_window_on_connection_loss = (
+            preserve_activity_window_on_connection_loss
+        )
         self.raw_data_dir = raw_data_dir
 
     def _persist_raw_artifacts(
@@ -271,15 +275,17 @@ class ActivityPayloadProvider:
                 latest_date = self._get_latest_activity_date(session, user.id)
                 fallback_max_heart_rate = get_recent_max_heart_rate(session, user.id)
 
-                # Materialize the selected DB-backed window before Garmin sync. If the
-                # sync later loses Neon, this snapshot can be merged with the already-
-                # fetched Garmin updates without a second DB read or a second API call.
-                existing_raw_activities = self._load_recent_raw_activities(
-                    session,
-                    user.id,
-                    limit=activity_limit,
-                )
-                existing_user_data = self._load_latest_user_data(session, user.id)
+                if self.preserve_activity_window_on_connection_loss:
+                    # Materialize the selected DB-backed window before Garmin sync. If
+                    # the sync later loses persistence, this snapshot can be merged with
+                    # the already-fetched Garmin updates without reopening the database
+                    # or issuing a second Garmin request.
+                    existing_raw_activities = self._load_recent_raw_activities(
+                        session,
+                        user.id,
+                        limit=activity_limit,
+                    )
+                    existing_user_data = self._load_latest_user_data(session, user.id)
 
                 garmin_data = self._fetch_garmin_updates(
                     latest_date=latest_date,
