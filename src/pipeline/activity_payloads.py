@@ -275,11 +275,15 @@ class ActivityPayloadProvider:
                 latest_date = self._get_latest_activity_date(session, user.id)
                 fallback_max_heart_rate = get_recent_max_heart_rate(session, user.id)
 
-                if self.preserve_activity_window_on_connection_loss:
-                    # Materialize the selected DB-backed window before Garmin sync. If
-                    # the sync later loses persistence, this snapshot can be merged with
-                    # the already-fetched Garmin updates without reopening the database
-                    # or issuing a second Garmin request.
+                if (
+                    self.preserve_activity_window_on_connection_loss
+                    and latest_date is not None
+                ):
+                    # Incremental Garmin fetches cannot reconstruct the selected Activity
+                    # window by themselves. Materialize it before sync so persistence loss
+                    # can merge the fresh updates in memory without reopening the database
+                    # or issuing a second Garmin request. When latest_date is None, Garmin
+                    # already fetches the full bounded history, so no snapshot is needed.
                     existing_raw_activities = self._load_recent_raw_activities(
                         session,
                         user.id,
