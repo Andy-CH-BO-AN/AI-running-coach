@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from src.pipeline.goal_prompt import GoalPromptOverrides, render_goal_prompt
 from src.preprocessing.coach_context import enforce_deterministic_report_fields
@@ -7,11 +7,23 @@ from src.preprocessing.coach_context import enforce_deterministic_report_fields
 DEFAULT_GOAL_PROMPT_PATH = Path("prompts/goal.md")
 
 
-def coach(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+def coach(
+    data: List[Dict[str, Any]],
+    user_data: Optional[Dict[str, Any]] = None,
+    deterministic_context: Optional[Dict[str, Any]] = None,
+    goal_path: str = "",
+    goal_text: Optional[str] = None,
+) -> Dict[str, Any]:
     """Load the Gemini-backed coach only when report generation actually runs."""
     from src.agents.coach import coach as generate_with_coach
 
-    return generate_with_coach(*args, **kwargs)
+    return generate_with_coach(
+        data=data,
+        user_data=user_data,
+        deterministic_context=deterministic_context,
+        goal_path=goal_path,
+        goal_text=goal_text,
+    )
 
 
 def generate_coach_report(
