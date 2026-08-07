@@ -7,6 +7,13 @@ from src.preprocessing.coach_context import enforce_deterministic_report_fields
 DEFAULT_GOAL_PROMPT_PATH = Path("prompts/goal.md")
 
 
+def coach(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+    """Load the Gemini-backed coach only when report generation actually runs."""
+    from src.agents.coach import coach as generate_with_coach
+
+    return generate_with_coach(*args, **kwargs)
+
+
 def generate_coach_report(
     processed_data: List[Dict[str, Any]],
     user_data: Dict[str, Any],
@@ -14,8 +21,6 @@ def generate_coach_report(
     goal_overrides: GoalPromptOverrides | None = None,
     goal_prompt_path: str | Path = DEFAULT_GOAL_PROMPT_PATH,
 ) -> Dict[str, Any]:
-    from src.agents.coach import coach
-
     goal_path = Path(goal_prompt_path)
     goal_text = render_goal_prompt(goal_path, goal_overrides)
     response = coach(
