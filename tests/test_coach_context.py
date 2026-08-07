@@ -676,6 +676,241 @@ def test_cross_training_segments_do_not_emit_running_mechanics():
         assert "stride_length_m" not in segment
 
 
+def test_swimming_context_preserves_reliable_timings_and_rest_segment_order():
+    processed_data = [
+        {
+            "activity_id": 211,
+            "type": "swimming",
+            "date": "2026-05-13",
+            "distance_km": 0.3,
+            "splits": [
+                {
+                    "split_index": 1,
+                    "distance": 0.1,
+                    "duration": 2.0,
+                    "elapsed_duration": 2.0166666667,
+                    "moving_duration": 1.9833333333,
+                    "pace": "2:00 /100m",
+                },
+                {
+                    "split_index": 2,
+                    "interval_type": "rest",
+                    "distance": 0,
+                    "duration": 0.5,
+                    "elapsed_duration": 0.5083333333,
+                    "moving_duration": 0,
+                },
+                {
+                    "split_index": 3,
+                    "distance": 0,
+                    "duration": 0.25,
+                    "elapsed_duration": 0.25,
+                    "moving_duration": 0,
+                },
+                {
+                    "split_index": 4,
+                    "distance": 0.2,
+                    "duration": 4.4,
+                    "elapsed_duration": 4.4,
+                    "moving_duration": 4.4,
+                    "pace": "2:12 /100m",
+                },
+            ],
+        }
+    ]
+    raw_activities = [
+        {
+            "activity_id": 211,
+            "type": "swimming",
+            "duration": 7.15,
+            "elapsed_duration": 7.4,
+            "moving_duration": 6.3833333333,
+            "rest_duration": 0.75,
+        }
+    ]
+
+    context = build_deterministic_coach_context(
+        processed_data=processed_data,
+        user_data=_sample_user_data(),
+        raw_activities=raw_activities,
+        today="2026-05-14",
+    )
+    session = context["weekly_analysis"][0]["sessions"][0]
+
+    assert session["elapsed_duration_min"] == 7.4
+    assert session["swim_duration_min"] == 6.3833
+    assert session["rest_duration_min"] == 0.75
+    assert session["swim_pace_seconds_per_100m"] == 128
+    assert session["elapsed_pace_seconds_per_100m"] == 148
+    assert [segment["split_index"] for segment in session["segments"]] == [1, 2, 3, 4]
+    assert [segment["segment_type"] for segment in session["segments"]] == ["lap", "rest", "lap", "lap"]
+    assert session["segments"][1]["elapsed_duration_min"] == 0.5083
+
+    report = enforce_deterministic_report_fields(
+        {
+            "weekly_analysis": [
+                {
+                    "week_start": "2026-05-11",
+                    "sessions": [
+                        {
+                            "activity_id": 211,
+                            "swim_pace_seconds_per_100m": 1,
+                            "elapsed_pace_seconds_per_100m": 1,
+                        }
+                    ],
+                }
+            ]
+        },
+        context,
+    )
+    enforced = report["weekly_analysis"][0]["sessions"][0]
+    assert enforced["elapsed_duration_min"] == 7.4
+    assert enforced["swim_duration_min"] == 6.3833
+    assert enforced["rest_duration_min"] == 0.75
+    assert enforced["swim_pace_seconds_per_100m"] == 128
+    assert enforced["elapsed_pace_seconds_per_100m"] == 148
+    assert enforced["segments"][1]["elapsed_duration_min"] == 0.5083
+
+
+def test_swimming_context_sums_only_explicit_rest_segments_before_rounding():
+    processed_data = [
+        {
+            "activity_id": 212,
+            "type": "swimming",
+            "date": "2026-05-13",
+            "distance_km": 0.1,
+            "splits": [
+                {
+                    "split_index": 1,
+                    "interval_type": "rest",
+                    "distance": 0,
+                    "duration": 0.5,
+                    "elapsed_duration": 0.5083333333,
+                },
+                {
+                    "split_index": 2,
+                    "interval_type": "rest",
+                    "distance": 0,
+                    "duration": 0.2525,
+                    "elapsed_duration": None,
+                },
+                {
+                    "split_index": 3,
+                    "distance": 0,
+                    "duration": 5.0,
+                    "elapsed_duration": 5.0,
+                },
+            ],
+        }
+    ]
+
+    context = build_deterministic_coach_context(
+        processed_data=processed_data,
+        user_data=_sample_user_data(),
+        raw_activities=[{"activity_id": 212, "type": "swimming", "duration": 5.7525}],
+        today="2026-05-14",
+    )
+    session = context["weekly_analysis"][0]["sessions"][0]
+
+    assert session["rest_duration_min"] == 0.7608
+    assert "elapsed_duration_min" not in session
+    assert "swim_duration_min" not in session
+    assert "swim_pace_seconds_per_100m" not in session
+    assert "elapsed_pace_seconds_per_100m" not in session
+
+
+def test_swimming_context_keeps_reliable_swim_pace_without_rest_breakdown():
+    context = build_deterministic_coach_context(
+        processed_data=[
+            {
+                "activity_id": 215,
+                "type": "swimming",
+                "date": "2026-05-13",
+                "distance_km": 0.2,
+                "splits": [],
+            }
+        ],
+        user_data=_sample_user_data(),
+        raw_activities=[
+            {
+                "activity_id": 215,
+                "type": "swimming",
+                "duration": 5.25,
+                "elapsed_duration": 5.5,
+                "moving_duration": 4.75,
+            }
+        ],
+        today="2026-05-14",
+    )
+    session = context["weekly_analysis"][0]["sessions"][0]
+
+    assert session["swim_pace_seconds_per_100m"] == 142
+    assert session["elapsed_pace_seconds_per_100m"] == 165
+    assert "rest_duration_min" not in session
+
+
+def test_legacy_swimming_context_does_not_infer_missing_times_from_index_gaps():
+    context = build_deterministic_coach_context(
+        processed_data=[
+            {
+                "activity_id": 213,
+                "type": "swimming",
+                "date": "2026-05-13",
+                "distance_km": 0.2,
+                "splits": [
+                    {"split_index": 1, "distance": 0.1, "duration": 2.0},
+                    {"split_index": 4, "distance": 0.1, "duration": 2.1},
+                ],
+            }
+        ],
+        user_data=_sample_user_data(),
+        raw_activities=[{"activity_id": 213, "type": "swimming", "duration": 10.0}],
+        today="2026-05-14",
+    )
+    session = context["weekly_analysis"][0]["sessions"][0]
+
+    assert "elapsed_duration_min" not in session
+    assert "swim_duration_min" not in session
+    assert "rest_duration_min" not in session
+    assert "swim_pace_seconds_per_100m" not in session
+    assert "elapsed_pace_seconds_per_100m" not in session
+    assert [segment["segment_type"] for segment in session["segments"]] == ["lap", "lap"]
+
+
+def test_non_swimming_context_does_not_gain_optional_swim_timing_keys():
+    context = build_deterministic_coach_context(
+        processed_data=[
+            {
+                "activity_id": 214,
+                "type": "running",
+                "date": "2026-05-13",
+                "distance_km": 5,
+                "splits": [{"split_index": 1, "distance": 1, "duration": 5}],
+            }
+        ],
+        user_data=_sample_user_data(),
+        raw_activities=[
+            {
+                "activity_id": 214,
+                "type": "running",
+                "duration": 25,
+                "elapsed_duration": 26,
+                "moving_duration": 24,
+                "rest_duration": 2,
+            }
+        ],
+        today="2026-05-14",
+    )
+    session = context["weekly_analysis"][0]["sessions"][0]
+
+    assert "elapsed_duration_min" not in session
+    assert "swim_duration_min" not in session
+    assert "rest_duration_min" not in session
+    assert "swim_pace_seconds_per_100m" not in session
+    assert "elapsed_pace_seconds_per_100m" not in session
+    assert "elapsed_duration_min" not in session["segments"][0]
+
+
 def test_physio_seed_preserves_runner_pace_format_and_open_ended_z5():
     context = build_deterministic_coach_context(
         processed_data=[],

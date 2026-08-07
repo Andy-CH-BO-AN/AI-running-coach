@@ -23,12 +23,17 @@ class GarminActivitySplit(BaseModel):
     split_index: int
     distance: float | None = None
     duration: float | None = None
+    elapsed_duration: float | None = None
+    moving_duration: float | None = None
     pace: float | None = None
+    interval_type: str | None = None
     speed_kmh: float | None = None
     average_heart_rate: float | None = None
     max_heart_rate: float | None = None
     avg_cadence: float | None = None
     max_cadence: float | None = None
+    active_lengths: int | None = None
+    swim_stroke: str | None = None
     lengths: list[GarminSwimmingLength] = Field(default_factory=list)
 
 
@@ -40,6 +45,9 @@ class GarminActivity(BaseModel):
     date: str | None = None
     distance: float | None = None
     duration: float | None = None
+    elapsed_duration: float | None = None
+    moving_duration: float | None = None
+    rest_duration: float | None = None
     average_pace: float | None = None
     average_speed_kmh: float | None = None
     average_heart_rate: float | None = None

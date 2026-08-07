@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import pytest
 
-from src.notifications.formatter import format_activity_message
+from src.notifications.constants import LINE_SAFE_TEXT_LENGTH
+from src.notifications.formatter import format_activity_message, format_activity_messages
+from src.notifications.text_utils import utf16_length
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -50,6 +52,11 @@ def _make_swim_session(**overrides) -> dict:
         "source_activity_type": "swimming",
         "distance_km": 2.4,
         "duration_min": 68.9,
+        "elapsed_duration_min": 68.9,
+        "swim_duration_min": 52.75,
+        "rest_duration_min": 16.15,
+        "swim_pace_seconds_per_100m": 132,
+        "elapsed_pace_seconds_per_100m": 172,
         "training_load": 158.5,
         "avg_hr": 149,
         "avg_pace": "2:52",
@@ -145,6 +152,47 @@ class TestEasyRunFormat:
         assert "2.4" in msg
         assert "2.40" not in msg
 
+    def test_multi_message_interface_preserves_legacy_running_output_exactly(self):
+        session = _make_easy_running_session()
+        week = _make_week()
+        expected = "\n".join([
+            "🏃 跑步｜2026-07-21",
+            "",
+            "距離：8.05 km",
+            "時間：51:54",
+            "配速：6:26/km",
+            "平均心率：152 bpm",
+            "訓練負荷：84.6",
+            "溫度：30.8°C",
+            "",
+            "📊 本週累積",
+            "訓練負荷：727.1",
+            "",
+            f"🔗 {_GARMIN_BASE}11111",
+        ])
+
+        assert format_activity_message(session, week) == expected
+        assert format_activity_messages(session, week) == [expected]
+
+    def test_long_running_output_is_safely_paged_without_text_changes(self):
+        session = _make_easy_running_session(segments=[
+            {
+                "split_index": index,
+                "distance_km": 1.0,
+                "duration_min": 5.0,
+                "avg_pace": "5:00",
+                "avg_hr": 150,
+            }
+            for index in range(1, 301)
+        ])
+
+        messages = format_activity_messages(session, None)
+        reconstructed = "\n".join(messages)
+
+        assert len(messages) > 1
+        assert reconstructed == format_activity_message(session, None)
+        assert all(utf16_length(message) <= LINE_SAFE_TEXT_LENGTH for message in messages)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 距離格式
@@ -220,10 +268,36 @@ class TestSwimFormat:
         msg = format_activity_message(_make_swim_session(), _make_week())
         assert "游泳" in msg
 
+    def test_lap_swimming_alias_uses_swimming_formatter(self):
+        session = _make_swim_session(
+            source_activity_type="lap_swimming",
+            segments=[
+                {
+                    "split_index": 7,
+                    "distance_km": 0.1,
+                    "duration_min": 2.0,
+                    "avg_pace": "2:00",
+                },
+                {
+                    "split_index": 8,
+                    "segment_type": "rest",
+                    "elapsed_duration_min": 0.5,
+                },
+            ],
+        )
+
+        msg = format_activity_messages(session, None)[0]
+
+        assert msg.startswith("🏊 游泳｜")
+        assert "100m｜2:00｜配速 2:00/100m" in msg
+        assert "休息｜0:30" in msg
+        assert "#7" not in msg
+        assert "#8" not in msg
+
     def test_pace_unit_per_100m(self):
         msg = format_activity_message(_make_swim_session(), _make_week())
         assert "2:52" in msg
-        assert "100m" in msg
+        assert "含休息平均配速：2:52/100m" in msg
 
     def test_no_temperature_when_missing(self):
         """游泳無溫度資料時，不顯示溫度行。"""
@@ -238,8 +312,131 @@ class TestSwimFormat:
 
         msg = format_activity_message(session, None)
 
-        assert "#1｜50m｜1:24｜配速 2:48/100m｜心率 145 bpm" in msg
-        assert "#2｜50m｜1:30｜配速 3:00/100m｜心率 147 bpm" in msg
+        assert "50m｜1:24｜配速 2:48/100m｜心率 145 bpm" in msg
+        assert "50m｜1:30｜配速 3:00/100m｜心率 147 bpm" in msg
+        assert "#1" not in msg
+        assert "#2" not in msg
+
+    def test_rest_segments_keep_source_order_and_prefer_elapsed_duration(self):
+        session = _make_swim_session(segments=[
+            {"split_index": 7, "distance_km": 0.1, "duration_min": 2.0, "avg_pace": "2:00", "avg_hr": 140},
+            {"split_index": 9, "segment_type": "rest", "duration_min": 0.5, "elapsed_duration_min": 0.75},
+            {"split_index": 12, "distance_km": 0.2, "duration_min": 4.4, "avg_pace": "2:12", "avg_hr": 150},
+        ])
+
+        lines = format_activity_messages(session, None)[0].splitlines()
+        segment_lines = lines[lines.index("分段明細") + 1:]
+
+        assert segment_lines == [
+            "100m｜2:00｜配速 2:00/100m｜心率 140 bpm",
+            "休息｜0:45",
+            "200m｜4:24｜配速 2:12/100m｜心率 150 bpm",
+        ]
+        assert all("#" not in line for line in segment_lines)
+
+    def test_overview_uses_only_explicit_reliable_swim_times(self):
+        session = _make_swim_session(
+            distance_km=2.5,
+            elapsed_duration_min=78.4,
+            swim_duration_min=(52 * 60 + 16) / 60,
+            rest_duration_min=(26 * 60 + 8) / 60,
+            swim_pace_seconds_per_100m=125,
+            elapsed_pace_seconds_per_100m=188,
+        )
+
+        msg = format_activity_messages(session, None)[0]
+
+        assert "距離：2.5 km" in msg
+        assert "總時間：78:24" in msg
+        assert "游泳時間：52:16" in msg
+        assert "休息時間：26:08" in msg
+        assert "平均游泳配速：2:05/100m" in msg
+        assert "含休息平均配速：3:08/100m" in msg
+
+    def test_legacy_swim_duration_and_pace_are_not_relabelled(self):
+        session = _make_swim_session(
+            elapsed_duration_min=None,
+            swim_duration_min=None,
+            rest_duration_min=None,
+            swim_pace_seconds_per_100m=None,
+            elapsed_pace_seconds_per_100m=None,
+            duration_min=68.9,
+            avg_pace="2:52",
+        )
+
+        msg = format_activity_messages(session, None)[0]
+
+        assert "總時間：" not in msg
+        assert "游泳時間：" not in msg
+        assert "休息時間：" not in msg
+        assert "平均游泳配速：" not in msg
+        assert "含休息平均配速：" not in msg
+        assert "時間：68:54" not in msg
+        assert "配速：2:52/100m" not in msg
+
+    def test_formatter_does_not_derive_missing_swimming_pace_facts(self):
+        session = _make_swim_session(
+            swim_pace_seconds_per_100m=None,
+            elapsed_pace_seconds_per_100m=None,
+        )
+
+        msg = format_activity_messages(session, None)[0]
+
+        assert "平均游泳配速：" not in msg
+        assert "含休息平均配速：" not in msg
+
+    @pytest.mark.parametrize("missing_field", ["swim_duration_min", "rest_duration_min"])
+    def test_partial_time_breakdown_is_not_displayed(self, missing_field):
+        session = _make_swim_session(**{missing_field: None})
+
+        msg = format_activity_messages(session, None)[0]
+
+        assert "游泳時間：" not in msg
+        assert "休息時間：" not in msg
+        assert "平均游泳配速：" not in msg
+        assert "含休息平均配速：2:52/100m" in msg
+
+    def test_overlong_rich_swim_message_compacts_without_dropping_segments(self):
+        segment = {
+            "distance_km": 0.2,
+            "duration_min": 4.4,
+            "avg_pace": "2:12",
+            "avg_hr": 120,
+        }
+        session = _make_swim_session(segments=[dict(segment) for _ in range(160)])
+
+        messages = format_activity_messages(session, None)
+
+        assert len(messages) == 1
+        assert messages[0].splitlines().count("200m｜4:24｜2:12/100m｜HR 120") == 160
+        assert "配速 2:12/100m" not in messages[0]
+        assert utf16_length(messages[0]) <= LINE_SAFE_TEXT_LENGTH
+
+    def test_overlimit_swim_details_paginate_on_complete_lines_in_order(self):
+        segments = [
+            {
+                "split_index": index * 2,
+                "distance_km": 0.2,
+                "duration_min": 4.4,
+                "avg_pace": "2:12",
+                "avg_hr": index,
+            }
+            for index in range(100, 500)
+        ]
+        session = _make_swim_session(segments=segments)
+
+        messages = format_activity_messages(session, None)
+
+        assert len(messages) > 1
+        assert "分段明細" not in messages[0]
+        detail_lines = [line for message in messages[1:] for line in message.splitlines()]
+        assert detail_lines[0] == "分段明細"
+        assert detail_lines[1:] == [
+            f"200m｜4:24｜2:12/100m｜HR {index}"
+            for index in range(100, 500)
+        ]
+        assert all("#" not in line for line in detail_lines)
+        assert all(utf16_length(message) <= LINE_SAFE_TEXT_LENGTH for message in messages)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -266,6 +463,23 @@ class TestCyclingFormat:
 
         assert "#1｜5 km｜15:00｜速度 20 km/h｜心率 135 bpm" in msg
         assert "#2｜4.09 km｜12:18｜速度 19.9 km/h｜心率 143 bpm" in msg
+
+    def test_multi_message_interface_preserves_legacy_cycling_output_exactly(self):
+        session = _make_cycling_session()
+        expected = "\n".join([
+            "🚴 自行車｜2026-07-01",
+            "",
+            "距離：9.09 km",
+            "時間：27:18",
+            "速度：20.0 km/h",
+            "平均心率：139 bpm",
+            "訓練負荷：50",
+            "",
+            f"🔗 {_GARMIN_BASE}23441977562",
+        ])
+
+        assert format_activity_message(session, None) == expected
+        assert format_activity_messages(session, None) == [expected]
 
 
 # ──────────────────────────────────────────────────────────────────────────────

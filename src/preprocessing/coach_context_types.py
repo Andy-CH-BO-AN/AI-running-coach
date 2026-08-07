@@ -20,6 +20,7 @@ class CoachSegment(TypedDict, total=False):
     split_index: Any
     distance_km: float | None
     duration_min: float | None
+    elapsed_duration_min: float | None
     avg_pace: str | None
     speed_kmh: float | None
     avg_hr: int | None
@@ -35,6 +36,11 @@ class CoachSession(TypedDict, total=False):
     source_activity_type: str | None
     distance_km: float
     duration_min: float
+    elapsed_duration_min: float
+    swim_duration_min: float
+    rest_duration_min: float
+    swim_pace_seconds_per_100m: int
+    elapsed_pace_seconds_per_100m: int
     training_load: float
     avg_hr: int | None
     avg_pace: str | None

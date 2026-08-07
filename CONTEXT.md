@@ -19,3 +19,27 @@ _Avoid_: history, activity backlog
 **Stateless notification**:
 LINE notification sent without Neon-backed deduplication. It may repeat on later degraded or recovery runs.
 _Avoid_: durable notification, exactly-once notification
+
+**Swimming rest interval**:
+A Garmin swimming interval with positive duration but no distance, moving time, active lengths, or swim stroke. Missing source indices alone never establish a rest interval.
+_Avoid_: inferred rest, index-gap rest
+
+**Swimming elapsed time**:
+Wall-clock duration of a swimming activity, including swimming, rest, and any unclassified gaps reported by Garmin.
+_Avoid_: timer duration, moving time
+
+**Swimming time**:
+Duration Garmin reports as moving time for a swimming activity. It is not inferred from elapsed-time differences.
+_Avoid_: active-time estimate, elapsed time
+
+**Swimming rest time**:
+Duration Garmin reports directly as rest, or the sum of reliably identified swimming rest intervals. It is never calculated as elapsed time minus swimming time.
+_Avoid_: residual time, inferred rest time
+
+**Average swimming pace**:
+Total swimming distance divided by swimming time, expressed per 100 metres.
+_Avoid_: elapsed average pace
+
+**Elapsed swimming pace**:
+Total swimming distance divided by swimming elapsed time, expressed per 100 metres.
+_Avoid_: average swimming pace

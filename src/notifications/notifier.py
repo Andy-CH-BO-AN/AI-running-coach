@@ -22,8 +22,8 @@ from src.notifications.constants import (
     MAX_DEGRADED_LINE_NOTIFICATIONS_PER_RUN,
     MAX_LINE_NOTIFICATIONS_PER_RUN,
 )
-from src.notifications.formatter import format_activity_message
-from src.notifications.line_client import send_push_message
+from src.notifications.formatter import format_activity_messages
+from src.notifications.line_client import send_push_messages
 
 logger = logging.getLogger(__name__)
 
@@ -111,8 +111,8 @@ def _send_pairs(
 
     for index, (activity, week) in enumerate(pairs):
         activity_id = activity["activity_id"]
-        message = format_activity_message(activity, week)
-        result = send_push_message(token, group_id, message)
+        messages = format_activity_messages(activity, week)
+        result = send_push_messages(token, group_id, messages)
 
         if not result.success:
             logger.error(

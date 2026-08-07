@@ -107,7 +107,7 @@ class TestMissingEnvVars:
     def test_disabled_does_not_call_line_api(self, tmp_path):
         ctx_path = _write_context(tmp_path, _make_coach_context())
         with patch.dict(os.environ, {}, clear=True), \
-             patch("src.notifications.notifier.send_push_message") as mock_send:
+             patch("src.notifications.notifier.send_push_messages") as mock_send:
             run_line_notification(str(ctx_path))
         mock_send.assert_not_called()
 
@@ -152,7 +152,7 @@ class TestSeedBaseline:
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
              patch("src.notifications.notifier._release_advisory_lock"), \
              patch("src.notifications.notifier._get_db_session"), \
-             patch("src.notifications.notifier.send_push_message") as mock_send:
+             patch("src.notifications.notifier.send_push_messages") as mock_send:
             run_line_notification(str(ctx_path))
 
         mock_send.assert_not_called()
@@ -176,7 +176,7 @@ class TestSeedBaseline:
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
              patch("src.notifications.notifier._release_advisory_lock"), \
              patch("src.notifications.notifier._get_db_session"), \
-             patch("src.notifications.notifier.send_push_message") as mock_send_1:
+             patch("src.notifications.notifier.send_push_messages") as mock_send_1:
             res1 = run_line_notification(str(empty_ctx_path))
 
         assert res1.status == "seeded"
@@ -190,7 +190,7 @@ class TestSeedBaseline:
              patch("src.notifications.notifier._release_advisory_lock"), \
              patch("src.notifications.notifier._get_db_session"), \
              patch("src.notifications.notifier.record_notification") as mock_record_2, \
-             patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT) as mock_send_2:
+             patch("src.notifications.notifier.send_push_messages", return_value=SUCCESS_RESULT) as mock_send_2:
             res2 = run_line_notification(str(new_activity_ctx_path))
 
         assert res2.status == "done"
@@ -218,7 +218,7 @@ class TestNoNewActivity:
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
              patch("src.notifications.notifier._release_advisory_lock"), \
              patch("src.notifications.notifier._get_db_session"), \
-             patch("src.notifications.notifier.send_push_message") as mock_send:
+             patch("src.notifications.notifier.send_push_messages") as mock_send:
             result = run_line_notification(str(ctx_path))
 
         assert result.status == "no_new"
@@ -242,13 +242,31 @@ class TestNormalSend:
              patch("src.notifications.notifier._release_advisory_lock"), \
              patch("src.notifications.notifier._get_db_session"), \
              patch("src.notifications.notifier.record_notification") as mock_record, \
-             patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT):
+             patch("src.notifications.notifier.send_push_messages", return_value=SUCCESS_RESULT):
             result = run_line_notification(str(ctx_path))
 
         assert result.status == "done"
         assert result.sent == 1
         assert result.failed == 0
         mock_record.assert_called_once()
+
+    def test_activity_message_pages_are_sent_together_before_db_write(self, tmp_path):
+        ctx_path = _write_context(tmp_path, _make_coach_context())
+        pages = ["活動總覽", "分段明細\n休息｜0:30"]
+
+        with patch.dict(os.environ, self._env()), \
+             patch("src.notifications.notifier.get_notified_activity_ids", return_value={9999}), \
+             patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
+             patch("src.notifications.notifier._release_advisory_lock"), \
+             patch("src.notifications.notifier._get_db_session"), \
+             patch("src.notifications.notifier.format_activity_messages", return_value=pages), \
+             patch("src.notifications.notifier.send_push_messages", return_value=SUCCESS_RESULT) as send, \
+             patch("src.notifications.notifier.record_notification") as record:
+            result = run_line_notification(str(ctx_path))
+
+        assert result.sent == 1
+        send.assert_called_once_with(DUMMY_TOKEN, DUMMY_GROUP, pages)
+        record.assert_called_once()
 
     def test_line_success_then_db_write(self, tmp_path):
         """LINE 成功後才寫入 DB。"""
@@ -277,7 +295,7 @@ class TestNormalSend:
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
              patch("src.notifications.notifier._release_advisory_lock"), \
              patch("src.notifications.notifier._get_db_session"), \
-             patch("src.notifications.notifier.send_push_message", side_effect=mock_send), \
+             patch("src.notifications.notifier.send_push_messages", side_effect=mock_send), \
              patch("src.notifications.notifier.record_notification", side_effect=mock_record):
             run_line_notification(str(ctx_path))
 
@@ -294,7 +312,7 @@ class TestNormalSend:
              patch("src.notifications.notifier._release_advisory_lock"), \
              patch("src.notifications.notifier._get_db_session"), \
              patch("src.notifications.notifier.record_notification") as mock_record, \
-             patch("src.notifications.notifier.send_push_message", return_value=FAIL_RESULT):
+             patch("src.notifications.notifier.send_push_messages", return_value=FAIL_RESULT):
             result = run_line_notification(str(ctx_path))
 
         assert result.failed == 1
@@ -310,7 +328,7 @@ class TestNormalSend:
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
              patch("src.notifications.notifier._release_advisory_lock"), \
              patch("src.notifications.notifier._get_db_session"), \
-             patch("src.notifications.notifier.send_push_message") as mock_send:
+             patch("src.notifications.notifier.send_push_messages") as mock_send:
             result = run_line_notification(str(ctx_path))
 
         mock_send.assert_not_called()
@@ -351,7 +369,7 @@ class TestPartialSuccess:
              patch("src.notifications.notifier._release_advisory_lock"), \
              patch("src.notifications.notifier._get_db_session"), \
              patch("src.notifications.notifier.record_notification"), \
-             patch("src.notifications.notifier.send_push_message",
+             patch("src.notifications.notifier.send_push_messages",
                    side_effect=[SUCCESS_RESULT, FAIL_RESULT]):
             result = run_line_notification(str(ctx_path))
 
@@ -372,7 +390,7 @@ class TestPartialSuccess:
              patch("src.notifications.notifier._release_advisory_lock"), \
              patch("src.notifications.notifier._get_db_session"), \
              patch("src.notifications.notifier.record_notification", side_effect=mock_record), \
-             patch("src.notifications.notifier.send_push_message",
+             patch("src.notifications.notifier.send_push_messages",
                    side_effect=[SUCCESS_RESULT, FAIL_RESULT]):
             run_line_notification(str(ctx_path))
 
@@ -395,7 +413,7 @@ class TestAdvisoryLock:
         with patch.dict(os.environ, self._env()), \
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=False), \
              patch("src.notifications.notifier._get_db_session"), \
-             patch("src.notifications.notifier.send_push_message") as mock_send:
+             patch("src.notifications.notifier.send_push_messages") as mock_send:
             result = run_line_notification(str(ctx_path))
 
         assert result.status == "skipped_locked"
@@ -410,7 +428,7 @@ class TestAdvisoryLock:
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
              patch("src.notifications.notifier._release_advisory_lock") as mock_release, \
              patch("src.notifications.notifier._get_db_session"), \
-             patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT), \
+             patch("src.notifications.notifier.send_push_messages", return_value=SUCCESS_RESULT), \
              patch("src.notifications.notifier.record_notification"):
             run_line_notification(str(ctx_path))
 
@@ -439,7 +457,7 @@ class TestAdvisoryLock:
              patch("src.notifications.notifier._release_advisory_lock") as mock_release, \
              patch("src.notifications.notifier._get_db_session"), \
              patch("src.notifications.notifier.get_notified_activity_ids", side_effect=_connection_error()), \
-             patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT) as send:
+             patch("src.notifications.notifier.send_push_messages", return_value=SUCCESS_RESULT) as send:
             result = run_line_notification(str(ctx_path))
 
         assert result.status == "degraded_done"
@@ -465,7 +483,7 @@ class TestDbCommitFailure:
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
              patch("src.notifications.notifier._release_advisory_lock"), \
             patch("src.notifications.notifier._get_db_session"), \
-            patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT), \
+            patch("src.notifications.notifier.send_push_messages", return_value=SUCCESS_RESULT), \
             patch("src.notifications.notifier.record_notification",
                    side_effect=_connection_error()), \
              caplog.at_level(logging.WARNING, logger="src.notifications.notifier"):
@@ -485,7 +503,7 @@ class TestDbCommitFailure:
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
              patch("src.notifications.notifier._release_advisory_lock"), \
              patch("src.notifications.notifier._get_db_session"), \
-             patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT), \
+             patch("src.notifications.notifier.send_push_messages", return_value=SUCCESS_RESULT), \
              patch(
                  "src.notifications.notifier.record_notification",
                  side_effect=IntegrityError("INSERT", {}, Exception("constraint failed")),
@@ -531,7 +549,7 @@ class TestNotificationCaps:
              patch("src.notifications.notifier._release_advisory_lock"), \
              patch("src.notifications.notifier._get_db_session"), \
              patch("src.notifications.notifier.record_notification"), \
-             patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT) as send, \
+             patch("src.notifications.notifier.send_push_messages", return_value=SUCCESS_RESULT) as send, \
              caplog.at_level(logging.WARNING, logger="src.notifications.notifier"):
             result = run_line_notification(str(ctx_path))
 
@@ -552,7 +570,7 @@ class TestNotificationCaps:
                  "src.notifications.notifier.record_notification",
                  side_effect=_connection_error(),
              ) as record, \
-             patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT) as send, \
+             patch("src.notifications.notifier.send_push_messages", return_value=SUCCESS_RESULT) as send, \
              caplog.at_level(logging.WARNING, logger="src.notifications.notifier"):
             result = run_line_notification(str(ctx_path))
 
@@ -571,7 +589,7 @@ class TestNotificationCaps:
         with patch.dict(os.environ, self._env(database_available="false")), \
              patch("src.notifications.notifier._get_lock_connection") as lock, \
              patch("src.notifications.notifier._get_db_session") as session, \
-             patch("src.notifications.notifier.send_push_message", return_value=SUCCESS_RESULT) as send, \
+             patch("src.notifications.notifier.send_push_messages", return_value=SUCCESS_RESULT) as send, \
              caplog.at_level(logging.WARNING, logger="src.notifications.notifier"):
             result = run_line_notification(str(ctx_path))
 
@@ -637,6 +655,6 @@ class TestFormatterException:
              patch("src.notifications.notifier._acquire_advisory_lock", return_value=True), \
              patch("src.notifications.notifier._release_advisory_lock"), \
             patch("src.notifications.notifier._get_db_session"), \
-            patch("src.notifications.notifier.format_activity_message", side_effect=Exception("Formatter crash")):
+            patch("src.notifications.notifier.format_activity_messages", side_effect=Exception("Formatter crash")):
             with pytest.raises(Exception, match="Formatter crash"):
                 run_line_notification(str(ctx_path))

@@ -13,6 +13,9 @@ LINE_PUSH_URL: str = "https://api.line.me/v2/bot/message/push"
 # LINE Messaging API text-message ceiling.
 LINE_MAX_TEXT_LENGTH: int = 5000
 
+# Formatter ceiling. Keep headroom below LINE's hard transport limit.
+LINE_SAFE_TEXT_LENGTH: int = 4800
+
 # A Push Message request can carry up to five message objects.
 LINE_MAX_MESSAGES_PER_PUSH: int = 5
 

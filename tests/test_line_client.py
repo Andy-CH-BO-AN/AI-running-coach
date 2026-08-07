@@ -18,7 +18,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from src.notifications.line_client import LineSendResult, _utf16_length, send_push_message
+from src.notifications.line_client import (
+    LineSendResult,
+    _utf16_length,
+    send_push_message,
+    send_push_messages,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -80,6 +85,32 @@ class TestSendPushMessageSuccess:
             json_body = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
             assert json_body["to"] == GROUP_ID
             assert json_body["messages"][0]["text"] == "Hello"
+
+    def test_explicit_message_sequence_keeps_caller_boundaries(self):
+        resp = _make_response(200)
+        with patch("src.notifications.line_client.requests.Session") as mock_session_cls:
+            session = MagicMock()
+            session.__enter__ = MagicMock(return_value=session)
+            session.__exit__ = MagicMock(return_value=False)
+            session.post.return_value = resp
+            mock_session_cls.return_value = session
+
+            result = send_push_messages(TOKEN, GROUP_ID, ["活動總覽", "分段明細\n休息｜0:30"])
+
+        assert result.success is True
+        payload = session.post.call_args.kwargs["json"]
+        assert [message["text"] for message in payload["messages"]] == [
+            "活動總覽",
+            "分段明細\n休息｜0:30",
+        ]
+
+    def test_explicit_message_sequence_rejects_empty_input(self):
+        with pytest.raises(ValueError, match="at least one"):
+            send_push_messages(TOKEN, GROUP_ID, [])
+
+    def test_explicit_message_sequence_rejects_single_string(self):
+        with pytest.raises(TypeError, match="sequence"):
+            send_push_messages(TOKEN, GROUP_ID, "not-a-sequence")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -382,6 +413,29 @@ class TestMessageLength:
         assert first_result.success is False
         assert rerun_result.success is True
         retry_keys = [call.kwargs["headers"]["X-Line-Retry-Key"] for call in session.post.call_args_list]
+        assert retry_keys[0] == retry_keys[2]
+        assert retry_keys[1] == retry_keys[3]
+
+    def test_identical_batches_have_distinct_keys_that_are_stable_on_rerun(self):
+        texts = ["same swimming detail page"] * 10
+
+        with patch("src.notifications.line_client.requests.Session") as mock_session_cls:
+            session = MagicMock()
+            session.__enter__ = MagicMock(return_value=session)
+            session.__exit__ = MagicMock(return_value=False)
+            session.post.return_value = _make_response(200)
+            mock_session_cls.return_value = session
+
+            first_result = send_push_messages(TOKEN, GROUP_ID, texts)
+            rerun_result = send_push_messages(TOKEN, GROUP_ID, texts)
+
+        assert first_result.success is True
+        assert rerun_result.success is True
+        retry_keys = [
+            call.kwargs["headers"]["X-Line-Retry-Key"]
+            for call in session.post.call_args_list
+        ]
+        assert retry_keys[0] != retry_keys[1]
         assert retry_keys[0] == retry_keys[2]
         assert retry_keys[1] == retry_keys[3]
 

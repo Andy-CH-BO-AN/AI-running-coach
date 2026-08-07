@@ -65,9 +65,51 @@ def _is_running_source_activity(source_activity_type: Optional[str]) -> bool:
     return (source_activity_type or "").lower() == "running"
 
 
-def _segment_from_split(split: Dict[str, Any], *, include_running_metrics: bool) -> CoachSegment:
+def _is_swimming_source_activity(source_activity_type: Optional[str]) -> bool:
+    return (source_activity_type or "").lower() in {"swimming", "lap_swimming"}
+
+
+def _rest_duration_from_splits(splits: Any) -> Optional[float]:
+    if not isinstance(splits, list):
+        return None
+
+    total = 0.0
+    found = False
+    for split in splits:
+        if not isinstance(split, dict) or split.get("interval_type") != "rest":
+            continue
+        duration = _safe_float(split.get("elapsed_duration"))
+        if duration is None:
+            duration = _safe_float(split.get("duration"))
+        if duration is None:
+            continue
+        total += duration
+        found = True
+    return _round_or_none(total, 4) if found else None
+
+
+def _pace_seconds_per_100m(
+    duration_min: Any,
+    distance_km: Any,
+) -> Optional[int]:
+    """Calculate an aggregate swimming pace from deterministic context facts."""
+    duration = _safe_float(duration_min)
+    distance = _safe_float(distance_km)
+    if duration is None or distance is None or duration < 0 or distance <= 0:
+        return None
+    return round(duration * 60 / (distance * 10))
+
+
+def _segment_from_split(
+    split: Dict[str, Any],
+    *,
+    include_running_metrics: bool,
+    include_swimming_timing: bool,
+) -> CoachSegment:
     segment: CoachSegment = {
-        "segment_type": "lap",
+        "segment_type": "rest"
+        if include_swimming_timing and split.get("interval_type") == "rest"
+        else "lap",
         "split_index": split.get("split_index"),
         "distance_km": _round_or_none(split.get("distance"), 3),
         "duration_min": _round_or_none(split.get("duration"), 2),
@@ -80,6 +122,10 @@ def _segment_from_split(split: Dict[str, Any], *, include_running_metrics: bool)
     if include_running_metrics:
         segment["cadence"] = _round_or_none(split.get("avg_cadence"), 1)
         segment["stride_length_m"] = _round_or_none(_stride_length_to_meters(_safe_float(split.get("stride_length"))), 2)
+    if include_swimming_timing:
+        elapsed_duration = _round_or_none(split.get("elapsed_duration"), 4)
+        if elapsed_duration is not None:
+            segment["elapsed_duration_min"] = elapsed_duration
     return segment
 
 
@@ -88,8 +134,13 @@ def _build_segments(processed: Dict[str, Any], source_activity_type: Optional[st
     if not isinstance(splits, list):
         return []
     include_running_metrics = _is_running_source_activity(source_activity_type)
+    include_swimming_timing = _is_swimming_source_activity(source_activity_type)
     return [
-        _segment_from_split(split, include_running_metrics=include_running_metrics)
+        _segment_from_split(
+            split,
+            include_running_metrics=include_running_metrics,
+            include_swimming_timing=include_swimming_timing,
+        )
         for split in splits
         if isinstance(split, dict)
     ]
@@ -151,7 +202,7 @@ def _build_session(
     anaerobic_te = _training_effect(processed, "anaerobic")
     environment = _build_environment(processed, raw)
 
-    return {
+    session: CoachSession = {
         "activity_id": activity_id,
         "date": processed.get("date") or raw.get("date"),
         "source_activity_type": source_activity_type,
@@ -170,3 +221,32 @@ def _build_session(
             "missing_fields": missing_fields,
         },
     }
+    if _is_swimming_source_activity(source_activity_type):
+        elapsed_duration = _round_or_none(raw.get("elapsed_duration"), 4)
+        swim_duration = _round_or_none(raw.get("moving_duration"), 4)
+        direct_rest_duration = _round_or_none(raw.get("rest_duration"), 4)
+        rest_duration = (
+            direct_rest_duration
+            if direct_rest_duration is not None
+            else _rest_duration_from_splits(processed.get("splits"))
+        )
+        swim_timings = {
+            "elapsed_duration_min": elapsed_duration,
+            "swim_duration_min": swim_duration,
+            "rest_duration_min": rest_duration,
+            "elapsed_pace_seconds_per_100m": _pace_seconds_per_100m(
+                elapsed_duration,
+                distance,
+            ),
+        }
+        if swim_duration is not None:
+            swim_timings["swim_pace_seconds_per_100m"] = _pace_seconds_per_100m(
+                swim_duration,
+                distance,
+            )
+        session.update(
+            (key, value)
+            for key, value in swim_timings.items()
+            if value is not None
+        )
+    return session
