@@ -1,37 +1,78 @@
-# AI 跑步教練
+# AI Running Coach
 
-本機端 Garmin 訓練分析 workflow：同步近期 Garmin Connect 活動，先用
-Python 產生可追溯的訓練指標，再交給 Gemini 產出 JSON 教練報告，最後用
-本機 dashboard 檢視訓練狀態、風險、賽事準備度與下週課表。
+[![Tests](https://github.com/Andy-CH-BO-AN/AI-running-coach/actions/workflows/tests.yml/badge.svg)](https://github.com/Andy-CH-BO-AN/AI-running-coach/actions/workflows/tests.yml)
 
-這不是雲端服務，也不是多使用者產品。Garmin raw data、processed
-artifacts、coach context 與 AI report 都留在本機，適合想保留資料控制權、
-又想把訓練紀錄轉成教練語意的個人跑者。
+把 Garmin 訓練資料轉成 **deterministic facts → AI 教練判讀 → Dashboard / LINE 通知** 的個人訓練分析系統。
 
-## 適合誰
+支援本機手動執行，也支援 GitHub Actions + Neon 的 cloud-scheduled Daily Run。這不是多使用者 SaaS；設計重點是單一跑者、資料可追溯、失敗模式明確，以及 AI 不負責憑空計算客觀數字。
 
-- 想把 Garmin 原始資料留在本機，並能重跑、除錯、QA 的跑者。
-- 想快速看懂近 1-4 週訓練負荷、心率區間、跑姿與交叉訓練意義的人。
-- 想用 AI 輔助週訓練安排，但希望距離、日期、加總與百分比先由程式端 deterministic 計算的人。
-- 想逐步累積 PostgreSQL 訓練資料，未來做長期趨勢、feature engineering 或 report evaluation 的開發者。
+## 核心理念
+
+1. **Garmin 是原始事實來源**：保留 raw payload，不用 heuristic 偷改 Garmin 已解析出的 50m / 100m / split 結果。
+2. **程式先算，AI 再解讀**：距離、日期、週量、zone、百分比、負荷與可追溯 facts 先由 Python deterministic 計算。
+3. **LLM 負責 coaching，不負責當計算機**：Gemini 主要產生狀態、風險、賽事準備度、訓練建議與 evidence 文案。
+4. **Cloud failure policy 是顯式狀態機**：Neon 掛掉時，不靠散落的 env flags 猜現在是哪種模式。
+5. **可重跑、可 QA**：raw data、processed data、coach context、report 與 DB persistence 都有明確邊界。
 
 ## 目前能做什麼
 
-- 從 Garmin Connect 抓取個人資料、個人紀錄、近期活動、分圈資料與活動詳細 payload。
-- 支援 `running`、`lap_swimming`、`cycling`，並分開計算各運動週距離與負荷。
-- 產生 processed CSV、deterministic coach context JSON，以及 AI coach JSON report。
-- 在程式端計算週訓練負荷、分運動週量、心率/功率 Z1-Z5、跑姿、配速/心率區間、交叉訓練摘要與下週日期 seed。
-- 透過 Gemini 把 deterministic facts 轉成狀態標籤、風險解釋、賽事準備度、下週課表、強度解讀與 evidence 文案。
-- 啟動本機 dashboard，讀取 `output/ai_report_YYYYMMDD.json`，呈現訓練回顧、週期化脈絡、下週課表、四週訓練卡、交叉訓練分析與 Zone E。
-- 每次 pipeline 執行後，自動比對紀錄，將新訓練的客觀數據（跑步、游泳、自行車，含間歇工作分段）推送至 LINE 群組（支援去重、首次 baseline seed 與 PostgreSQL advisory lock）。
-- 選用 PostgreSQL 匯入 raw/user/processed artifacts，支援 idempotent upsert 與後續資料版本化。
+- 從 Garmin Connect 抓取 profile、PR、近期活動、活動詳細資料、splits 與 swimming lengths。
+- 支援 `running`、`lap_swimming`、`cycling`。
+- 計算週訓練量、training load、心率 / 功率 Z1-Z5、跑姿、配速與交叉訓練摘要。
+- 產生 deterministic `coach_context`，再交給 Gemini 產生 AI coach JSON report。
+- Dashboard 顯示訓練回顧、週期化脈絡、四週訓練、強度分佈、下週課表與 evidence。
+- 新活動可推送到 LINE，支援 persistent dedup、baseline seed、advisory lock 與 stateless fallback。
+- PostgreSQL / Neon persistence 支援 idempotent import、local → mirror → cloud 切換與 parity validation。
+- Cloud Daily Run 在 Neon migration 或 runtime persistence loss 時有明確降級政策。
 
-## 目前限制
+## 架構總覽
 
-- Garmin 登入有時需要手動驗證，也可能遇到 rate limit；程式有 retry/backoff，但除錯時仍建議避免反覆呼叫 API。
-- Dashboard 只讀本機已產生的 report，不會主動同步 Garmin 或修改資料。
-- PostgreSQL 是選用進階模式；只想同步 Garmin 並產生 AI 報告時可以不啟動 DB。
-- 有些 Garmin 進階指標取決於裝置與活動類型，舊活動可能沒有完整心率區間、功率、跑姿或游泳 lengths。
+```mermaid
+flowchart TD
+    G[Garmin Connect] --> P[ActivityPayloadProvider]
+    P --> R[Deterministic preprocessing]
+    R --> C[coach_context JSON]
+    C --> A[Gemini coach]
+    A --> O[AI report JSON]
+    O --> D[Dashboard]
+    C --> N[LINE notification]
+
+    DB[(PostgreSQL / Neon)] <--> P
+    DB <--> N
+
+    DR[Cloud Daily Run] --> M[Migration preflight]
+    M --> S{Run state}
+    S -->|Normal| DB
+    S -->|Degraded| P
+    S -->|Persistence-loss| P
+```
+
+### Cloud Daily Run policy
+
+Cloud scheduled execution 使用單一入口：
+
+```bash
+DATABASE_MODE=cloud python -m src.scripts.run_daily_pipeline
+```
+
+它會在同一個 Python process 內完成 migration preflight、state selection、Garmin sync、AI pipeline 與 LINE notification。
+
+| State | 進入條件 | Activity window | Neon | LINE |
+| --- | --- | ---: | --- | --- |
+| **Normal** | migration 在 3 次內成功 | 75 | 可使用 | persistent dedup，既有 normal cap |
+| **Degraded** | 3 次 migration 都是 transient connection failure | 10 | 整個 run 禁止 | stateless，最多 3 筆 |
+| **Persistence-loss** | Normal 啟動後發生 transient Neon loss | 保留 75 | 當次 run 永久 revoke | stateless loss budget 3 |
+
+重要 invariant：
+
+- runtime transition 只有 `Normal → Persistence-loss`。
+- 同一個 run 不會 reconnect Neon。
+- 下一次 scheduled run 會重新做 migration preflight，可以再次進 Normal。
+- authentication / configuration / schema / non-transient DB errors **fail closed**。
+- Persistence-loss 只禁止後續 Neon I/O；已成功 materialize 到 memory 的資料可以繼續使用。
+- 如果 Garmin incremental fetch 已完成、DB sync 才失敗，會用既有 materialized window + 已抓到的 Garmin updates 在 memory merge，不會再讀 Neon，也不會再打一次 Garmin。
+
+詳細決策見 [`docs/adr/0001-neon-degraded-daily-pipeline.md`](docs/adr/0001-neon-degraded-daily-pipeline.md)。
 
 ## 快速開始
 
@@ -49,7 +90,7 @@ python -m pip install -r requirements.txt
 cp .env.example .env
 ```
 
-最小必要設定：
+最小設定：
 
 ```text
 GARMIN_ACCOUNT=your_garmin_email
@@ -58,193 +99,195 @@ GOOGLE_API_KEY=your_gcp_api_key
 GOOGLE_GENAI_USE_VERTEXAI=true
 ```
 
-GCP / Vertex AI API key 使用 `GOOGLE_API_KEY` 搭配
-`GOOGLE_GENAI_USE_VERTEXAI=true`。`GOOGLE_API_KEY` 會優先於舊的
-`GEMINI_KEY`；如果沒有設定 `GOOGLE_API_KEY`，程式仍會 fallback 到
-`GEMINI_KEY` / `GEMINI_API_KEY`。
+Gemini client 支援：
 
-使用 legacy Gemini Developer API key 時，可只設定 `GEMINI_KEY` 或
-`GEMINI_API_KEY`，並讓 `GOOGLE_GENAI_USE_VERTEXAI` 保持未設定或 `false`。
-如果改用 ADC / OAuth2 憑證而非 API key，再設定 `GOOGLE_CLOUD_PROJECT`
-與 `GOOGLE_CLOUD_LOCATION`。
+- `GOOGLE_API_KEY`（優先）
+- `GEMINI_KEY`
+- `GEMINI_API_KEY`
+- Vertex AI / ADC：搭配 `GOOGLE_CLOUD_PROJECT`、`GOOGLE_CLOUD_LOCATION`
 
-PostgreSQL 只有在要匯入 DB、跑 migration 或 DB tests 時才需要：
+Gemini client 不會因為單純 import pipeline 就被建立；只有真正進 AI generation boundary 才需要 provider credentials。
 
-```text
-DATABASE_MODE=local
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=your_local_postgres_password
-DATABASE_URL=postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@localhost:5432/ai_running_coach
-LOCAL_DATABASE_URL=postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@localhost:5432/ai_running_coach
-NEON_DATABASE_URL=postgresql+psycopg://<user>:<password>@<project>-pooler.<region>.aws.neon.tech/<db>?sslmode=require
-NEON_DATABASE_DIRECT_URL=postgresql+psycopg://<user>:<password>@<project>.<region>.aws.neon.tech/<db>?sslmode=require
-TEST_DATABASE_URL=postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@localhost:5432/ai_running_coach_test
-```
-
-`DATABASE_MODE` 支援三種：
-
-- `local`: app / 手動 pipeline / dashboard 走本機 PostgreSQL。
-- `mirror`: app 仍走本機 PostgreSQL，但 `run_pipeline.py`、`src.scripts.import_garmin_files`、`src.scripts.fetch_garmin_raw --import-db` 會在 local commit 後把 mirror tables sync 到 Neon，並做 parity check。
-- `cloud`: cloud-scheduled Daily Run 與 dashboard 走 `NEON_DATABASE_URL`；Daily Run migration 走 `NEON_DATABASE_DIRECT_URL`。
-
-建議 Neon app 連線用 pooler URL，migration / bulk sync / parity validation 用 direct URL。
-
-> 💡 **跨裝置/跨電腦同步與 GitHub Actions**：當切換為 `DATABASE_MODE=cloud` 時，不同電腦上的 Dashboard、CLI 流程與 GitHub Actions 自動化排程皆會直接存取中心化的 Neon Cloud DB，實現多端數據無縫同步。
-
-
-### 3. 跑手動主流程
+### 3. 本機手動跑 pipeline
 
 ```bash
-python run_pipeline.py
+DATABASE_MODE=local python run_pipeline.py
 ```
 
-主流程會同步 Garmin、預處理資料、建立 deterministic coach context、
-呼叫 Gemini，並輸出 JSON report。可用 `--help` 查看參數：
+或 mirror mode：
 
 ```bash
-python run_pipeline.py --help
+DATABASE_MODE=mirror python run_pipeline.py
 ```
 
-此入口只供 `local` / `mirror` 手動執行，可自訂 Activity window 與 fetch
-範圍。GitHub Actions 的 `cloud` 排程使用單一入口：
+手動入口可以自訂：
 
 ```bash
-DATABASE_MODE=cloud python -m src.scripts.run_daily_pipeline
+python run_pipeline.py \
+  --activity-limit 75 \
+  --fetch-limit 75 \
+  --core-goal "半馬，目標 Sub-90" \
+  --training-preferences "每週跑 4 天、週二游泳、週五重訓"
 ```
 
-Cloud Daily Run 不接受 `--activity-limit` 或 `--fetch-limit`：Normal mode
-固定 75 筆、Degraded mode 固定 10 筆；Normal mode 開始後若 Neon 中斷，
-Persistence-loss mode 保留原本 75 筆 Activity window。
+`run_pipeline.py` 只供 `local` / `mirror` 使用；`cloud` 會要求改走 Cloud Daily Run CLI。
 
-### 4. 開本機 Dashboard
+### 4. Cloud scheduled run
 
-完成主流程並產生 `output/ai_report_YYYYMMDD.json` 後：
+```bash
+DATABASE_MODE=cloud python -m src.scripts.run_daily_pipeline \
+  --core-goal "$CORE_GOAL" \
+  --training-preferences "$TRAINING_PREFERENCES"
+```
+
+Cloud Daily Run 不接受 `--activity-limit` 或 `--fetch-limit`，window 由 run policy 決定，caller 不能自行切換 mode。
+
+GitHub Actions workflow：`.github/workflows/daily_pipeline.yml`。
+
+### 5. 開 Dashboard
 
 ```bash
 python3 -m src.dashboard.server
 ```
 
-預設網址是 `http://127.0.0.1:8765`。Dashboard 會掃描 `output/`，
-優先載入日期最新的 report（選單顯示 `2026/05/16（最新）` 格式）。
+預設：`http://127.0.0.1:8765`
+
+如果要分開跑 QA / UI review：
+
+```bash
+python3 -m src.dashboard.server --port 8765
+python3 -m src.dashboard.server --port 8766
+```
+
 設計與欄位對應見 [`docs/dashboard.md`](docs/dashboard.md)。
 
-如果要分開跑 QA 與 UI/UX review，避免共用同一個 port：
-
-- QA server：`python3 -m src.dashboard.server --port 8765`
-- UI/UX review server：`python3 -m src.dashboard.server --port 8766`
-
-## 你會得到什麼
-
-主流程會在本機產生以下檔案：
+## 輸出 artifacts
 
 | 檔案 | 用途 |
 | --- | --- |
-| `data/raw/garmin_raw_YYYYMMDD.json` | Garmin activities raw payload，包含活動、分圈與游泳 lengths。 |
-| `data/raw/garmin_user_YYYYMMDD.json` | 使用者 profile、PR、生理資料與訓練日偏好。 |
-| `data/processed/processed_YYYYMMDD.csv` | 經 preprocessing 正規化後的活動資料備份。 |
-| `data/processed/coach_context_YYYYMMDD.json` | 程式端 deterministic coach context，是送給 Gemini 前的事實層。 |
-| `output/ai_report_YYYYMMDD.json` | AI coach 最終 JSON report，也是 dashboard 的資料來源。 |
+| `data/raw/garmin_raw_YYYYMMDD.json` | Garmin activity raw payload、splits、swimming lengths |
+| `data/raw/garmin_user_YYYYMMDD.json` | profile、PR、生理資料與偏好 |
+| `data/processed/processed_YYYYMMDD.csv` | preprocessing 後的 normalized activities |
+| `data/processed/coach_context_YYYYMMDD.json` | deterministic facts，AI 的事實層 |
+| `output/ai_report_YYYYMMDD.json` | 最終 AI coach report，也是 Dashboard 資料來源 |
 
-`coach_context_YYYYMMDD.json` 由本機程式先計算：
+`coach_context` 會包含：
 
-- 近 4 週 Monday-based week bucket、sessions、分運動週距離、週總時間、訓練負荷與資料品質。
-- 每次活動的距離、時間、training load、平均心率、平均配速、training effect、segments 與高溫 seed。
-- 4 週心率 Z1-Z5 minutes/percentage，以及是否偏極化的 seed。
-- VO2max、最大/靜息心率、乳酸閾值心率/配速、pace zone seed 與以儲備心率推估的心率區間。
-- 跑姿平均值：cadence、ground contact、vertical oscillation、stride length 與 running economy score seed。
-- 游泳/自行車交叉訓練摘要、每週高負荷交叉訓練候選、weekly TSS load seed、下週 7 天日期與可訓練日/長跑偏好。
-- 可被 Gemini 寫入 `evidence_links` 的 deterministic facts，例如本週負荷、Z4-Z5 佔比與風險 flag。
-
-Gemini 主要負責教練判讀與文字化；日期、加總、百分比與可追溯 facts
-由本機程式端負責。
+- Monday-based weekly buckets、週距離、時間與 training load。
+- 每個 session 的距離、時間、HR、pace、training effect、segments。
+- HR / power Z1-Z5 distribution。
+- VO2max、最大 / 靜息心率、乳酸閾值心率與配速。
+- cadence、ground contact、vertical oscillation、stride length 等跑姿 facts。
+- swimming / cycling cross-training summary。
+- 下週日期 seed、可訓練日、long-run preference。
+- 可供 AI `evidence_links` 引用的 deterministic facts。
 
 ## Dashboard 重點
 
-- **訓練計畫**：顯示 AI `periodization` 的目前階段、距離目標賽週數、階段週結構，並接續呈現下週核心/輔助課表。
-- **訓練回顧**：從最近 2 天活動中挑出「最近且具代表性」的課；若前一天有明顯高刺激或高負荷主課，不會被隔天的恢復跑直接蓋掉。
-- **強度分佈**：心率與功率區間並列，含 AI `assessment` / `recommendation`（需重跑 pipeline 產生新 report）。
-- **四週回顧**：週卡以 2x2 排列，分開顯示跑步、游泳、自行車距離，並由 AI 每週挑出代表強度課與一堂高負荷交叉訓練。歷史活動名稱優先用運動種類（跑步 / 游泳 / 自行車），不直接把單次活動顯示成 easy / tempo / interval 等課型標籤。
-- **Zone E**：預設收合的 `<details>`，內含配速區間表與跑姿（排除休息段的有效跑步分圈）。
-- **Evidence**：展開後顯示 supporting session 的分段明細，包含配速、心率；跑步分段才顯示步頻與步幅。畫面使用跑者可讀來源名稱，不直接露出 JSON path。
+- **訓練計畫**：periodization、目標賽週數、下週核心與輔助課表。
+- **訓練回顧**：優先顯示近期具代表性的刺激，不讓隔天恢復課蓋掉前一日主課。
+- **強度分佈**：HR / power zones 與 AI assessment。
+- **四週回顧**：跑步、游泳、自行車分開呈現。
+- **Zone E**：pace zones 與有效跑步 splits 的跑姿資訊。
+- **Evidence**：顯示 supporting sessions 與分段數據，不直接暴露 JSON path。
 
-### 5. 用 Docker 跑 Dashboard
+## PostgreSQL / Neon
 
-如果你想直接用容器啟動 dashboard 與 PostgreSQL：
+### Database modes
 
-```bash
-docker compose up -d postgres dashboard
-```
+| `DATABASE_MODE` | 行為 |
+| --- | --- |
+| `local` | app / manual pipeline / dashboard 使用本機 PostgreSQL |
+| `mirror` | primary 仍是 local；commit 後同步 mirror tables 到 Neon 並驗 parity |
+| `cloud` | Cloud Daily Run / dashboard 使用 Neon；scheduled policy 由 `daily_run.py` 控制 |
 
-這個 compose 設定會：
+建議：
 
-- 讓 `dashboard` service 讀取本機 `output/`，直接顯示最新的 `output/ai_report_YYYYMMDD.json`
-- 把 `POSTGRES_HOST` / `POSTGRES_*` 傳進容器，由 app 用 SQLAlchemy 安全組出 `DATABASE_URL`
-- 使用 `.env` 裡的 `POSTGRES_USER` / `POSTGRES_PASSWORD`
-- 避免密碼含 `@`、`:` 這類字元時把 PostgreSQL URI 拼壞
-
-常用指令：
-
-```bash
-docker compose build dashboard
-docker compose down
-```
-
-預設 dashboard 網址仍是 `http://127.0.0.1:8765`。
-
-## 自訂賽事目標
-
-預設訓練目標與限制放在 `prompts/goal.md`。直接執行
-`python run_pipeline.py` 會使用這份檔案；如果透過 CLI 傳入目標或訓練
-偏好，只會暫時覆蓋 prompt context，不會改寫 `prompts/goal.md`。
-
-常用參數：
-
-- `--activity-limit`: AI coach 最後分析幾筆近期活動，預設 75。
-- `--fetch-limit`: 同步 Garmin 時最多往前抓幾筆活動；未指定時等於 `--activity-limit`。
-- `--core-goal`: 賽事距離、日期、目標成績與目前訓練重點。
-- `--core-goal-file`: 從 markdown/text 檔讀取核心目標。
-- `--training-preferences`: 每週訓練頻率、休息日、交叉訓練、傷痛史與排課限制。
-- `--training-preferences-file`: 從 markdown/text 檔讀取訓練偏好與限制。
+- app connection：`NEON_DATABASE_URL`（pooler）
+- migration / sync / parity：`NEON_DATABASE_DIRECT_URL`（direct）
 
 範例：
 
-```bash
-python run_pipeline.py \
-  --core-goal "半馬，2026-12-13，目標 1:45，現在重點是穩定有氧與長跑" \
-  --training-preferences "每週跑 4 天、休息 2 天、週三游泳、週五重訓，避免重訓隔天排跑步強度"
+```text
+DATABASE_MODE=local
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=your_local_password
+DATABASE_URL=postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@localhost:5432/ai_running_coach
+LOCAL_DATABASE_URL=postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@localhost:5432/ai_running_coach
+NEON_DATABASE_URL=postgresql+psycopg://<user>:<password>@<pooler-host>/<db>?sslmode=require
+NEON_DATABASE_DIRECT_URL=postgresql+psycopg://<user>:<password>@<direct-host>/<db>?sslmode=require
+TEST_DATABASE_URL=postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@localhost:5432/ai_running_coach_test
 ```
 
-如果內容較長，可以先寫成本機檔案：
+### 本機 DB
 
 ```bash
-python run_pipeline.py \
-  --core-goal-file my_goal.md \
-  --training-preferences-file my_training_limits.md
+docker compose up -d postgres
+alembic upgrade head
 ```
 
-## 資料流程
+### 對 Neon migration
+
+```bash
+DATABASE_MIGRATION_TARGET=cloud alembic upgrade head
+```
+
+Cloud Daily Run 自己會在 preflight 用 Alembic Python interface 跑 `upgrade head`，不再依賴 shell script + `GITHUB_ENV` 傳 mode。
+
+### Local → Mirror → Cloud
 
 ```text
-Garmin Connect
-    ↓
-src/ingestion/garmin_client.py
-    ↓
-src/preprocessing/data_processor.py
-    ↓
-src/preprocessing/coach_context.py
-    ├─────────────────────────────┐
-    ↓                             ↓
-src/agents/coach.py      src/notifications/
-    ↓                             ↓
-output/ai_report_YYYYMMDD.json  LINE Group Push Notification
-    ↓
-dashboard/
+DATABASE_MODE=local
+        ↓
+DATABASE_MODE=mirror
+        ↓
+DATABASE_MODE=cloud
 ```
 
-## 本機分析與 raw-only fetch
+第一次同步：
 
-如果想分析既有本機 Garmin raw/user JSON、不重新抓 Garmin，也不跑 DB
-import/sync，可以使用支援的 local report CLI：
+```bash
+DATABASE_MIGRATION_TARGET=cloud alembic upgrade head
+python -m src.scripts.sync_database_targets --source local --target cloud
+```
+
+只驗 parity：
+
+```bash
+python -m src.scripts.sync_database_targets \
+  --source local \
+  --target cloud \
+  --validate-only
+```
+
+DB schema 採 hybrid design：常查詢欄位用 SQL columns，Garmin 易變 metrics 用 JSONB，完整 raw payload 留存供後續 feature engineering / replay。
+
+## LINE notification
+
+Cloud Daily Run 的 notification lifecycle：
+
+```text
+persistent dedup
+    ↓
+advisory lock
+    ↓
+format / send LINE
+    ↓
+record notification
+```
+
+如果 runtime persistence loss：
+
+- Neon gate 立即 revoke。
+- 同一個 run 不 reconnect。
+- 已成功送出但 record 失敗的 activity 不會在同一 run 重送。
+- 該 activity 會消耗一個 stateless loss slot。
+- 後續 stateless delivery 受 loss budget 限制。
+- 未來 run 在 persistence 仍不可用時，仍可能重複通知；這是目前接受的 tradeoff。
+
+## 本機 replay / raw-only fetch
+
+只用既有 Garmin JSON 重跑 report：
 
 ```bash
 .venv/bin/python -m src.scripts.generate_local_report \
@@ -253,242 +296,118 @@ import/sync，可以使用支援的 local report CLI：
   --report-date 20260510
 ```
 
-這條路徑不會呼叫 Garmin API，也不會讀寫 PostgreSQL 或觸發 DB import/sync。
-它會在本機重新產生 processed CSV、deterministic coach context 與
-`output/ai_report_YYYYMMDD.json`。若報告已存在，預設會拒絕覆寫；加
-`--force` 才會覆寫既有 `ai_report_YYYYMMDD.json`。`--activity-limit`
-控制送進分析的 raw activities 數量，預設是 75。
+這條路徑不重新呼叫 Garmin，也不讀寫 PostgreSQL；但仍會呼叫 Gemini / Vertex AI。
 
-注意：這仍會呼叫 Gemini/Vertex LLM。送出的 prompt 會包含處理後活動資料、
-deterministic context，以及完整 user JSON payload。
-
-如果想先抓大量 raw Garmin 檔案、不跑 preprocessing 與 AI coach：
+只抓 raw Garmin：
 
 ```bash
 python -m src.scripts.fetch_garmin_raw --limit 999
 ```
 
-若要抓完後直接匯入 PostgreSQL：
+抓完直接 import DB：
 
 ```bash
 python -m src.scripts.fetch_garmin_raw --limit 999 --import-db
 ```
 
-Garmin login API 很容易先顯示兩次 `429` rate limit 訊息，之後才繼續
-做事。看到 `429` 後請先等 3-8 分鐘再判斷是否真的卡住，避免一直重跑
-造成更嚴格限流。
+Garmin Connect 可能有 rate limit；遇到 `429` 時不要快速連續重跑。
 
-## 進階：PostgreSQL（選用）
+## Docker
 
-手動 `python run_pipeline.py` 會優先嘗試 DB：先查 PostgreSQL 中最新
-活動日期，再向 Garmin 補抓該日期之後的 `running`、`lap_swimming`、
-`cycling` 活動，靠 `garmin_activity_id` upsert 避免重複。user profile
-匯入時也會保存每日靜止心率；同一天已有資料時採較低值，coach context
-會取最近一筆可用靜止心率。若 DB 無法連線，手動流程會 fallback 成直接
-從 Garmin 抓近期活動並輸出檔案；這個 fallback 不屬於 Cloud Daily Run
-的 Degraded mode 或 Persistence-loss mode。
-
-啟動本機 PostgreSQL：
+Dashboard + PostgreSQL：
 
 ```bash
-docker compose up -d postgres
+docker compose up -d postgres dashboard
 ```
 
-執行 migration：
+常用：
 
 ```bash
-alembic upgrade head
+docker compose build dashboard
+docker compose down
 ```
-
-若要對 Neon 跑 migration，改用：
-
-```bash
-DATABASE_MIGRATION_TARGET=cloud alembic upgrade head
-```
-
-匯入既有本機 Garmin artifacts：
-
-```bash
-python -m src.scripts.import_garmin_files \
-  --user-file data/raw/garmin_user_20260510.json \
-  --raw-file data/raw/garmin_raw_20260510.json \
-  --processed-file data/processed/processed_20260510.csv
-```
-
-目前 DB schema 採 hybrid design：
-
-- 穩定且常查詢的欄位放 SQL columns，例如距離、時間、配速、速度、心率、功率與訓練負荷。
-- Garmin 可能變動或不固定的 metrics 放 JSONB，例如 `raw_metrics`、split `metrics` 與 `raw_profile`。
-- 完整 raw payload 保留在 `activities.raw_json` 與 `user_profile_snapshots.raw_profile`，方便重跑 feature engineering。
-
-### Local → Neon 並行 → Cloud 切換
-
-推薦流程：
-
-1. 先維持本地為主：
-
-```text
-DATABASE_MODE=local
-```
-
-2. 對 Neon 建 schema，並把既有本地資料同步到雲端：
-
-```bash
-DATABASE_MIGRATION_TARGET=cloud alembic upgrade head
-python -m src.scripts.sync_database_targets --source local --target cloud
-```
-
-如果 Neon 先前已經被手動匯入、而且 primary keys 可能和 local 不一致，請先清掉那批 divergent data 或重建空的 branch / database，再做第一次 sync。同步前置檢查會在 `users`、`activities` 偵測到同 logical key 但不同 PK 時直接拒絕繼續，避免 half-broken merge。
-
-3. 驗證沒問題後切成並行模式。此時 pipeline / import scripts 會先寫 local，再把 mirror tables sync 到 Neon，並輸出 `shadow_parity`：
-
-```text
-DATABASE_MODE=mirror
-```
-
-4. 觀察一段時間後正式 cutover：
-
-```text
-DATABASE_MODE=cloud
-```
-
-切到 `cloud` 後：
-
-- app / pipeline / dashboard 讀寫走 `NEON_DATABASE_URL`
-- Alembic 仍建議用 `DATABASE_MIGRATION_TARGET=cloud`，讓 migration 走 `NEON_DATABASE_DIRECT_URL`
-- parity 會比對 table row count 與 full-row content digest，避免只看筆數造成假陽性
-- 如需再次比對，可跑：
-
-```bash
-python -m src.scripts.sync_database_targets --source local --target cloud --validate-only
-```
-
-建立 test database 後可以跑 DB tests：
-
-```bash
-docker compose exec postgres sh -c 'createdb -U "$POSTGRES_USER" ai_running_coach_test || true'
-
-python3 -m pytest -q tests/test_db_importer.py tests/test_db_repositories.py
-```
-
-也可以用 test profile 一次啟動 PostgreSQL、建立 test DB、執行 migration
-並跑 DB tests：
-
-```bash
-docker compose --profile test up --abort-on-container-exit --exit-code-from db-tests db-tests
-```
-
-DB tests 會拒絕 `TEST_DATABASE_URL` 等於 `DATABASE_URL` 或 database
-名稱不含 `test` 的連線，並只在 temporary schema 內建表，避免誤清主 DB。
-沒有 test database 或缺少 `TEST_DATABASE_URL` / `TEST_POSTGRES_*` 設定時，
-DB tests 會以環境缺失 skip；連到主 DB 或非 test DB 時，則屬安全防呆 skip。
-
-這兩條路徑（pytest DB fixtures 與 `tests/scripts/ensure_test_database.py`）
-共用同一份拒絕規則，集中在 `tests/db_settings.py` 的
-`require_safe_test_database_url_or_skip()` 與 `test_database_refusal_reason()`。
-任何改變 safety 行為的修改，只需改這一處。
-
-## 專案結構
-
-| 路徑 | 角色 |
-| --- | --- |
-| `run_pipeline.py` | local / mirror 手動 CLI，可自訂 activity / fetch limits。 |
-| `src/scripts/run_daily_pipeline.py` | cloud-scheduled Daily Run CLI；只接受 goal / training overrides。 |
-| `src/pipeline/daily_run.py` | Daily Run 深 module：migration preflight、三態轉移、固定 Activity window、Neon 撤銷與通知政策。 |
-| `src/pipeline/runner.py` | 主流程 orchestration：timestamp、payload provider、preprocessing、deterministic context、Gemini 分析與 artifact persistence。 |
-| `src/pipeline/activity_payloads.py` | DB/Garmin 活動 payload provider，集中 DB-backed load/fetch/sync 與 fallback policy。 |
-| `src/services/artifacts.py` | 統一本機 artifacts 寫入規則，包含 raw/user JSON、processed CSV、coach context 與 AI report。 |
-| `src/services/db_importer.py` | 將 Garmin raw/user/processed 檔案匯入 PostgreSQL。 |
-| `src/services/garmin_import_service.py` | CLI 共用的 Garmin artifact import use case，包含 commit boundary 與 mirror sync。 |
-| `src/ingestion/garmin_client.py` | Garmin 登入、retry/backoff、profile/PR、活動詳細資料與分圈抓取。 |
-| `src/ingestion/garmin_parsers.py` | Garmin payload 的純格式化與巢狀欄位/zone parsing helper。 |
-| `src/preprocessing/activity_policy.py` | 跨 ingestion / preprocessing / import 共用的活動過濾政策。 |
-| `src/preprocessing/data_processor.py` | 正規化活動、配速/速度、進階活動指標與效率摘要。 |
-| `src/preprocessing/coach_context.py` | 建立 deterministic coach context，並覆寫 AI report 中必須可信的 derived fields。 |
-| `src/preprocessing/coach_context_zones.py` | 心率/功率 time-in-zone 分佈的 deterministic builder。 |
-| `src/agents/coach.py` | 組合 coach prompt、呼叫 Gemini、解析 JSON report 與本機分析模式。 |
-| `src/notifications/` | LINE Push Notification 客戶端、訊息格式化器、PostgreSQL Advisory Lock 與發送協調器。 |
-| `src/dashboard/server.py` | 本機 dashboard static server 與 read-only report API。 |
-| `dashboard/` | 無 build step 的 dashboard 前端。 |
-| `src/db/` | SQLAlchemy 2.0 models、DB settings/session、mapper/repository layer；`sync.py` 是 local/cloud sync facade，copy/conflict 與 snapshot/compare internals 分別在 `sync_copy.py`、`sync_compare.py`。 |
-| `src/scripts/` | raw-only fetch 與 DB import CLI。 |
-| `alembic/` | PostgreSQL migration。 |
-| `prompts/coach.md` | 主要 AI coach prompt。 |
-| `prompts/goal.md` | 預設賽事目標與訓練限制。 |
-| `docs/dashboard.md` | Dashboard 資訊架構、欄位對應與 adapter 規則。 |
-| `ai/` | AI coding workflow、reviewer、QA、security、dashboard 與 skills 的 canonical instructions（見 [`ai/README.md`](ai/README.md)）。 |
-| `.cursor/`、`.github/`、`.codex/` | 各編輯器／Copilot 的薄 adapter，指向 `ai/`。 |
-| `AGENTS.md`、`CLAUDE.md`、`.windsurfrules`、`GEMINI.md` | Cursor、Claude Code、Windsurf、Gemini 的根目錄入口，同樣指向 `ai/`。 |
-
-## 重構狀態與下一階段
-
-目前架構重構先完成低風險的「邊界抽出」：package import root 統一到
-`src.*`，Garmin parser、短騎乘過濾政策、artifact IO、CLI import use case、
-DB settings、DB sync target engine/copy/compare internals、coach context zone
-builder、runner payload provider、mapper/repository boundary 都已從大型 orchestration 檔案中拆出。
-公開入口與 JSON/DB 行為維持相容，舊測試仍保留。
-
-下一階段建議按小批次繼續拆，不要一次重構整個 repository：
-
-1. ~~Test DB guard：集中 `TEST_DATABASE_URL` safety validation，保留拒絕主 DB 與
-   非 test DB 的防呆。~~ ✅ 已完成（`tests/db_settings.py` 集中 guard，
-   `ensure_test_database.py` 與 pytest fixtures 共用同一套拒絕規則）
-
-每批都應先跑對應 targeted tests，再交 reviewer 檢查 changed code；QA 只補測試缺口
-與 full regression，避免 reviewer / QA 重複跑同一組測試。
-
-## AI 設定來源
-
-AI agent / skill 設定以 [`ai/README.md`](ai/README.md) 為單一來源，`.codex/`、
-`.cursor/`、`.github/`、[`AGENTS.md`](AGENTS.md)、[`CLAUDE.md`](CLAUDE.md)、
-[`GEMINI.md`](GEMINI.md) 都只做薄適配。預設回覆壓縮風格由
-[`ai/skills/token-decrease/SKILL.md`](ai/skills/token-decrease/SKILL.md) 定義。
 
 ## 測試
 
-一般 unit tests 不會呼叫真實 Garmin API。README 核心測試：
+Core regression：
 
 ```bash
 ./scripts/test_core.sh
 ```
 
-它實際執行的是：
+完整 pytest：
 
 ```bash
-python3 -m pytest -q \
-  tests/test_data_processor.py \
-  tests/test_qa_data_processor.py \
-  tests/test_garmin_client_details.py \
-  tests/test_garmin_client_activity_types.py \
-  tests/test_fetch_garmin_raw.py \
-  tests/test_daily_run.py \
-  tests/test_run_daily_pipeline.py \
-  tests/test_goal_prompt.py \
-  tests/test_runner.py \
-  tests/test_coach.py \
-  tests/test_coach_context.py \
-  tests/test_dashboard_adapter.py \
-  tests/test_dashboard_server.py
+python -m pytest -q
 ```
 
-GitHub Actions 會在 PostgreSQL service 上執行 migration，並讓 DB tests 帶
-`TEST_DATABASE_URL` 必跑；dashboard adapter tests 會優先用 Node.js 執行，
-本機 macOS 仍可 fallback 到 `osascript`。
+DB test profile：
 
-手動 Garmin smoke test 會呼叫真實 Garmin API，且需要本機 credentials：
+```bash
+docker compose --profile test up \
+  --abort-on-container-exit \
+  --exit-code-from db-tests \
+  db-tests
+```
+
+測試原則：
+
+- 一般 unit tests 不呼叫真實 Garmin API。
+- test DB guard 會拒絕 primary DB / 非 test database。
+- Cloud Daily Run tests 驗 migration retry、state transition、Neon revoke、75/10 activity window、stateless notification 與 secret-safe errors。
+- CI 使用 PostgreSQL service 跑 migration + core + DB tests。
+
+真實 Garmin smoke test：
 
 ```bash
 python tests/scripts/garmin_client_smoke.py
 ```
 
+## 專案結構
+
+| 路徑 | 角色 |
+| --- | --- |
+| `run_pipeline.py` | local / mirror 手動 CLI |
+| `src/scripts/run_daily_pipeline.py` | cloud-scheduled Daily Run CLI |
+| `src/pipeline/daily_run.py` | Cloud Daily Run policy、migration preflight、state machine、Neon gate |
+| `src/pipeline/runner.py` | deterministic / AI pipeline orchestration |
+| `src/pipeline/activity_payloads.py` | DB / Garmin payload acquisition、sync 與 fallback |
+| `src/preprocessing/coach_context.py` | deterministic coach context |
+| `src/agents/coach.py` | Gemini provider、retry、JSON parsing |
+| `src/services/report_generator.py` | lazy AI boundary + deterministic report enforcement |
+| `src/notifications/` | LINE formatting、delivery、dedup、advisory lock |
+| `src/db/` | SQLAlchemy models、repositories、sessions、sync |
+| `src/dashboard/server.py` | read-only Dashboard server |
+| `dashboard/` | 無 build step 的 Dashboard frontend |
+| `alembic/` | PostgreSQL migrations |
+| `prompts/coach.md` | coach prompt |
+| `prompts/goal.md` | default goal / training constraints |
+| `docs/adr/` | architecture decisions |
+| `ai/` | AI coding workflow canonical instructions |
+
+## Architecture notes
+
+目前已完成的幾個主要邊界：
+
+- Garmin parsing / activity policy 與 orchestration 分離。
+- artifact persistence 集中到 service boundary。
+- deterministic coach context 與 Gemini generation 分離。
+- DB settings / repository / sync target responsibilities 分離。
+- Cloud Daily Run policy 集中 migration、run state、activity window、Neon capability 與 notification transition。
+- manual local/mirror pipeline 與 cloud scheduled pipeline 明確分開。
+
+下一步若要繼續深化，優先考慮：
+
+1. deterministic session facts 的 end-to-end ownership。
+2. notification render / pagination / delivery lifecycle 再集中。
+3. Activity window normalization，但必須保留 Garmin raw quirks，不做過度 heuristic 修正。
+
 ## AI Agent 工作流
 
-這個 repo 以 `ai/` 作為 AI coding instructions 的單一來源；各工具目錄
-只放薄 adapter，**請在 `ai/` 維護規則，不要複製 workflow 正文**。
+AI coding instructions 以 [`ai/README.md`](ai/README.md) 為單一來源。
 
 | 工具 | 入口 |
 | --- | --- |
-| 維護與新增 skill/agent | [`ai/README.md`](ai/README.md) |
 | Cursor | [`.cursor/README-agents.md`](.cursor/README-agents.md)、[`AGENTS.md`](AGENTS.md) |
 | GitHub Copilot | [`.github/README-agents.md`](.github/README-agents.md) |
 | Codex | [`.codex/README-agents.md`](.codex/README-agents.md) |
@@ -496,32 +415,16 @@ python tests/scripts/garmin_client_smoke.py
 | Claude Code | [`CLAUDE.md`](CLAUDE.md) |
 | Windsurf | [`.windsurfrules`](.windsurfrules) |
 
-Canonical 文件：`ai/shared/instructions.md`（workflow）、
-`reviewer` / `qa` / `security` / `uiux`（UI/UX 審查）agent，以及
-`ai/skills/` 下的 `python-review-qa-loop`、`git-change-conventions`、
-`readme-pm-review`。
+Canonical workflow / reviewer / QA / security / skills 都維護在 `ai/`，不要把相同規則複製到各 adapter。
 
-### 選用：Chrome DevTools MCP
+## 目前限制
 
-若要讓 AI agent 更順地檢查 dashboard UI，可在本機 agent runtime
-設定 Chrome DevTools MCP。這是 contributor DX 工具，不是執行主流程的必要條件。
+- Garmin API 是非官方 integration surface，登入、MFA 與 rate limit 可能改變。
+- 部分 Garmin 指標依裝置 / activity type 而異，歷史活動可能缺欄位。
+- Dashboard 目前是 read-only report viewer。
+- Stateless notification 無 durable dedup，因此未來 run 可能重複發送。
+- 專案以單一跑者 / self-hosted workflow 為主，不提供 multi-tenant auth 或 public SaaS API。
 
-Codex 範例設定：
+## License
 
-```toml
-[mcp_servers.chrome-devtools]
-command = "npx"
-args = ["-y", "chrome-devtools-mcp@latest", "--channel", "stable", "--no-usage-statistics", "--no-performance-crux"]
-```
-
-設定後，AI agent 可用瀏覽器工具開啟 `http://127.0.0.1:8765/`、檢查
-console/network、截圖並輔助 dashboard QA。建議使用隔離或 automation
-profile，不要讓 MCP 工具檢查私人 Chrome session。更多 AI workflow
-細節見 [`ai/README.md`](ai/README.md)。
-
-## 注意事項
-
-- `.env`、`.venv/`、`data/`、`output/` 與 `.DS_Store` 已被 git ignore。
-- 不要把 Garmin 密碼、Gemini API key 或 PostgreSQL 密碼放進 tracked files。
-- 主要最終報告是 JSON；CSV 是 processed activity backup。
-- 設定 `GARMIN_DEBUG_ACTIVITY_DETAILS=1` 可以啟用活動 payload 除錯輸出。
+目前 repository 未另外聲明 license；使用或散布前請先確認專案授權方式。
