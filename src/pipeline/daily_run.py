@@ -348,6 +348,7 @@ def execute_daily_run(
         provider = ActivityPayloadProvider(
             session_factory=gate.session,
             database_available=gate.is_available,
+            preserve_activity_window_on_connection_loss=True,
             raw_data_dir=runner.RAW_DATA_DIR,
         )
         try:
