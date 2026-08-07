@@ -219,6 +219,29 @@ class ActivityPayloadProvider:
 
         return sorted(activities, key=sort_key, reverse=True)[:max(limit, 0)]
 
+    @classmethod
+    def _merge_activity_window(
+        cls,
+        existing_activities: List[Dict[str, Any]],
+        fetched_activities: List[Dict[str, Any]],
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        """Merge fresh Garmin updates into a previously materialized DB window."""
+        merged: List[Dict[str, Any]] = []
+        seen_activity_ids: set[Any] = set()
+        for activity in [*fetched_activities, *existing_activities]:
+            activity_id = activity.get("activity_id")
+            if activity_id is not None:
+                try:
+                    dedupe_key: Any = int(activity_id)
+                except (TypeError, ValueError):
+                    dedupe_key = str(activity_id)
+                if dedupe_key in seen_activity_ids:
+                    continue
+                seen_activity_ids.add(dedupe_key)
+            merged.append(activity)
+        return cls._limit_to_most_recent(merged, limit)
+
     def _load_existing_db_payloads(
         self,
         activity_limit: int,
@@ -240,11 +263,24 @@ class ActivityPayloadProvider:
 
         fetched_raw_activities: List[Dict[str, Any]] = []
         fetched_user_data: Dict[str, Any] = {}
+        existing_raw_activities: List[Dict[str, Any]] = []
+        existing_user_data: Dict[str, Any] = {}
         try:
             with self.session_factory() as session:
                 user = get_or_create_default_user(session)
                 latest_date = self._get_latest_activity_date(session, user.id)
                 fallback_max_heart_rate = get_recent_max_heart_rate(session, user.id)
+
+                # Materialize the selected DB-backed window before Garmin sync. If the
+                # sync later loses Neon, this snapshot can be merged with the already-
+                # fetched Garmin updates without a second DB read or a second API call.
+                existing_raw_activities = self._load_recent_raw_activities(
+                    session,
+                    user.id,
+                    limit=activity_limit,
+                )
+                existing_user_data = self._load_latest_user_data(session, user.id)
+
                 garmin_data = self._fetch_garmin_updates(
                     latest_date=latest_date,
                     fetch_limit=fetch_limit,
@@ -279,21 +315,16 @@ class ActivityPayloadProvider:
                     if not is_database_connection_error(read_exc):
                         raise
                     print(f"⚠️ Existing DB read failed: {type(read_exc).__name__}")
-                print(
-                    "⚠️ Using already-fetched Garmin payload for structured JSON output; "
-                    "not calling Garmin again."
-                )
-                return (
-                    self._limit_to_most_recent(fetched_raw_activities, activity_limit),
-                    fetched_user_data,
-                )
             if fetched_raw_activities or fetched_user_data:
+                raw_activities = self._merge_activity_window(
+                    existing_raw_activities,
+                    fetched_raw_activities,
+                    activity_limit,
+                )
+                user_data = {**existing_user_data, **fetched_user_data}
                 print(
-                    "⚠️ Using already-fetched Garmin payload for structured JSON output; "
-                    "not calling Garmin again."
+                    "⚠️ Using the materialized DB Activity window plus already-fetched "
+                    "Garmin updates; not calling Neon or Garmin again."
                 )
-                return (
-                    self._limit_to_most_recent(fetched_raw_activities, activity_limit),
-                    fetched_user_data,
-                )
+                return raw_activities, user_data
             return self._fetch_without_db(activity_limit=activity_limit, timestamp=timestamp)
