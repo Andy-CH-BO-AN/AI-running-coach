@@ -95,7 +95,11 @@ def _build_environment(activity: NormalizedActivity) -> CoachEnvironment:
 
 
 def _build_session(activity: NormalizedActivity) -> CoachSession:
-    distance = _round_or_none(activity.distance_km, 2)
+    distance = (
+        round(activity.distance_km, 2)
+        if activity.distance_km is not None
+        else None
+    )
     duration = _round_or_none(activity.duration_min, 1)
     load = _round_or_none(activity.training_load, 1)
     avg_hr = _round_or_none(activity.avg_hr_bpm, 0)

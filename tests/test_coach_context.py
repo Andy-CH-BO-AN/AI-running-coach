@@ -200,7 +200,7 @@ def test_builds_monday_week_buckets_and_derived_weekly_metrics():
     current_week = context["weekly_analysis"][0]
     assert current_week["week_start"] == "2026-05-11"
     assert current_week["week_end"] == "2026-05-17"
-    assert current_week["derived_total_distance_km"] == 6.13
+    assert current_week["derived_total_distance_km"] == 6.12
     assert current_week["derived_total_duration_min"] == 36.3
     assert current_week["derived_training_load"] == 42.3
     assert current_week["session_counts"] == {
@@ -213,6 +213,48 @@ def test_builds_monday_week_buckets_and_derived_weekly_metrics():
     assert "heat_stress" in current_week["risk_flags"]
     assert len(current_week["sessions"][0]["segments"]) == 1
     assert current_week["sessions"][0]["segments"][0]["stride_length_m"] == 1.12
+
+
+def test_distance_rounding_matches_processed_projection_before_aggregation():
+    activity_window = normalize_activity_window(
+        [
+            {
+                "activity_id": 103,
+                "type": "running",
+                "date": "2026-05-12",
+                "distance": 20.965,
+                "duration": 100,
+                "raw_data": {"training_stress_score": 50},
+            }
+        ]
+    )
+    processed_distance = activity_window.processed_data()[0]["distance_km"]
+    context = build_deterministic_coach_context(
+        activity_window=activity_window,
+        user_data=_sample_user_data(),
+        today="2026-05-14",
+    )
+
+    current_week = context["weekly_analysis"][0]
+    current_session = current_week["sessions"][0]
+    current_twelve_week = context["twelve_week_summary"][-1]
+    enforced = enforce_deterministic_report_fields(
+        {
+            "weekly_analysis": [
+                {"sessions": [{"activity_id": 103, "distance_km": 999}]}
+            ]
+        },
+        context,
+    )
+
+    assert processed_distance == 20.96
+    assert current_session["distance_km"] == processed_distance
+    assert current_week["derived_total_distance_km"] == processed_distance
+    assert current_twelve_week["derived_total_distance_km"] == processed_distance
+    assert (
+        enforced["weekly_analysis"][0]["sessions"][0]["distance_km"]
+        == processed_distance
+    )
 
 
 def test_hr_zones_are_sorted_and_percentages_are_deterministic():
