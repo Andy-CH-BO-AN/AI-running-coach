@@ -669,3 +669,13 @@ def test_workflow_uses_one_daily_python_command_without_ambient_mode_handoff():
     assert "python run_pipeline.py" not in workflow
     assert "DATABASE_AVAILABLE" not in workflow
     assert "GARMIN_ACTIVITY_LIMIT" not in workflow
+
+
+def test_cloud_configuration_does_not_hide_unexpected_programming_errors(monkeypatch):
+    def explode() -> str:
+        raise RuntimeError("unexpected validation bug")
+
+    monkeypatch.setattr(daily_run, "get_database_mode", explode)
+
+    with pytest.raises(RuntimeError, match="unexpected validation bug"):
+        daily_run._validate_cloud_configuration()
