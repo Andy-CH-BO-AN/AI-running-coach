@@ -5,6 +5,7 @@ import tempfile
 import types
 import unittest
 from datetime import date, datetime, timedelta
+from inspect import signature
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -232,6 +233,93 @@ class RunnerTests(unittest.TestCase):
         fallback.assert_not_called()
         self.assertEqual(raw_activities, garmin_payload["activities"])
         self.assertEqual(user_data, garmin_payload["user_data"])
+
+    def test_load_or_fetch_preserves_materialized_window_after_connection_loss(self):
+        class FakeSessionContext:
+            def __enter__(self):
+                return Mock()
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+        available = {"value": True}
+        existing = [
+            {"activity_id": activity_id, "date": "2026-08-01"}
+            for activity_id in range(1, 76)
+        ]
+        fetched = {
+            "activities": [{"activity_id": 100, "date": "2026-08-01"}],
+            "user_data": {"source": "garmin", "max_heart_rate": 210},
+        }
+        provider = ActivityPayloadProvider(
+            session_factory=lambda: FakeSessionContext(),
+            database_available=lambda: available["value"],
+            preserve_activity_window_on_connection_loss=True,
+        )
+
+        def fail_sync(*_args, **_kwargs):
+            available["value"] = False
+            raise _connection_error()
+
+        with patch.object(
+            activity_payloads,
+            "get_or_create_default_user",
+            return_value=types.SimpleNamespace(id="user-1"),
+        ), patch.object(
+            activity_payloads,
+            "get_recent_max_heart_rate",
+            return_value=190,
+        ), patch.object(
+            provider,
+            "_get_latest_activity_date",
+            return_value=date(2026, 8, 1),
+        ), patch.object(
+            provider,
+            "_load_recent_raw_activities",
+            return_value=list(existing),
+        ), patch.object(
+            provider,
+            "_load_latest_user_data",
+            return_value={"resting_heart_rate": 45, "source": "db"},
+        ), patch.object(
+            provider,
+            "_fetch_garmin_updates",
+            return_value=fetched,
+        ) as fetch_updates, patch.object(
+            provider,
+            "_sync_garmin_to_db",
+            side_effect=fail_sync,
+        ), patch.object(
+            provider,
+            "_load_existing_db_payloads",
+            side_effect=AssertionError("Persistence-loss must not reopen the database"),
+        ) as second_db_read, patch.object(
+            provider,
+            "_fetch_without_db",
+            side_effect=AssertionError("Already-fetched Garmin updates must be reused"),
+        ) as direct_fetch:
+            raw_activities, user_data = provider.load_or_fetch(
+                activity_limit=75,
+                fetch_limit=75,
+                timestamp="20260807",
+            )
+
+        ids = [activity["activity_id"] for activity in raw_activities]
+        self.assertEqual(len(ids), 75)
+        self.assertEqual(ids[0], 100)
+        self.assertNotIn(1, ids)
+        self.assertEqual(set(ids[1:]), set(range(2, 76)))
+        self.assertEqual(
+            user_data,
+            {
+                "resting_heart_rate": 45,
+                "source": "garmin",
+                "max_heart_rate": 210,
+            },
+        )
+        fetch_updates.assert_called_once()
+        second_db_read.assert_not_called()
+        direct_fetch.assert_not_called()
 
     def test_load_or_fetch_falls_back_to_direct_fetch_when_db_fails_before_fetch(self):
         class FakeSessionContext:
@@ -582,6 +670,26 @@ class RunnerTests(unittest.TestCase):
         _, coach_kwargs = coach_mock.call_args
         self.assertEqual(coach_kwargs["goal_path"], str(goal_path))
         self.assertIn("* 每週最多 5 天訓練", coach_kwargs["goal_text"])
+
+    def test_lazy_coach_wrapper_keeps_explicit_public_signature(self):
+        parameters = signature(report_generator.coach).parameters
+
+        self.assertEqual(
+            list(parameters),
+            [
+                "data",
+                "user_data",
+                "deterministic_context",
+                "goal_path",
+                "goal_text",
+            ],
+        )
+        self.assertTrue(
+            all(parameter.kind.name != "VAR_KEYWORD" for parameter in parameters.values())
+        )
+        self.assertTrue(
+            all(parameter.kind.name != "VAR_POSITIONAL" for parameter in parameters.values())
+        )
 
     def test_fetch_without_db_persists_raw_artifacts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
