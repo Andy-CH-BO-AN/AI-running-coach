@@ -23,6 +23,11 @@ owns eligibility filtering, canonical Activity identity, source interpretation, 
 conversion exactly once; it never chooses the run mode, limit, or ordering.
 _Avoid_: history, activity backlog
 
+**Session facts**:
+The deterministic coaching representation of one Activity. AI coaching notes are
+annotations on Session facts; they never replace or reorder the underlying facts.
+_Avoid_: AI session, inferred workout
+
 **Stateless notification**:
 LINE notification sent without Neon-backed deduplication. A sent-but-unrecorded notification counts toward the current run's stateless limit and may repeat on a later run.
 _Avoid_: durable notification, exactly-once notification

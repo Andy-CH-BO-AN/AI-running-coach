@@ -25,6 +25,20 @@ SESSION_OUTPUT_KEYS = {
     "environment",
     "coaching_note",
 }
+SESSION_CONTEXT_KEYS = SESSION_OUTPUT_KEYS | {"data_quality"}
+SEGMENT_CONTEXT_BASE_KEYS = {
+    "segment_type",
+    "split_index",
+    "distance_km",
+    "duration_min",
+    "avg_pace",
+    "speed_kmh",
+    "avg_hr",
+    "temperature_c",
+    "note",
+}
+SEGMENT_OUTPUT_BASE_KEYS = SEGMENT_CONTEXT_BASE_KEYS - {"temperature_c"}
+RUNNING_SEGMENT_KEYS = {"cadence", "stride_length_m"}
 
 WEEKLY_TOTAL_KEYS = {
     "total_distance_km",
@@ -159,6 +173,14 @@ def test_processed_to_deterministic_context_contract():
     assert all("type" not in session for session in current_week["sessions"])
     assert "heat_stress" in current_week["risk_flags"]
     assert current_week["sessions"][0]["activity_id"] == 9001
+    assert set(current_week["sessions"][0]) == SESSION_CONTEXT_KEYS
+    assert set(current_week["sessions"][1]) == SESSION_CONTEXT_KEYS
+    assert set(current_week["sessions"][0]["segments"][0]) == (
+        SEGMENT_CONTEXT_BASE_KEYS | RUNNING_SEGMENT_KEYS
+    )
+    assert set(current_week["sessions"][1]["segments"][0]) == (
+        SEGMENT_CONTEXT_BASE_KEYS
+    )
     assert current_week["sessions"][0]["segments"][0]["avg_pace"] == "5:00"
     assert current_week["sessions"][0]["segments"][0]["stride_length_m"] == 1.12
     assert current_week["sessions"][1]["segments"][0]["speed_kmh"] == 20.0
@@ -246,6 +268,11 @@ def test_enforced_report_preserves_dashboard_json_contract():
     assert current_week["key_observation"] == "Keep AI observation"
     assert [session["activity_id"] for session in current_week["sessions"]] == [9001, 9002]
     assert set(current_week["sessions"][0]) == SESSION_OUTPUT_KEYS
+    assert set(current_week["sessions"][0]["segments"][0]) == (
+        SEGMENT_OUTPUT_BASE_KEYS | RUNNING_SEGMENT_KEYS
+    )
+    assert "data_quality" not in current_week["sessions"][0]
+    assert "temperature_c" not in current_week["sessions"][0]["segments"][0]
     assert current_week["sessions"][1]["coaching_note"] == "Keep bike note"
     assert "cadence" not in current_week["sessions"][1]["segments"][0]
     assert "stride_length_m" not in current_week["sessions"][1]["segments"][0]
@@ -319,6 +346,18 @@ def test_swimming_timing_contract_survives_preprocessing_and_enforcement():
     )
     session = context["weekly_analysis"][0]["sessions"][0]
 
+    swim_session_keys = {
+        "elapsed_duration_min",
+        "swim_duration_min",
+        "rest_duration_min",
+        "swim_pace_seconds_per_100m",
+        "elapsed_pace_seconds_per_100m",
+    }
+    assert set(session) == SESSION_CONTEXT_KEYS | swim_session_keys
+    assert set(session["segments"][1]) == (
+        SEGMENT_CONTEXT_BASE_KEYS | {"elapsed_duration_min"}
+    )
+
     assert [segment["segment_type"] for segment in session["segments"]] == ["lap", "rest", "lap"]
     assert session["elapsed_duration_min"] == 5.5
     assert session["swim_duration_min"] == 4.75
@@ -344,6 +383,10 @@ def test_swimming_timing_contract_survives_preprocessing_and_enforcement():
         context,
     )
     enforced = report["weekly_analysis"][0]["sessions"][0]
+    assert set(enforced) == SESSION_OUTPUT_KEYS | swim_session_keys
+    assert set(enforced["segments"][1]) == (
+        SEGMENT_OUTPUT_BASE_KEYS | {"elapsed_duration_min"}
+    )
     assert enforced["elapsed_duration_min"] == 5.5
     assert enforced["swim_duration_min"] == 4.75
     assert enforced["rest_duration_min"] == 0.5083
