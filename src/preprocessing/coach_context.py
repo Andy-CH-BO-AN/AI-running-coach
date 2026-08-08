@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
+from src.preprocessing.activity_window import ActivityWindow, NormalizedActivity
 from src.preprocessing.coach_context_types import (
-    CoachSession,
     DeterministicCoachContext,
     HrZoneDistribution,
 )
 from src.preprocessing.coach_context_utils import (
-    _normalize_activity_id,
+    _parse_date,
     _resolve_today,
     _round_or_none,
 )
@@ -19,11 +19,7 @@ from src.preprocessing.coach_context_athlete_metrics import (
     _build_running_mechanics,
 )
 from src.preprocessing.coach_context_enforcement import enforce_deterministic_report_fields
-from src.preprocessing.coach_context_sessions import (
-    _build_raw_lookup,
-    _build_session,
-    _get_any,
-)
+from src.preprocessing.coach_context_sessions import _build_session
 from src.preprocessing.coach_context_weekly import (
     _build_12week_summary,
     _build_evidence_facts,
@@ -51,60 +47,65 @@ POWER_ZONE_NAMES = {
 
 
 def _build_hr_zone_distribution(
-    sessions: Sequence[CoachSession],
-    processed_by_id: Dict[str, Dict[str, Any]],
+    activities: Sequence[NormalizedActivity],
 ) -> HrZoneDistribution:
     return build_time_in_zone_distribution(
-        sessions,
-        processed_by_id,
+        activities,
         metric_base="hr",
         zone_names=ZONE_NAMES,
-        get_any=_get_any,
         include_polarized=True,
     )
 
 
 def _build_power_zone_distribution(
-    sessions: Sequence[CoachSession],
-    processed_by_id: Dict[str, Dict[str, Any]],
+    activities: Sequence[NormalizedActivity],
 ) -> Dict[str, Any]:
     return build_time_in_zone_distribution(
-        sessions,
-        processed_by_id,
+        activities,
         metric_base="power",
         zone_names=POWER_ZONE_NAMES,
-        get_any=_get_any,
+    )
+
+
+def _activities_in_analysis_weeks(
+    activities: Sequence[NormalizedActivity],
+    weekly_analysis: Sequence[Dict[str, Any]],
+) -> tuple[NormalizedActivity, ...]:
+    if not weekly_analysis:
+        return ()
+    period_start = _parse_date(weekly_analysis[-1].get("week_start"))
+    period_end = _parse_date(weekly_analysis[0].get("week_end"))
+    if period_start is None or period_end is None:
+        return ()
+    return tuple(
+        activity
+        for activity in activities
+        if (activity_date := _parse_date(activity.date)) is not None
+        and period_start <= activity_date <= period_end
     )
 
 
 def build_deterministic_coach_context(
-    processed_data: List[Dict[str, Any]],
+    activity_window: ActivityWindow,
     user_data: Optional[Dict[str, Any]] = None,
-    raw_activities: Optional[List[Dict[str, Any]]] = None,
     today: Any = None,
 ) -> DeterministicCoachContext:
-    """Build deterministic coach context from local data before Gemini analysis."""
+    """Build deterministic coach context from one normalized Activity window."""
 
     user_data = user_data or {}
-    raw_lookup = _build_raw_lookup(raw_activities)
-    resolved_today = _resolve_today(today, processed_data)
+    resolved_today = _resolve_today(
+        today,
+        [{"date": activity.date} for activity in activity_window.activities],
+    )
 
-    sessions = [
-        _build_session(processed, raw_lookup=raw_lookup)
-        for processed in processed_data
-    ]
-    processed_by_id = {
-        _normalize_activity_id(processed.get("activity_id")): processed
-        for processed in processed_data
-    }
+    sessions = [_build_session(activity) for activity in activity_window.activities]
     weekly_analysis = _build_weekly_analysis(sessions, today=resolved_today)
-    four_week_sessions = [
-        session
-        for week in weekly_analysis
-        for session in week["sessions"]
-    ]
-    hr_zone_distribution = _build_hr_zone_distribution(four_week_sessions, processed_by_id)
-    power_zone_distribution = _build_power_zone_distribution(four_week_sessions, processed_by_id)
+    four_week_activities = _activities_in_analysis_weeks(
+        activity_window.activities,
+        weekly_analysis,
+    )
+    hr_zone_distribution = _build_hr_zone_distribution(four_week_activities)
+    power_zone_distribution = _build_power_zone_distribution(four_week_activities)
     load_assessment = _build_load_assessment(weekly_analysis)
 
     return {
@@ -141,8 +142,8 @@ def build_deterministic_coach_context(
         "weekly_analysis": weekly_analysis,
         "hr_zone_distribution": hr_zone_distribution,
         "power_zone_distribution": power_zone_distribution,
-        "running_mechanics": _build_running_mechanics(four_week_sessions, processed_by_id),
-        "cross_training": _build_cross_training(four_week_sessions, processed_by_id),
+        "running_mechanics": _build_running_mechanics(four_week_activities),
+        "cross_training": _build_cross_training(four_week_activities),
         "load_assessment": load_assessment,
         "next_week_plan_seed": _build_next_week_seed(resolved_today, user_data),
         "twelve_week_summary": _build_12week_summary(sessions, today=resolved_today),

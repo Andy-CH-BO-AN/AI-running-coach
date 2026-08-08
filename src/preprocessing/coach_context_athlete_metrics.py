@@ -2,16 +2,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence
 
+from src.preprocessing.activity_window import NormalizedActivity, NormalizedSegment
 from src.preprocessing.coach_context_utils import (
     _average,
     _format_pace_minutes,
     _format_pace_seconds,
     _get_any,
-    _normalize_activity_id,
     _parse_pace_seconds,
     _round_or_none,
     _safe_float,
-    _stride_length_to_meters,
     _weighted_average,
 )
 
@@ -119,46 +118,47 @@ def _build_physio_metrics(
     }
 
 
-def _is_active_running_segment(split: Dict[str, Any]) -> bool:
-    cadence = _safe_float(split.get("avg_cadence"))
+def _is_active_running_segment(split: NormalizedSegment) -> bool:
+    cadence = _safe_float(split.processed_avg_cadence_spm)
     return cadence is not None and cadence >= ACTIVE_RUNNING_CADENCE_MIN
 
 
-def _active_running_segments(records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    segments: List[Dict[str, Any]] = []
+def _active_running_segments(
+    records: Sequence[NormalizedActivity],
+) -> List[NormalizedSegment]:
+    segments: List[NormalizedSegment] = []
     for record in records:
-        splits = record.get("splits")
-        if not isinstance(splits, list):
-            continue
         segments.extend(
             split
-            for split in splits
-            if isinstance(split, dict) and _is_active_running_segment(split)
+            for split in record.segments
+            if _is_active_running_segment(split)
         )
     return segments
 
 
 def _metric_from_active_segments(
-    segments: Sequence[Dict[str, Any]],
+    segments: Sequence[NormalizedSegment],
     metric: str,
     digits: int = 1,
 ) -> Optional[float]:
     return _weighted_average(
         (
-            (split.get(metric), split.get("duration"))
+            (getattr(split, metric), split.duration_min)
             for split in segments
-            if _safe_float(split.get(metric)) is not None
+            if _safe_float(getattr(split, metric)) is not None
         ),
         digits=digits,
     )
 
 
-def _stride_from_active_segments(segments: Sequence[Dict[str, Any]]) -> Optional[float]:
+def _stride_from_active_segments(
+    segments: Sequence[NormalizedSegment],
+) -> Optional[float]:
     return _weighted_average(
         (
-            (_stride_length_to_meters(_safe_float(split.get("stride_length"))), split.get("duration"))
+            (split.stride_length_m, split.duration_min)
             for split in segments
-            if _safe_float(split.get("stride_length")) is not None
+            if _safe_float(split.stride_length_m) is not None
         ),
         digits=2,
     )
@@ -213,30 +213,39 @@ def _mechanics_tips(mechanics: Dict[str, Any]) -> List[str]:
     return tips[:3]
 
 
-def _build_running_mechanics(sessions: Sequence[Dict[str, Any]], processed_by_id: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+def _build_running_mechanics(
+    activities: Sequence[NormalizedActivity],
+) -> Dict[str, Any]:
     running_records = [
-        processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
-        for session in sessions
-        if session.get("source_activity_type") == "running"
+        activity
+        for activity in activities
+        if activity.activity_type == "running"
+    ]
+    processed_running_records = [
+        activity
+        for activity in running_records
+        if activity.processed_activity_type == "running"
     ]
     active_segments = _active_running_segments(running_records)
 
-    cadence = _metric_from_active_segments(active_segments, "avg_cadence", 1) or _average(
-        (_get_any(record, "advanced_metrics.avg_cadence") for record in running_records),
+    cadence = _metric_from_active_segments(active_segments, "processed_avg_cadence_spm", 1) or _average(
+        (record.processed_avg_cadence_spm for record in processed_running_records),
         1,
     )
-    ground_contact = _metric_from_active_segments(active_segments, "ground_contact_time", 1) or _average(
-        (_get_any(record, "advanced_metrics.ground_contact_time") for record in running_records),
+    ground_contact = _metric_from_active_segments(active_segments, "ground_contact_time_ms", 1) or _average(
+        (record.ground_contact_time_ms for record in processed_running_records),
         1,
     )
-    vertical_oscillation = _metric_from_active_segments(active_segments, "vertical_oscillation", 1) or _average(
-        (_get_any(record, "advanced_metrics.vertical_oscillation") for record in running_records),
+    vertical_oscillation = _metric_from_active_segments(active_segments, "vertical_oscillation_cm", 1) or _average(
+        (record.vertical_oscillation_cm for record in processed_running_records),
         1,
     )
     stride_length_m = _stride_from_active_segments(active_segments)
     if stride_length_m is None:
-        stride_length_cm = _average((_get_any(record, "advanced_metrics.stride_length") for record in running_records), 1)
-        stride_length_m = _round_or_none(_stride_length_to_meters(stride_length_cm), 2)
+        stride_length_m = _average(
+            (record.stride_length_m for record in processed_running_records),
+            2,
+        )
 
     score_inputs = [value for value in (cadence, ground_contact, vertical_oscillation, stride_length_m) if value is not None]
     economy_score = None
@@ -259,26 +268,58 @@ def _build_running_mechanics(sessions: Sequence[Dict[str, Any]], processed_by_id
     }
 
 
-def _build_cross_training(sessions: Sequence[Dict[str, Any]], processed_by_id: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+def _build_cross_training(
+    activities: Sequence[NormalizedActivity],
+) -> Dict[str, Any]:
     swim_records = [
-        processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
-        for session in sessions
-        if session.get("source_activity_type") in {"swimming", "lap_swimming"}
+        activity
+        for activity in activities
+        if activity.activity_type in {"swimming", "lap_swimming"}
     ]
     bike_records = [
-        processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
-        for session in sessions
-        if session.get("source_activity_type") == "cycling"
+        activity
+        for activity in activities
+        if activity.activity_type == "cycling"
+    ]
+    processed_swim_records = [
+        activity
+        for activity in swim_records
+        if activity.processed_activity_type == "swimming"
+    ]
+    processed_bike_records = [
+        activity
+        for activity in bike_records
+        if activity.processed_activity_type == "cycling"
     ]
     return {
         "swimming": {
             "sessions_count": len(swim_records),
-            "avg_swolf": _average((_get_any(record, "advanced_metrics.avg_swolf") for record in swim_records), 1),
-            "avg_stroke_rate": _average((_get_any(record, "advanced_metrics.avg_stroke_cadence") for record in swim_records), 1),
+            "avg_swolf": _average(
+                (
+                    record.avg_swolf
+                    for record in processed_swim_records
+                ),
+                1,
+            ),
+            "avg_stroke_rate": None,
         },
         "cycling": {
             "sessions_count": len(bike_records),
-            "avg_power_w": _average((_get_any(record, "advanced_metrics.power_avg") for record in bike_records), 0),
-            "avg_cadence": _average((_get_any(record, "advanced_metrics.avg_cadence") for record in bike_records), 1),
+            "avg_power_w": _average(
+                (
+                    record.power_avg_w
+                    if record.processed_power_avg_w is not None
+                    else None
+                    for record in processed_bike_records
+                ),
+                0,
+            ),
+            "avg_cadence": _average(
+                (
+                    record.processed_avg_cadence_spm
+                    for record in processed_bike_records
+                ),
+                1,
+            ),
         },
     }

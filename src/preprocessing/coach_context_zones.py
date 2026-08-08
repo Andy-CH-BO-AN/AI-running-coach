@@ -1,37 +1,33 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
+from src.preprocessing.activity_window import NormalizedActivity
 from src.preprocessing.coach_context_utils import (
-    _normalize_activity_id,
     _round_or_none,
-    _safe_float,
 )
 
 ZONE_RANGE = range(1, 6)
 
 
 def build_time_in_zone_distribution(
-    sessions: Sequence[dict[str, Any]],
-    processed_by_id: dict[str, dict[str, Any]],
+    activities: Sequence[NormalizedActivity],
     *,
     metric_base: str,
     zone_names: dict[int, str],
-    get_any: Callable[[dict[str, Any], str, str], Any],
     include_polarized: bool = False,
 ) -> dict[str, Any]:
     minutes_by_zone: dict[int, float] = {zone: 0.0 for zone in ZONE_RANGE}
-    for session in sessions:
-        processed = processed_by_id.get(_normalize_activity_id(session.get("activity_id")), {})
+    zone_seconds_by_activity = (
+        activity.hr_zone_seconds
+        if metric_base == "hr"
+        else activity.power_zone_seconds
+        for activity in activities
+        if activity.processed_has_advanced_metrics
+    )
+    for zone_seconds in zone_seconds_by_activity:
         for zone in ZONE_RANGE:
-            zone_seconds = _safe_float(
-                get_any(
-                    processed,
-                    f"advanced_metrics.{metric_base}_zones.{metric_base}_zone_{zone}",
-                    f"advanced_metrics.{metric_base}_zones.{metric_base}_zone_{zone}",
-                )
-            )
-            minutes_by_zone[zone] += (zone_seconds or 0.0) / 60
+            minutes_by_zone[zone] += (zone_seconds.get(zone) or 0.0) / 60
 
     total_minutes = sum(minutes_by_zone.values())
     percentages = {

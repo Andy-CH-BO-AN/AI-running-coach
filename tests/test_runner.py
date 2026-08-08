@@ -458,7 +458,7 @@ class RunnerTests(unittest.TestCase):
                 runner,
                 "_load_or_fetch_activity_payloads",
                 return_value=(raw_activities, {"max_heart_rate": 190}),
-            ) as load_payloads, patch.object(runner, "preprocess_data", return_value=[]):
+            ) as load_payloads:
                 report = runner.run_pipeline()
 
             self.assertIsNone(report)
@@ -473,7 +473,7 @@ class RunnerTests(unittest.TestCase):
             runner,
             "_load_or_fetch_activity_payloads",
             return_value=([], {"max_heart_rate": 190}),
-        ) as load_payloads, patch.object(runner, "preprocess_data") as preprocess_mock, patch.object(
+        ) as load_payloads, patch.object(runner, "normalize_activity_window") as normalize_mock, patch.object(
             runner, "_persist_pipeline_artifacts"
         ) as persist_mock:
             report = runner.run_pipeline()
@@ -484,7 +484,7 @@ class RunnerTests(unittest.TestCase):
             fetch_limit=75,
             timestamp="20260510",
         )
-        preprocess_mock.assert_not_called()
+        normalize_mock.assert_not_called()
         persist_mock.assert_not_called()
 
     def test_run_pipeline_defaults_fetch_limit_to_activity_limit(self):
@@ -494,7 +494,11 @@ class RunnerTests(unittest.TestCase):
             runner,
             "_load_or_fetch_activity_payloads",
             return_value=(raw_activities, {"max_heart_rate": 190}),
-        ) as load_payloads, patch.object(runner, "preprocess_data", return_value=[]):
+        ) as load_payloads, patch.object(
+            runner,
+            "normalize_activity_window",
+            return_value=types.SimpleNamespace(processed_data=lambda: []),
+        ):
             report = runner.run_pipeline(activity_limit=12)
 
         self.assertIsNone(report)
@@ -511,7 +515,11 @@ class RunnerTests(unittest.TestCase):
             runner,
             "_load_or_fetch_activity_payloads",
             return_value=(raw_activities, {"max_heart_rate": 190}),
-        ) as load_payloads, patch.object(runner, "preprocess_data", return_value=[]):
+        ) as load_payloads, patch.object(
+            runner,
+            "normalize_activity_window",
+            return_value=types.SimpleNamespace(processed_data=lambda: []),
+        ):
             report = runner.run_pipeline(fetch_limit=0)
 
         self.assertIsNone(report)
@@ -526,8 +534,7 @@ class RunnerTests(unittest.TestCase):
             base = Path(temp_dir)
             processed_dir = base / "processed"
             output_dir = base / "output"
-            raw_activities = [{"activity_id": 1, "type": "running", "distance": 10.0, "duration": 50.0}]
-            processed_data = [{"activity_id": 1, "type": "running", "date": "2026-05-10", "distance_km": 10, "performance_formatted": "5:00 /km"}]
+            raw_activities = [{"activity_id": 1, "type": "running", "date": "2026-05-10", "distance": 10.0, "duration": 50.0}]
             report_payload = {"headline": "report"}
 
             with patch.object(runner, "PROCESSED_DATA_DIR", processed_dir
@@ -537,7 +544,7 @@ class RunnerTests(unittest.TestCase):
                 runner,
                 "_load_or_fetch_activity_payloads",
                 return_value=(raw_activities, {"max_heart_rate": 190}),
-            ), patch.object(runner, "preprocess_data", return_value=processed_data), patch.object(
+            ), patch.object(
                 report_generator, "coach", return_value=report_payload
             ) as coach_mock, patch.object(runner, "_run_line_notification"):
                 report = runner.run_pipeline()
@@ -560,7 +567,6 @@ class RunnerTests(unittest.TestCase):
 
     def test_run_pipeline_passes_rendered_goal_overrides_to_coach(self):
         raw_activities = [{"activity_id": 1, "type": "running", "distance": 10.0, "duration": 50.0}]
-        processed_data = [{"activity_id": 1, "performance_formatted": "5:00 /km"}]
         overrides = GoalPromptOverrides(core_goal="目標成績：5K 20:00")
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -580,7 +586,7 @@ class RunnerTests(unittest.TestCase):
                 runner,
                 "_load_or_fetch_activity_payloads",
                 return_value=(raw_activities, {"max_heart_rate": 190}),
-            ), patch.object(runner, "preprocess_data", return_value=processed_data), patch.object(
+            ), patch.object(
                 runner, "_persist_pipeline_artifacts", return_value=Path("output/report.json")
             ), patch.object(
                 report_generator, "coach", return_value={"headline": "report"}
@@ -795,7 +801,11 @@ class RunnerTests(unittest.TestCase):
             runner,
             "_load_or_fetch_activity_payloads",
             return_value=([{"activity_id": 1}], {}),
-        ) as load_payloads, patch.object(runner, "preprocess_data", return_value=[]):
+        ) as load_payloads, patch.object(
+            runner,
+            "normalize_activity_window",
+            return_value=types.SimpleNamespace(processed_data=lambda: []),
+        ):
             self.assertIsNone(runner.run_pipeline())
 
         load_payloads.assert_called_once_with(

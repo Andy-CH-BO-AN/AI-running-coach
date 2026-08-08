@@ -1,8 +1,10 @@
 import os
 import sys
+from typing import Any
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from src.preprocessing.activity_window import normalize_activity_window
 from src.preprocessing.coach_context import (
     build_deterministic_coach_context,
     enforce_deterministic_report_fields,
@@ -20,6 +22,111 @@ def _sample_user_data():
         "preferred_long_training_days": ["SUNDAY"],
         "pr_running": {"5km": "19:57 (3:59 /km)"},
     }
+
+
+def _pace_fixture_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    pace = value.strip().split(" ", 1)[0]
+    pieces = pace.split(":")
+    if len(pieces) != 2:
+        return value
+    try:
+        return int(pieces[0]) + float(pieces[1]) / 60
+    except ValueError:
+        return value
+
+
+def _activity_window_fixture(
+    processed_data: list[dict[str, Any]],
+    raw_activities: list[dict[str, Any]] | None,
+):
+    """Translate focused legacy context fixtures into provider-shaped inputs."""
+
+    raw_by_id = {
+        str(activity.get("activity_id")): activity
+        for activity in raw_activities or []
+    }
+    activities: list[dict[str, Any]] = []
+    advanced_to_raw = {
+        "avg_cadence": "cadence",
+        "max_cadence": "max_cadence",
+        "vertical_oscillation": "vertical_oscillation",
+        "ground_contact_time": "ground_contact_time",
+        "stride_length": "stride_length",
+        "elevation_gain": "elevation_gain",
+        "elevation_loss": "elevation_loss",
+        "power_avg": "power_avg",
+        "power_max": "power_max",
+        "training_load": "training_stress_score",
+        "training_stress_score": "training_stress_score",
+        "stroke_count": "total_strokes",
+        "avg_swolf": "avg_swolf",
+        "pool_length": "pool_length",
+        "stroke_style": "avg_stroke_type",
+        "avg_stroke_cadence": "avg_stroke_cadence",
+        "intensity_factor": "intensity_factor",
+    }
+
+    for processed in processed_data:
+        activity_id = processed.get("activity_id")
+        activity = dict(raw_by_id.get(str(activity_id), {}))
+        activity["activity_id"] = activity_id
+        for processed_key, raw_key in (
+            ("type", "type"),
+            ("date", "date"),
+            ("distance_km", "distance"),
+            ("duration_min", "duration"),
+            ("avg_hr", "average_heart_rate"),
+            ("max_hr", "max_heart_rate"),
+        ):
+            if processed_key in processed:
+                activity[raw_key] = processed[processed_key]
+
+        if "splits" in processed:
+            activity["splits"] = [
+                {
+                    **split,
+                    "pace": _pace_fixture_value(split.get("pace")),
+                }
+                for split in processed["splits"]
+                if isinstance(split, dict)
+            ]
+
+        raw_data = dict(activity.get("raw_data") or {})
+        advanced = processed.get("advanced_metrics") or {}
+        for advanced_key, raw_key in advanced_to_raw.items():
+            if advanced_key in advanced:
+                raw_data[raw_key] = advanced[advanced_key]
+        training_effect = advanced.get("training_effect") or {}
+        if "aerobic" in training_effect:
+            raw_data["aerobic_training_effect"] = training_effect["aerobic"]
+        if "anaerobic" in training_effect:
+            raw_data["anaerobic_training_effect"] = training_effect["anaerobic"]
+        for zone_base in ("hr", "power"):
+            zones = advanced.get(f"{zone_base}_zones") or {}
+            for zone in range(1, 6):
+                key = f"{zone_base}_zone_{zone}"
+                if key in zones:
+                    raw_data[key] = zones[key]
+        activity["raw_data"] = raw_data
+        activities.append(activity)
+
+    return normalize_activity_window(activities)
+
+
+def _build_context_fixture(
+    *,
+    processed_data: list[dict[str, Any]],
+    user_data: dict[str, Any] | None = None,
+    raw_activities: list[dict[str, Any]] | None = None,
+    today: Any = None,
+):
+    return build_deterministic_coach_context(
+        activity_window=_activity_window_fixture(processed_data, raw_activities),
+        user_data=user_data,
+        today=today,
+    )
 
 
 def test_builds_monday_week_buckets_and_derived_weekly_metrics():
@@ -83,7 +190,7 @@ def test_builds_monday_week_buckets_and_derived_weekly_metrics():
         {"activity_id": 102, "date": "2026-05-12", "type": "running", "duration": 5.0},
     ]
 
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=processed_data,
         user_data=_sample_user_data(),
         raw_activities=raw_activities,
@@ -93,7 +200,7 @@ def test_builds_monday_week_buckets_and_derived_weekly_metrics():
     current_week = context["weekly_analysis"][0]
     assert current_week["week_start"] == "2026-05-11"
     assert current_week["week_end"] == "2026-05-17"
-    assert current_week["derived_total_distance_km"] == 6.13
+    assert current_week["derived_total_distance_km"] == 6.12
     assert current_week["derived_total_duration_min"] == 36.3
     assert current_week["derived_training_load"] == 42.3
     assert current_week["session_counts"] == {
@@ -106,6 +213,48 @@ def test_builds_monday_week_buckets_and_derived_weekly_metrics():
     assert "heat_stress" in current_week["risk_flags"]
     assert len(current_week["sessions"][0]["segments"]) == 1
     assert current_week["sessions"][0]["segments"][0]["stride_length_m"] == 1.12
+
+
+def test_distance_rounding_matches_processed_projection_before_aggregation():
+    activity_window = normalize_activity_window(
+        [
+            {
+                "activity_id": 103,
+                "type": "running",
+                "date": "2026-05-12",
+                "distance": 20.965,
+                "duration": 100,
+                "raw_data": {"training_stress_score": 50},
+            }
+        ]
+    )
+    processed_distance = activity_window.processed_data()[0]["distance_km"]
+    context = build_deterministic_coach_context(
+        activity_window=activity_window,
+        user_data=_sample_user_data(),
+        today="2026-05-14",
+    )
+
+    current_week = context["weekly_analysis"][0]
+    current_session = current_week["sessions"][0]
+    current_twelve_week = context["twelve_week_summary"][-1]
+    enforced = enforce_deterministic_report_fields(
+        {
+            "weekly_analysis": [
+                {"sessions": [{"activity_id": 103, "distance_km": 999}]}
+            ]
+        },
+        context,
+    )
+
+    assert processed_distance == 20.96
+    assert current_session["distance_km"] == processed_distance
+    assert current_week["derived_total_distance_km"] == processed_distance
+    assert current_twelve_week["derived_total_distance_km"] == processed_distance
+    assert (
+        enforced["weekly_analysis"][0]["sessions"][0]["distance_km"]
+        == processed_distance
+    )
 
 
 def test_hr_zones_are_sorted_and_percentages_are_deterministic():
@@ -129,7 +278,7 @@ def test_hr_zones_are_sorted_and_percentages_are_deterministic():
         }
     ]
 
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=processed_data,
         user_data=_sample_user_data(),
         raw_activities=[{"activity_id": 201, "duration": 60}],
@@ -163,7 +312,7 @@ def test_hr_zone_seconds_are_exposed_as_minutes():
         }
     ]
 
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=processed_data,
         user_data=_sample_user_data(),
         raw_activities=[{"activity_id": 202, "duration": 14.5}],
@@ -225,7 +374,7 @@ def test_running_mechanics_use_active_segments_for_cadence_and_stride():
         }
     ]
 
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=processed_data,
         user_data=_sample_user_data(),
         raw_activities=[{"activity_id": 203, "duration": 12}],
@@ -258,7 +407,7 @@ def test_enforce_updates_stale_mechanics_assessments_when_values_change():
             ],
         }
     ]
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=processed_data,
         user_data=_sample_user_data(),
         raw_activities=[{"activity_id": 204, "duration": 5}],
@@ -310,7 +459,7 @@ def test_enforce_repoints_evidence_source_paths_by_activity_id():
             "splits": [{"duration": 0.5, "distance": 0.1, "avg_cadence": 150}],
         },
     ]
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=processed_data,
         user_data=_sample_user_data(),
         raw_activities=[
@@ -356,7 +505,7 @@ def test_enforce_repoints_evidence_source_paths_by_activity_id():
     assert supporting_session["activity_id"] == 205
     assert supporting_session["source_path"] == "weekly_analysis[0].sessions[0]"
     assert supporting_session["distance_km"] == 5
-    assert supporting_session["avg_pace"] == "06:00"
+    assert supporting_session["avg_pace"] == "6:00"
     assert supporting_session["reason"] == "保留原因"
 
 
@@ -543,7 +692,7 @@ def test_weekly_session_counts_include_cross_training_distribution():
         },
     ]
 
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=processed_data,
         user_data=_sample_user_data(),
         raw_activities=[
@@ -562,7 +711,7 @@ def test_weekly_session_counts_include_cross_training_distribution():
 
 
 def test_context_and_enforced_report_exclude_inferred_session_type():
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=[
             {
                 "activity_id": 210,
@@ -601,7 +750,7 @@ def test_context_and_enforced_report_exclude_inferred_session_type():
                             "source_activity_type": "running",
                             "distance_km": 0.62,
                             "duration_min": 3.8,
-                            "avg_pace": "06:08",
+                            "avg_pace": "6:08",
                             "type": "interval",
                         },
                         {"date": "2026-05-09", "type": "interval"},
@@ -656,7 +805,7 @@ def test_cross_training_segments_do_not_emit_running_mechanics():
         },
     ]
 
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=processed_data,
         user_data=_sample_user_data(),
         raw_activities=[
@@ -729,7 +878,7 @@ def test_swimming_context_preserves_reliable_timings_and_rest_segment_order():
         }
     ]
 
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=processed_data,
         user_data=_sample_user_data(),
         raw_activities=raw_activities,
@@ -804,7 +953,7 @@ def test_swimming_context_sums_only_explicit_rest_segments_before_rounding():
         }
     ]
 
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=processed_data,
         user_data=_sample_user_data(),
         raw_activities=[{"activity_id": 212, "type": "swimming", "duration": 5.7525}],
@@ -820,7 +969,7 @@ def test_swimming_context_sums_only_explicit_rest_segments_before_rounding():
 
 
 def test_swimming_context_keeps_reliable_swim_pace_without_rest_breakdown():
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=[
             {
                 "activity_id": 215,
@@ -849,8 +998,260 @@ def test_swimming_context_keeps_reliable_swim_pace_without_rest_breakdown():
     assert "rest_duration_min" not in session
 
 
-def test_legacy_swimming_context_does_not_infer_missing_times_from_index_gaps():
+def test_context_uses_split_duration_without_inventing_legacy_session_pace():
+    activity_window = normalize_activity_window(
+        [
+            {
+                "activity_id": 216,
+                "type": "running",
+                "date": "2026-05-13",
+                "distance": 2,
+                "splits": [
+                    {"split_index": 1, "distance": 1, "duration": 5, "pace": 5},
+                    {"split_index": 2, "distance": 1, "duration": 5, "pace": 5},
+                ],
+                "raw_data": {"training_stress_score": 20},
+            }
+        ]
+    )
+
     context = build_deterministic_coach_context(
+        activity_window=activity_window,
+        user_data=_sample_user_data(),
+        today="2026-05-14",
+    )
+    session = context["weekly_analysis"][0]["sessions"][0]
+
+    assert session["duration_min"] == 10
+    assert session["avg_pace"] is None
+
+
+def test_swimming_session_does_not_expose_raw_training_effect():
+    activity_window = normalize_activity_window(
+        [
+            {
+                "activity_id": 217,
+                "type": "swimming",
+                "date": "2026-05-13",
+                "distance": 1,
+                "duration": 20,
+                "raw_data": {
+                    "training_stress_score": 30,
+                    "aerobic_training_effect": 3.2,
+                    "anaerobic_training_effect": 1.4,
+                    "avg_swolf": 42,
+                    "avg_stroke_cadence": 24,
+                },
+            }
+        ]
+    )
+
+    context = build_deterministic_coach_context(
+        activity_window=activity_window,
+        user_data=_sample_user_data(),
+        today="2026-05-14",
+    )
+    session = context["weekly_analysis"][0]["sessions"][0]
+
+    assert session["training_effect_aerobic"] is None
+    assert session["training_effect_anaerobic"] is None
+    assert context["cross_training"]["swimming"]["avg_swolf"] == 42
+    assert context["cross_training"]["swimming"]["avg_stroke_rate"] is None
+
+
+def test_lap_swimming_session_preserves_legacy_pace_and_zone_behavior():
+    activity_window = normalize_activity_window(
+        [
+            {
+                "activity_id": 218,
+                "type": "lap_swimming",
+                "date": "2026-05-13",
+                "distance": 0.2,
+                "duration": 4,
+                "raw_data": {
+                    "training_stress_score": 15,
+                    "hr_zone_1": 240,
+                    "power_zone_2": 120,
+                    "avg_swolf": 44,
+                    "avg_stroke_cadence": 22,
+                },
+            }
+        ]
+    )
+
+    context = build_deterministic_coach_context(
+        activity_window=activity_window,
+        user_data=_sample_user_data(),
+        today="2026-05-14",
+    )
+    session = context["weekly_analysis"][0]["sessions"][0]
+
+    normalized = activity_window.activities[0]
+    assert normalized.performance_formatted == "2:00 /100m"
+    assert normalized.processed_performance_value is None
+    assert normalized.processed_performance_formatted == "N/A"
+    assert normalized.processed_activity_type == "lap_swimming"
+    assert normalized.processed_has_advanced_metrics is False
+    assert normalized.hr_zone_seconds[1] == 240
+    assert normalized.power_zone_seconds[2] == 120
+    assert normalized.avg_swolf == 44
+    assert activity_window.processed_data()[0]["performance_formatted"] == "N/A"
+    assert session["source_activity_type"] == "lap_swimming"
+    assert session["avg_pace"] is None
+    assert context["hr_zone_distribution"]["total_minutes"] == 0
+    assert context["power_zone_distribution"]["total_minutes"] == 0
+    assert context["cross_training"]["swimming"] == {
+        "sessions_count": 1,
+        "avg_swolf": None,
+        "avg_stroke_rate": None,
+    }
+
+
+def test_invalid_sport_metrics_do_not_leak_into_context_aggregates():
+    activity_window = normalize_activity_window(
+        [
+            {
+                "activity_id": 219,
+                "type": "running",
+                "date": "2026-05-13",
+                "distance": 5,
+                "duration": 25,
+                "splits": [
+                    {
+                        "split_index": 1,
+                        "duration": 25,
+                        "avg_cadence": 175,
+                        "vertical_oscillation": 99,
+                        "ground_contact_time": 99,
+                    }
+                ],
+                "raw_data": {
+                    "training_stress_score": 30,
+                    "cadence": 175,
+                    "vertical_oscillation": 99,
+                    "ground_contact_time": 99,
+                },
+            },
+            {
+                "activity_id": 220,
+                "type": "cycling",
+                "date": "2026-05-13",
+                "distance": 20,
+                "duration": 60,
+                "raw_data": {
+                    "training_stress_score": 40,
+                    "power_avg": 2501,
+                    "power_max": 4000,
+                },
+            },
+            {
+                "activity_id": 221,
+                "type": "swimming",
+                "date": "2026-05-13",
+                "distance": 1,
+                "duration": 20,
+                "raw_data": {
+                    "training_stress_score": 20,
+                    "avg_swolf": 999,
+                },
+            },
+        ]
+    )
+
+    running, cycling, swimming = activity_window.activities
+    assert running.vertical_oscillation_cm is None
+    assert running.ground_contact_time_ms is None
+    assert cycling.power_avg_w is None
+    assert cycling.power_max_w is None
+    assert swimming.avg_swolf is None
+
+    context = build_deterministic_coach_context(
+        activity_window=activity_window,
+        user_data=_sample_user_data(),
+        today="2026-05-14",
+    )
+
+    assert context["running_mechanics"]["vertical_oscillation_cm"]["value"] is None
+    assert context["running_mechanics"]["ground_contact_ms"]["value"] is None
+    assert context["cross_training"]["cycling"]["avg_power_w"] is None
+    assert context["cross_training"]["swimming"]["avg_swolf"] is None
+
+
+def test_alias_only_cadence_and_power_remain_canonical_only():
+    activity_window = normalize_activity_window(
+        [
+            {
+                "activity_id": 222,
+                "type": "running",
+                "date": "2026-05-13",
+                "distance": 5,
+                "duration": 25,
+                "splits": [
+                    {
+                        "split_index": 1,
+                        "distance": 1,
+                        "duration": 5,
+                        "average_cadence": 182,
+                    }
+                ],
+                "raw_data": {
+                    "training_stress_score": 30,
+                    "avg_cadence": 180,
+                },
+            },
+            {
+                "activity_id": 223,
+                "type": "cycling",
+                "date": "2026-05-13",
+                "distance": 20,
+                "duration": 60,
+                "raw_data": {
+                    "training_stress_score": 40,
+                    "avg_cadence": 90,
+                    "average_power": 220,
+                    "max_power": 400,
+                },
+            },
+        ]
+    )
+
+    running, cycling = activity_window.activities
+    assert running.avg_cadence_spm == 180
+    assert running.segments[0].avg_cadence_spm == 182
+    assert cycling.avg_cadence_spm == 90
+    assert cycling.power_avg_w == 220
+    assert cycling.power_max_w == 400
+    assert running.processed_avg_cadence_spm is None
+    assert running.segments[0].processed_avg_cadence_spm is None
+    assert cycling.processed_avg_cadence_spm is None
+    assert cycling.processed_power_avg_w is None
+    assert cycling.processed_power_max_w is None
+
+    processed_running, processed_cycling = activity_window.processed_data()
+    assert "runner_type" not in processed_running
+    assert processed_running["advanced_metrics"]["avg_cadence"] is None
+    assert processed_cycling["advanced_metrics"]["avg_cadence"] is None
+    assert processed_cycling["advanced_metrics"]["power_avg"] is None
+    assert processed_cycling["advanced_metrics"]["power_max"] is None
+
+    context = build_deterministic_coach_context(
+        activity_window=activity_window,
+        user_data=_sample_user_data(),
+        today="2026-05-14",
+    )
+    sessions = {
+        session["source_activity_type"]: session
+        for session in context["weekly_analysis"][0]["sessions"]
+    }
+
+    assert sessions["running"]["segments"][0]["cadence"] is None
+    assert context["running_mechanics"]["cadence_avg"]["value"] is None
+    assert context["cross_training"]["cycling"]["avg_power_w"] is None
+    assert context["cross_training"]["cycling"]["avg_cadence"] is None
+
+
+def test_legacy_swimming_context_does_not_infer_missing_times_from_index_gaps():
+    context = _build_context_fixture(
         processed_data=[
             {
                 "activity_id": 213,
@@ -878,7 +1279,7 @@ def test_legacy_swimming_context_does_not_infer_missing_times_from_index_gaps():
 
 
 def test_non_swimming_context_does_not_gain_optional_swim_timing_keys():
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=[
             {
                 "activity_id": 214,
@@ -912,7 +1313,7 @@ def test_non_swimming_context_does_not_gain_optional_swim_timing_keys():
 
 
 def test_physio_seed_preserves_runner_pace_format_and_open_ended_z5():
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=[],
         user_data=_sample_user_data(),
         raw_activities=[],
@@ -932,7 +1333,7 @@ def test_physio_seed_preserves_runner_pace_format_and_open_ended_z5():
 def test_physio_seed_does_not_estimate_resting_hr_from_activity_data():
     user_data = _sample_user_data()
     user_data["resting_heart_rate"] = None
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=[
             {
                 "activity_id": 401,
@@ -955,7 +1356,7 @@ def test_physio_seed_does_not_estimate_resting_hr_from_activity_data():
 
 
 def test_next_week_seed_uses_training_preferences_without_ai():
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=[],
         user_data=_sample_user_data(),
         raw_activities=[],
@@ -1010,7 +1411,7 @@ def test_enforce_deterministic_report_fields_restores_pruned_sessions_and_metric
             },
         },
     ]
-    context = build_deterministic_coach_context(
+    context = _build_context_fixture(
         processed_data=processed_data,
         user_data=_sample_user_data(),
         raw_activities=[

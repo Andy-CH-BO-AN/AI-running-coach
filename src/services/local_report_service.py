@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from src.pipeline.goal_prompt import GoalPromptOverrides
+from src.preprocessing.activity_window import normalize_activity_window
 from src.preprocessing.coach_context import build_deterministic_coach_context
-from src.preprocessing.data_processor import preprocess_data
 from src.services.artifacts import (
     OUTPUT_DIR,
     PROCESSED_DATA_DIR,
@@ -79,14 +79,14 @@ def generate_local_report_from_artifacts(
     user_data = _load_user_data(Path(user_file))
     limited_raw_activities = raw_activities[:activity_limit]
 
-    processed_data = preprocess_data(limited_raw_activities)
+    activity_window = normalize_activity_window(limited_raw_activities)
+    processed_data = activity_window.processed_data()
     if not processed_data:
         raise ValueError("No data left after preprocessing.")
 
     deterministic_context = build_deterministic_coach_context(
-        processed_data=processed_data,
+        activity_window=activity_window,
         user_data=user_data,
-        raw_activities=limited_raw_activities,
         today=report_date,
     )
     response = generate_coach_report(
