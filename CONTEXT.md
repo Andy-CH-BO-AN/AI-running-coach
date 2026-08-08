@@ -28,6 +28,11 @@ The deterministic coaching representation of one Activity. AI coaching notes are
 annotations on Session facts; they never replace or reorder the underlying facts.
 _Avoid_: AI session, inferred workout
 
+**Activity notification**:
+The complete LINE delivery for one Activity. Partial delivery never counts as
+complete and must not be recorded as notified.
+_Avoid_: individual LINE message, partial notification
+
 **Stateless notification**:
 LINE notification sent without Neon-backed deduplication. A sent-but-unrecorded notification counts toward the current run's stateless limit and may repeat on a later run.
 _Avoid_: durable notification, exactly-once notification
