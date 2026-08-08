@@ -18,6 +18,9 @@ _Avoid_: degraded mode, database retry mode
 
 **Activity window**:
 Newest bounded set of Garmin activities used by every downstream pipeline stage for one run.
+Its size and order are selected before preprocessing. Activity-window normalization then
+owns eligibility filtering, canonical Activity identity, source interpretation, and unit
+conversion exactly once; it never chooses the run mode, limit, or ordering.
 _Avoid_: history, activity backlog
 
 **Stateless notification**:

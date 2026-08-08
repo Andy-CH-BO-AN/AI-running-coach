@@ -4,8 +4,8 @@ from typing import Any, Dict, List, Optional
 
 from src.pipeline.activity_payloads import ActivityPayloadProvider
 from src.pipeline.goal_prompt import GoalPromptOverrides
+from src.preprocessing.activity_window import normalize_activity_window
 from src.preprocessing.coach_context import build_deterministic_coach_context
-from src.preprocessing.data_processor import preprocess_data
 from src.services.artifacts import persist_pipeline_artifacts
 from src.services.report_generator import generate_coach_report
 
@@ -106,16 +106,16 @@ def _run_pipeline_from_payloads(
         return None
 
     print("🧹 Preprocessing data...")
-    processed_data = preprocess_data(raw_activities)
+    activity_window = normalize_activity_window(raw_activities)
+    processed_data = activity_window.processed_data()
     if not processed_data:
         print("⚠️ No data left after preprocessing.")
         return None
 
     print("🧮 Building deterministic coach context...")
     deterministic_context = build_deterministic_coach_context(
-        processed_data=processed_data,
+        activity_window=activity_window,
         user_data=user_data,
-        raw_activities=raw_activities,
         today=timestamp,
     )
 

@@ -7,7 +7,7 @@ from src.preprocessing.coach_context import (
     build_deterministic_coach_context,
     enforce_deterministic_report_fields,
 )
-from src.preprocessing.data_processor import preprocess_data
+from src.preprocessing.activity_window import normalize_activity_window
 
 
 SESSION_OUTPUT_KEYS = {
@@ -122,11 +122,11 @@ def _sample_user_data():
 
 def _build_processed_and_context():
     raw_activities = _sample_raw_activities()
-    processed_data = preprocess_data(raw_activities)
+    activity_window = normalize_activity_window(raw_activities)
+    processed_data = activity_window.processed_data()
     context = build_deterministic_coach_context(
-        processed_data=processed_data,
+        activity_window=activity_window,
         user_data=_sample_user_data(),
-        raw_activities=raw_activities,
         today="2026-05-14",
     )
     return processed_data, context
@@ -311,11 +311,10 @@ def test_swimming_timing_contract_survives_preprocessing_and_enforcement():
         }
     ]
 
-    processed = preprocess_data(raw_activities)
+    activity_window = normalize_activity_window(raw_activities)
     context = build_deterministic_coach_context(
-        processed_data=processed,
+        activity_window=activity_window,
         user_data={},
-        raw_activities=raw_activities,
         today="2026-05-14",
     )
     session = context["weekly_analysis"][0]["sessions"][0]
