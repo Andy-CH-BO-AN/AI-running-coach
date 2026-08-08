@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any, Dict, List, Sequence
 
+from src.preprocessing.coach_context_session_facts import CoachSession
 from src.preprocessing.coach_context_types import (
-    CoachSession,
     CoachSessionCounts,
     CoachWeek,
     EvidenceFact,

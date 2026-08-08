@@ -19,7 +19,7 @@ from src.preprocessing.coach_context_athlete_metrics import (
     _build_running_mechanics,
 )
 from src.preprocessing.coach_context_enforcement import enforce_deterministic_report_fields
-from src.preprocessing.coach_context_sessions import _build_session
+from src.preprocessing.coach_context_session_facts import build_session_facts
 from src.preprocessing.coach_context_weekly import (
     _build_12week_summary,
     _build_evidence_facts,
@@ -98,7 +98,7 @@ def build_deterministic_coach_context(
         [{"date": activity.date} for activity in activity_window.activities],
     )
 
-    sessions = [_build_session(activity) for activity in activity_window.activities]
+    sessions = build_session_facts(activity_window).context_payloads()
     weekly_analysis = _build_weekly_analysis(sessions, today=resolved_today)
     four_week_activities = _activities_in_analysis_weeks(
         activity_window.activities,

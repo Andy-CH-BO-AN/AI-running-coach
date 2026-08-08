@@ -2,54 +2,12 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-
-class CoachEnvironment(TypedDict, total=False):
-    estimated_temp_c: float | None
-    humidity_pct: int | None
-    hr_impact: str | None
-
+from src.preprocessing.coach_context_session_facts import CoachSession
 
 class CoachDataQuality(TypedDict, total=False):
     status: str
     message: str
     missing_fields: list[str]
-
-
-class CoachSegment(TypedDict, total=False):
-    segment_type: str
-    split_index: Any
-    distance_km: float | None
-    duration_min: float | None
-    elapsed_duration_min: float | None
-    avg_pace: str | None
-    speed_kmh: float | None
-    avg_hr: int | None
-    cadence: float | None
-    stride_length_m: float | None
-    temperature_c: float | None
-    note: str | None
-
-
-class CoachSession(TypedDict, total=False):
-    activity_id: Any
-    date: Any
-    source_activity_type: str | None
-    distance_km: float
-    duration_min: float
-    elapsed_duration_min: float
-    swim_duration_min: float
-    rest_duration_min: float
-    swim_pace_seconds_per_100m: int
-    elapsed_pace_seconds_per_100m: int
-    training_load: float
-    avg_hr: int | None
-    avg_pace: str | None
-    training_effect_aerobic: float | None
-    training_effect_anaerobic: float | None
-    segments: list[CoachSegment]
-    environment: CoachEnvironment
-    coaching_note: str | None
-    data_quality: CoachDataQuality
 
 
 class CoachSessionCounts(TypedDict, total=False):

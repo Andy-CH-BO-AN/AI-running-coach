@@ -2,17 +2,19 @@ from __future__ import annotations
 
 from copy import deepcopy
 import re
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List
 
 from src.preprocessing.coach_context_athlete_metrics import (
     _mechanics_assessment,
     _mechanics_tips,
 )
-from src.preprocessing.coach_context_sessions import _is_running_source_activity
-from src.preprocessing.coach_context_utils import (
-    _normalize_activity_id,
-    _round_or_none,
+from src.preprocessing.coach_context_session_facts import (
+    SessionEvidenceIndex,
+    SessionFactContractError,
+    build_session_evidence_index,
+    reconcile_session_facts,
 )
+from src.preprocessing.coach_context_utils import _round_or_none
 
 WEEKLY_TOTAL_KEYS = {
     "total_distance_km",
@@ -22,41 +24,6 @@ WEEKLY_TOTAL_KEYS = {
     "derived_total_duration_min",
     "derived_training_load",
 }
-SESSION_OUTPUT_KEYS = (
-    "activity_id",
-    "date",
-    "source_activity_type",
-    "distance_km",
-    "duration_min",
-    "training_load",
-    "avg_hr",
-    "avg_pace",
-    "training_effect_aerobic",
-    "training_effect_anaerobic",
-    "segments",
-    "environment",
-    "coaching_note",
-)
-OPTIONAL_SWIM_SESSION_OUTPUT_KEYS = (
-    "elapsed_duration_min",
-    "swim_duration_min",
-    "rest_duration_min",
-    "swim_pace_seconds_per_100m",
-    "elapsed_pace_seconds_per_100m",
-)
-SEGMENT_OUTPUT_KEYS = (
-    "segment_type",
-    "split_index",
-    "distance_km",
-    "duration_min",
-    "avg_pace",
-    "speed_kmh",
-    "avg_hr",
-    "cadence",
-    "stride_length_m",
-    "note",
-)
-OPTIONAL_SWIM_SEGMENT_OUTPUT_KEYS = ("elapsed_duration_min",)
 
 
 def overlay_deterministic(ai_value: Any, deterministic_value: Any) -> Any:
@@ -91,78 +58,46 @@ def _enforce_running_mechanics(
     result["running_mechanics"] = mechanics
 
 
-def _session_lookup(sessions: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    return {
-        _normalize_activity_id(session.get("activity_id")): session
-        for session in sessions
-        if isinstance(session, dict)
-    }
-
-
-def _output_segment(
-    context_segment: Dict[str, Any],
-    ai_segment: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
-    segment = {key: deepcopy(context_segment.get(key)) for key in SEGMENT_OUTPUT_KEYS}
-    for key in OPTIONAL_SWIM_SEGMENT_OUTPUT_KEYS:
-        if key in context_segment:
-            segment[key] = deepcopy(context_segment.get(key))
-    if ai_segment and segment.get("note") in (None, "") and ai_segment.get("note"):
-        segment["note"] = ai_segment.get("note")
-    return segment
-
-
-def _output_session(
-    context_session: Dict[str, Any],
-    ai_session: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
-    session = {key: deepcopy(context_session.get(key)) for key in SESSION_OUTPUT_KEYS}
-    for key in OPTIONAL_SWIM_SESSION_OUTPUT_KEYS:
-        if key in context_session:
-            session[key] = deepcopy(context_session.get(key))
-    if ai_session and ai_session.get("coaching_note"):
-        session["coaching_note"] = ai_session.get("coaching_note")
-
-    ai_segments = ai_session.get("segments") if isinstance(ai_session, dict) else []
-    if not isinstance(ai_segments, list):
-        ai_segments = []
-    context_segments = context_session.get("segments") or []
-    include_running_metrics = _is_running_source_activity(context_session.get("source_activity_type"))
-    output_segments: List[Dict[str, Any]] = []
-    for index, segment in enumerate(context_segments):
-        if not isinstance(segment, dict):
-            continue
-        output_segment = _output_segment(
-            segment,
-            ai_segments[index] if index < len(ai_segments) and isinstance(ai_segments[index], dict) else None,
-        )
-        if not include_running_metrics:
-            output_segment.pop("cadence", None)
-            output_segment.pop("stride_length_m", None)
-        output_segments.append(output_segment)
-    session["segments"] = output_segments
-    return session
-
-
 def _enforce_weekly_analysis(
     report: Dict[str, Any],
     deterministic_context: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    ai_weeks = {
-        week.get("week_start"): week
-        for week in report.get("weekly_analysis", [])
-        if isinstance(week, dict)
-    }
-    enforced_weeks: List[Dict[str, Any]] = []
-    for context_week in deterministic_context.get("weekly_analysis", []):
-        if not isinstance(context_week, dict):
+    raw_ai_weeks = report.get("weekly_analysis")
+    if not isinstance(raw_ai_weeks, list):
+        raw_ai_weeks = []
+    ai_weeks: dict[Any, dict[str, Any]] = {}
+    for week in raw_ai_weeks:
+        if not isinstance(week, dict):
             continue
-        ai_week = ai_weeks.get(context_week.get("week_start"), {})
+        week_start = week.get("week_start")
+        try:
+            ai_weeks[week_start] = week
+        except TypeError:
+            continue
+    context_weeks = deterministic_context.get("weekly_analysis")
+    if not isinstance(context_weeks, list):
+        raise SessionFactContractError(
+            "deterministic weekly_analysis: expected a list"
+        )
+    enforced_weeks: List[Dict[str, Any]] = []
+    for week_index, context_week in enumerate(context_weeks):
+        if not isinstance(context_week, dict):
+            raise SessionFactContractError(
+                f"deterministic weekly_analysis[{week_index}]: expected an object"
+            )
+        context_week_start = context_week.get("week_start")
+        try:
+            ai_week = ai_weeks.get(context_week_start, {})
+        except TypeError as exc:
+            raise SessionFactContractError(
+                f"deterministic weekly_analysis[{week_index}].week_start: "
+                "expected a scalar"
+            ) from exc
         week = deepcopy(ai_week) if isinstance(ai_week, dict) else {}
         for key in WEEKLY_TOTAL_KEYS:
             week.pop(key, None)
 
-        ai_sessions = _session_lookup(week.get("sessions") or [])
+        ai_sessions = week.get("sessions")
         week["week_label"] = context_week.get("week_label")
         week["week_start"] = context_week.get("week_start")
         week.setdefault("key_observation", "")
@@ -213,11 +148,10 @@ def _enforce_weekly_analysis(
         else:
             week["cross_training_focus"] = None
         week["risk_flags"] = deepcopy(context_week.get("risk_flags") or [])
-        week["sessions"] = [
-            _output_session(context_session, ai_sessions.get(_normalize_activity_id(context_session.get("activity_id"))))
-            for context_session in context_week.get("sessions", [])
-            if isinstance(context_session, dict)
-        ]
+        week["sessions"] = reconcile_session_facts(
+            context_week.get("sessions"),
+            ai_sessions,
+        )
         enforced_weeks.append(week)
     return enforced_weeks
 
@@ -257,16 +191,6 @@ def _enforce_next_week_plan(
     return ai_plan
 
 
-def _session_identity(session: Dict[str, Any]) -> tuple[Any, Any, Any, Any, Any]:
-    return (
-        session.get("date"),
-        session.get("source_activity_type"),
-        _round_or_none(session.get("distance_km"), 2),
-        _round_or_none(session.get("duration_min"), 1),
-        session.get("avg_pace"),
-    )
-
-
 def _read_path_value(payload: Dict[str, Any], path: str) -> Any:
     current: Any = payload
     for segment in path.split("."):
@@ -286,27 +210,10 @@ def _read_path_value(payload: Dict[str, Any], path: str) -> Any:
     return current
 
 
-def _weekly_session_references(
+def _enforce_evidence_source_paths(
     report: Dict[str, Any],
-) -> tuple[Dict[str, tuple[str, Dict[str, Any]]], Dict[tuple[Any, Any, Any, Any, Any], tuple[str, Dict[str, Any]]]]:
-    by_activity_id: Dict[str, tuple[str, Dict[str, Any]]] = {}
-    by_identity: Dict[tuple[Any, Any, Any, Any, Any], tuple[str, Dict[str, Any]]] = {}
-    for week_index, week in enumerate(report.get("weekly_analysis") or []):
-        if not isinstance(week, dict):
-            continue
-        for session_index, session in enumerate(week.get("sessions") or []):
-            if not isinstance(session, dict):
-                continue
-            source_path = f"weekly_analysis[{week_index}].sessions[{session_index}]"
-            activity_id = session.get("activity_id")
-            if activity_id is not None:
-                by_activity_id[_normalize_activity_id(activity_id)] = (source_path, session)
-            by_identity[_session_identity(session)] = (source_path, session)
-    return by_activity_id, by_identity
-
-
-def _enforce_evidence_source_paths(report: Dict[str, Any]) -> None:
-    by_activity_id, by_identity = _weekly_session_references(report)
+    references: SessionEvidenceIndex,
+) -> None:
     for evidence in report.get("evidence_links") or []:
         if not isinstance(evidence, dict):
             continue
@@ -314,30 +221,10 @@ def _enforce_evidence_source_paths(report: Dict[str, Any]) -> None:
             if not isinstance(session, dict):
                 continue
             session.pop("type", None)
-
-            reference = None
-            activity_id = session.get("activity_id")
-            if activity_id is not None:
-                reference = by_activity_id.get(_normalize_activity_id(activity_id))
-            if reference is None:
-                reference = by_identity.get(_session_identity(session))
+            reference = references.resolve(session)
             if reference is None:
                 continue
-
-            source_path, source_session = reference
-            session["source_path"] = source_path
-            for key in (
-                "date",
-                "source_activity_type",
-                "distance_km",
-                "duration_min",
-                "avg_hr",
-                "avg_pace",
-                "training_effect_aerobic",
-                "training_effect_anaerobic",
-                "activity_id",
-            ):
-                session[key] = deepcopy(source_session.get(key))
+            references.project_supporting_session(session, reference)
 
 
 def _split_weekly_session_source_path(source_path: Any) -> tuple[str, str] | None:
@@ -349,9 +236,9 @@ def _split_weekly_session_source_path(source_path: Any) -> tuple[str, str] | Non
 
 def _enforce_evidence_metric_source_paths(
     report: Dict[str, Any],
+    references: SessionEvidenceIndex,
     original_report: Dict[str, Any] | None = None,
 ) -> None:
-    by_activity_id, by_identity = _weekly_session_references(report)
     original_payload = original_report if isinstance(original_report, dict) else report
     for evidence in report.get("evidence_links") or []:
         if not isinstance(evidence, dict):
@@ -369,19 +256,20 @@ def _enforce_evidence_metric_source_paths(
 
             activity_id = metric.get("activity_id")
             if activity_id is not None:
-                reference = by_activity_id.get(_normalize_activity_id(activity_id))
+                reference = references.resolve({"activity_id": activity_id})
 
             if reference is None:
                 original_session = deepcopy(_read_path_value(original_payload, original_session_path) or {})
                 if isinstance(original_session, dict):
-                    reference = by_identity.get(_session_identity(original_session))
+                    reference = references.resolve(original_session)
 
             if reference is None:
                 continue
 
-            session_source_path, _source_session = reference
             metric["source_path"] = (
-                f"{session_source_path}.{field_suffix}" if field_suffix else session_source_path
+                f"{reference.source_path}.{field_suffix}"
+                if field_suffix
+                else reference.source_path
             )
 
 
@@ -439,8 +327,15 @@ def enforce_deterministic_report_fields(
         result["load_assessment"] = load_assessment
 
     result["next_week_plan"] = _enforce_next_week_plan(result, deterministic_context)
-    _enforce_evidence_source_paths(result)
-    _enforce_evidence_metric_source_paths(result, original_report=original_report)
+    session_references = build_session_evidence_index(
+        result.get("weekly_analysis")
+    )
+    _enforce_evidence_source_paths(result, session_references)
+    _enforce_evidence_metric_source_paths(
+        result,
+        session_references,
+        original_report=original_report,
+    )
     if deterministic_context.get("twelve_week_summary"):
         result["twelve_week_summary"] = deepcopy(deterministic_context["twelve_week_summary"])
     return result

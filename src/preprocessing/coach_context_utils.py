@@ -86,10 +86,6 @@ def _format_week_label(week_start: date) -> str:
     return f"{week_start.strftime('%m/%d')}-{week_end.strftime('%m/%d')}"
 
 
-def _normalize_activity_id(value: Any) -> str:
-    return "" if value is None else str(value)
-
-
 def _nested_get(payload: dict[str, Any], path: Sequence[str]) -> Any:
     current: Any = payload
     for part in path:

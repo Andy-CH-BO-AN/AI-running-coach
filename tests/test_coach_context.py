@@ -509,61 +509,60 @@ def test_enforce_repoints_evidence_source_paths_by_activity_id():
     assert supporting_session["reason"] == "保留原因"
 
 
+def _evidence_metric_context(first_id: int, second_id: int):
+    context = build_deterministic_coach_context(
+        activity_window=normalize_activity_window(
+            [
+                {
+                    "activity_id": first_id,
+                    "type": "cycling",
+                    "date": "2026-05-18",
+                    "distance": 20,
+                    "duration": 60,
+                    "average_heart_rate": 116,
+                    "raw_data": {"training_stress_score": 30},
+                },
+                {
+                    "activity_id": second_id,
+                    "type": "running",
+                    "date": "2026-05-22",
+                    "distance": 5.35,
+                    "duration": 34.7,
+                    "average_heart_rate": 150,
+                    "raw_data": {"training_stress_score": 40},
+                },
+            ]
+        ),
+        user_data={},
+        today="2026-05-23",
+    )
+    sessions = context["weekly_analysis"][0]["sessions"]
+    ai_sessions = [
+        {
+            key: session.get(key)
+            for key in (
+                "activity_id",
+                "date",
+                "source_activity_type",
+                "distance_km",
+                "duration_min",
+                "avg_hr",
+                "avg_pace",
+            )
+        }
+        for session in reversed(sessions)
+    ]
+    return context, ai_sessions
+
+
 def test_enforce_repoints_evidence_metric_source_paths_by_activity_id():
-    context = {
-        "meta": {"today": "2026-05-23"},
-        "weekly_analysis": [
-            {
-                "week_start": "2026-05-18",
-                "sessions": [
-                    {
-                        "activity_id": 301,
-                        "date": "2026-05-18",
-                        "type": "bike",
-                        "distance_km": 2.19,
-                        "duration_min": 11.4,
-                        "avg_hr": 116,
-                        "avg_pace": "11.5 km/h",
-                    },
-                    {
-                        "activity_id": 302,
-                        "date": "2026-05-22",
-                        "type": "easy",
-                        "distance_km": 5.35,
-                        "duration_min": 34.7,
-                        "avg_hr": 150,
-                        "avg_pace": "6:29",
-                    },
-                ],
-            }
-        ],
-        "next_week_plan": {"week_start": "2026-05-25", "days": []},
-    }
+    context, ai_sessions = _evidence_metric_context(301, 302)
     ai_report = {
         "meta": {"today": "2026-05-23"},
         "weekly_analysis": [
             {
                 "week_start": "2026-05-18",
-                "sessions": [
-                    {
-                        "activity_id": 302,
-                        "date": "2026-05-22",
-                        "type": "easy",
-                        "distance_km": 5.35,
-                        "duration_min": 34.7,
-                        "avg_hr": 150,
-                        "avg_pace": "6:29",
-                    },
-                    {
-                        "activity_id": 301,
-                        "date": "2026-05-18",
-                        "type": "bike",
-                        "distance_km": 2.19,
-                        "duration_min": 11.4,
-                        "avg_hr": 116,
-                        "avg_pace": "11.5 km/h",
-                    },
-                ],
+                "sessions": ai_sessions,
             }
         ],
         "evidence_links": [
@@ -590,60 +589,13 @@ def test_enforce_repoints_evidence_metric_source_paths_by_activity_id():
 
 
 def test_enforce_repoints_evidence_metric_source_paths_by_session_identity_without_activity_id():
-    context = {
-        "meta": {"today": "2026-05-23"},
-        "weekly_analysis": [
-            {
-                "week_start": "2026-05-18",
-                "sessions": [
-                    {
-                        "activity_id": 401,
-                        "date": "2026-05-18",
-                        "type": "bike",
-                        "distance_km": 2.19,
-                        "duration_min": 11.4,
-                        "avg_hr": 116,
-                        "avg_pace": "11.5 km/h",
-                    },
-                    {
-                        "activity_id": 402,
-                        "date": "2026-05-22",
-                        "type": "easy",
-                        "distance_km": 5.35,
-                        "duration_min": 34.7,
-                        "avg_hr": 150,
-                        "avg_pace": "6:29",
-                    },
-                ],
-            }
-        ],
-        "next_week_plan": {"week_start": "2026-05-25", "days": []},
-    }
+    context, ai_sessions = _evidence_metric_context(401, 402)
     ai_report = {
         "meta": {"today": "2026-05-23"},
         "weekly_analysis": [
             {
                 "week_start": "2026-05-18",
-                "sessions": [
-                    {
-                        "activity_id": 402,
-                        "date": "2026-05-22",
-                        "type": "easy",
-                        "distance_km": 5.35,
-                        "duration_min": 34.7,
-                        "avg_hr": 150,
-                        "avg_pace": "6:29",
-                    },
-                    {
-                        "activity_id": 401,
-                        "date": "2026-05-18",
-                        "type": "bike",
-                        "distance_km": 2.19,
-                        "duration_min": 11.4,
-                        "avg_hr": 116,
-                        "avg_pace": "11.5 km/h",
-                    },
-                ],
+                "sessions": ai_sessions,
             }
         ],
         "evidence_links": [
