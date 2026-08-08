@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("sqlalchemy")
 
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from unittest.mock import Mock
 
 
@@ -273,6 +273,25 @@ def test_unknown_invalidated_operational_error_fails_closed():
     )
 
     assert is_database_connection_error(unknown_error) is False
+
+
+def test_database_connection_classifier_ignores_unrelated_implicit_exception_context():
+    from src.db.settings import is_database_connection_error
+
+    transient = OperationalError(
+        "SELECT 1",
+        {},
+        _DriverError("connection refused", sqlstate="08006"),
+    )
+
+    try:
+        raise transient
+    except OperationalError:
+        try:
+            raise IntegrityError("INSERT", {}, Exception("constraint failed"))
+        except IntegrityError as fatal:
+            assert fatal.__context__ is transient
+            assert is_database_connection_error(fatal) is False
 
 
 def test_dispose_database_connections_clears_cached_engines_and_factories(monkeypatch):
