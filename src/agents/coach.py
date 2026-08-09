@@ -17,6 +17,7 @@ PROMPT_PATH = Path("prompts/coach.md")
 DEFAULT_GOAL_PATH = Path("prompts/goal.md")
 OUTPUT_DIR = Path("output")
 MODEL_FALLBACKS = (
+    "gemini-3.6-flash",
     "gemini-3.5-flash",
     "gemini-3-flash-preview",
     "gemini-3.1-flash-lite",
