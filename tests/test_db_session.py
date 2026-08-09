@@ -330,6 +330,10 @@ def _clear_test_db_env(monkeypatch):
         "TEST_POSTGRES_DB",
         "TEST_POSTGRES_PORT",
         "DATABASE_URL",
+        "PGHOST",
+        "PGHOSTADDR",
+        "PGSERVICE",
+        "PGSERVICEFILE",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -367,6 +371,7 @@ def test_resolve_test_database_url_builds_from_postgres_env(monkeypatch):
 
 
 def test_test_database_refusal_reason_rejects_when_matches_database_url(monkeypatch):
+    _clear_test_db_env(monkeypatch)
     prod = "postgresql+psycopg://u:p@localhost:5432/ai_running_coach"
     monkeypatch.setenv("DATABASE_URL", prod)
     import tests.db_settings as _dbs
@@ -377,7 +382,7 @@ def test_test_database_refusal_reason_rejects_when_matches_database_url(monkeypa
 
 
 def test_test_database_refusal_reason_rejects_non_test_db_name(monkeypatch):
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+    _clear_test_db_env(monkeypatch)
     import tests.db_settings as _dbs
     _importlib.reload(_dbs)
     reason = _dbs.test_database_refusal_reason(
@@ -387,14 +392,138 @@ def test_test_database_refusal_reason_rejects_non_test_db_name(monkeypatch):
     assert "test" in reason.lower()
 
 
-def test_test_database_refusal_reason_allows_safe_test_url(monkeypatch):
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+@pytest.mark.parametrize(
+    "safe_url",
+    [
+        "postgresql+psycopg://u:p@localhost:5432/ai_running_coach_test",
+        "postgresql+psycopg://u:p@127.0.0.1:5432/ai_running_coach_test",
+        "postgresql+psycopg://u:p@[::1]:5432/ai_running_coach_test",
+        "postgresql+psycopg://u:p@/ai_running_coach_test",
+        "postgresql+psycopg:///ai_running_coach_test?host=localhost",
+        "postgresql+psycopg:///ai_running_coach_test?host=/var/run/postgresql",
+    ],
+)
+def test_test_database_refusal_reason_allows_safe_test_url(monkeypatch, safe_url):
+    _clear_test_db_env(monkeypatch)
     import tests.db_settings as _dbs
     _importlib.reload(_dbs)
-    reason = _dbs.test_database_refusal_reason(
-        "postgresql+psycopg://u:p@localhost:5432/ai_running_coach_test"
-    )
+    reason = _dbs.test_database_refusal_reason(safe_url)
     assert reason is None
+
+
+@pytest.mark.parametrize(
+    ("unsafe_url", "expected_reason"),
+    [
+        (
+            "postgresql+psycopg://u:p@ep-example-pooler.neon.tech/app_test",
+            "Neon hosts are not allowed",
+        ),
+        (
+            "postgresql+psycopg:///app_test?host=ep-example.neon.tech",
+            "Neon hosts are not allowed",
+        ),
+        (
+            "postgresql+psycopg://u:p@db.example.com/app_test",
+            "require a local test database host",
+        ),
+        (
+            "postgresql+psycopg://u:p@postgres:5432/app_test",
+            "require a local test database host",
+        ),
+        (
+            "postgresql+psycopg:///app_test?host=db.example.com",
+            "require a local test database host",
+        ),
+        (
+            "postgresql+psycopg:///app_test?hostaddr=203.0.113.10",
+            "do not allow connection target overrides",
+        ),
+        (
+            "postgresql+psycopg:///app_test?service=remote",
+            "do not allow connection target overrides",
+        ),
+        (
+            "postgresql+psycopg:///app_test?service=remote&servicefile=/tmp/pg_service.conf",
+            "do not allow connection target overrides",
+        ),
+        (
+            "postgresql+psycopg:///app_test?host=/var/run/postgresql,db.example.com&port=5432,5432",
+            "require a local test database host",
+        ),
+        (
+            "postgresql+psycopg://u:p@localhost/app_test?dbname=production",
+            "do not allow connection target overrides",
+        ),
+        (
+            "postgresql+psycopg://u:p@localhost/app_test?database=production",
+            "do not allow connection target overrides",
+        ),
+        (
+            "postgresql+psycopg://u:p@localhost/app_test?conninfo=hostaddr%3D203.0.113.10",
+            "do not allow connection target overrides",
+        ),
+        (
+            "postgresql+psycopg:///app_test?conninfo=host%3Ddb.example.com",
+            "do not allow connection target overrides",
+        ),
+        (
+            "postgresql+psycopg:///app_test?dsn=service%3Dremote",
+            "do not allow connection target overrides",
+        ),
+    ],
+)
+def test_test_database_refusal_reason_rejects_remote_hosts_without_echoing_dsn(
+    monkeypatch,
+    unsafe_url,
+    expected_reason,
+):
+    _clear_test_db_env(monkeypatch)
+    import tests.db_settings as _dbs
+    _importlib.reload(_dbs)
+
+    reason = _dbs.test_database_refusal_reason(unsafe_url)
+
+    assert reason is not None
+    assert expected_reason in reason
+    assert unsafe_url not in reason
+    assert "ep-example" not in reason
+    assert "db.example.com" not in reason
+    assert "203.0.113.10" not in reason
+    assert "production" not in reason
+
+
+@pytest.mark.parametrize(
+    ("env_name", "env_value"),
+    [
+        ("PGHOST", "db.example.com"),
+        ("PGHOSTADDR", "203.0.113.10"),
+        ("PGSERVICE", "remote-service"),
+        ("PGSERVICEFILE", "/tmp/remote-service.conf"),
+    ],
+)
+@pytest.mark.parametrize(
+    "safe_url",
+    [
+        "postgresql+psycopg://u:p@localhost/app_test",
+        "postgresql+psycopg:///app_test",
+    ],
+)
+def test_test_database_refusal_reason_rejects_ambient_target_overrides_without_echoing_values(
+    monkeypatch,
+    env_name,
+    env_value,
+    safe_url,
+):
+    _clear_test_db_env(monkeypatch)
+    monkeypatch.setenv(env_name, env_value)
+    import tests.db_settings as _dbs
+    _importlib.reload(_dbs)
+
+    reason = _dbs.test_database_refusal_reason(safe_url)
+
+    assert reason == "PostgreSQL DB tests do not allow ambient connection target overrides."
+    assert safe_url not in reason
+    assert env_value not in reason
 
 
 def test_require_safe_skips_when_env_missing(monkeypatch):
@@ -422,6 +551,19 @@ def test_require_safe_skips_on_non_test_db_name(monkeypatch):
     import tests.db_settings as _dbs
     _importlib.reload(_dbs)
     with pytest.raises(pytest.skip.Exception):
+        _dbs.require_safe_test_database_url_or_skip()
+
+
+def test_require_safe_skips_on_remote_test_database(monkeypatch):
+    _clear_test_db_env(monkeypatch)
+    monkeypatch.setenv(
+        "TEST_DATABASE_URL",
+        "postgresql+psycopg://u:p@db.example.com/ai_running_coach_test",
+    )
+    import tests.db_settings as _dbs
+    _importlib.reload(_dbs)
+
+    with pytest.raises(pytest.skip.Exception, match="local test database host"):
         _dbs.require_safe_test_database_url_or_skip()
 
 

@@ -15,6 +15,9 @@ fi
   tests/test_fetch_garmin_raw.py \
   tests/test_contracts.py \
   tests/test_goal_prompt.py \
+  tests/test_activity_notification.py \
+  tests/test_notifier.py \
+  tests/test_line_client.py \
   tests/test_daily_run.py \
   tests/test_run_daily_pipeline.py \
   tests/test_runner.py \
