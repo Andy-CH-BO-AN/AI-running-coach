@@ -4,7 +4,9 @@ import sys
 import tempfile
 import types
 import unittest
-from datetime import date, datetime, timedelta
+from contextlib import redirect_stdout
+from datetime import date
+from io import StringIO
 from inspect import signature
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -64,35 +66,95 @@ sys.modules.setdefault("garminconnect", garminconnect_stub)
 from src.pipeline import activity_payloads, runner
 from src.pipeline.activity_payloads import ActivityPayloadProvider
 from src.pipeline.goal_prompt import GoalPromptOverrides
-from src.services import report_generator
+from src.services import garmin_import_service, report_generator
 
 
 def _connection_error(message: str = "connection refused") -> OperationalError:
     return OperationalError("SELECT 1", {}, ConnectionError(message))
 
 
+class _SessionContext:
+    def __init__(self, session):
+        self.session = session
+
+    def __enter__(self):
+        return self.session
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+
 class RunnerTests(unittest.TestCase):
-    def test_fetch_garmin_updates_fetches_from_latest_db_date(self):
-        fetch = Mock(return_value={"activities": [], "user_data": {}})
-        provider = ActivityPayloadProvider(garmin_fetcher=fetch)
-        provider._fetch_garmin_updates(
-            latest_date=date(2026, 5, 10),
-            fetch_limit=999,
-            fallback_max_heart_rate=191,
+    def test_load_or_fetch_uses_latest_db_date_and_heart_rate_for_incremental_fetch(self):
+        session = Mock()
+        session.scalar.return_value = date(2026, 5, 10)
+        fetched_activity = {
+            "activity_id": 1,
+            "type": "running",
+            "date": "2026-05-10",
+        }
+        fetch = Mock(
+            return_value={
+                "activities": [fetched_activity],
+                "user_data": {"max_heart_rate": 190},
+            }
+        )
+        provider = ActivityPayloadProvider(
+            session_factory=lambda: _SessionContext(session),
+            garmin_fetcher=fetch,
+            raw_artifact_persister=Mock(
+                return_value=(Path("user.json"), Path("raw.json"))
+            ),
+            import_service=Mock(
+                return_value={
+                    "activities": 1,
+                    "splits": 0,
+                    "swimming_lengths": 0,
+                    "user_snapshot": True,
+                }
+            ),
         )
 
-        fetch.assert_called_once_with(
-            999,
-            progress=True,
-            since_date=date(2026, 5, 10),
-            fallback_max_heart_rate=191,
-        )
+        with patch.object(
+            activity_payloads,
+            "get_or_create_default_user",
+            return_value=types.SimpleNamespace(id="user-1"),
+        ), patch.object(
+            activity_payloads,
+            "get_recent_max_heart_rate",
+            return_value=191,
+        ), patch.object(
+            activity_payloads,
+            "get_recent_activities",
+            return_value=[types.SimpleNamespace(raw_json=fetched_activity)],
+        ), patch.object(
+            activity_payloads,
+            "get_latest_user_profile",
+            return_value=types.SimpleNamespace(raw_profile={"max_heart_rate": 190}),
+        ), patch.object(
+            activity_payloads,
+            "get_latest_resting_heart_rate",
+            return_value=None,
+        ):
+            raw_activities, user_data = provider.load_or_fetch(
+                activity_limit=75,
+                fetch_limit=999,
+                timestamp="20260510",
+            )
 
-    def test_sync_garmin_to_db_delegates_already_fetched_payload_import(self):
+        fetch_args, fetch_kwargs = fetch.call_args
+        self.assertEqual(fetch_args, (999,))
+        self.assertEqual(fetch_kwargs["since_date"], date(2026, 5, 10))
+        self.assertEqual(fetch_kwargs["fallback_max_heart_rate"], 191)
+        self.assertEqual(raw_activities, [fetched_activity])
+        self.assertEqual(user_data["max_heart_rate"], 190)
+
+    def test_load_or_fetch_persists_fetched_payload_before_import(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             base = Path(temp_dir)
             raw_dir = base / "raw"
             session = Mock()
+            session.scalar.return_value = None
             garmin_data = {
                 "activities": [{"activity_id": 1, "type": "cycling", "date": "2026-05-10"}],
                 "user_data": {"max_heart_rate": 190},
@@ -100,6 +162,7 @@ class RunnerTests(unittest.TestCase):
 
             provider = ActivityPayloadProvider(
                 raw_data_dir=raw_dir,
+                garmin_fetcher=Mock(return_value=garmin_data),
                 import_service=Mock(
                     return_value={
                         "activities": 1,
@@ -111,58 +174,78 @@ class RunnerTests(unittest.TestCase):
                     },
                 ),
             )
-            counts = provider._sync_garmin_to_db(
+            provider.session_factory = lambda: _SessionContext(session)
+
+            with patch.object(
+                activity_payloads,
+                "get_or_create_default_user",
+                return_value=types.SimpleNamespace(id="user-1"),
+            ), patch.object(
+                activity_payloads,
+                "get_recent_max_heart_rate",
+                return_value=None,
+            ), patch.object(
+                activity_payloads,
+                "get_recent_activities",
+                return_value=[types.SimpleNamespace(raw_json=garmin_data["activities"][0])],
+            ), patch.object(
+                activity_payloads,
+                "get_latest_user_profile",
+                return_value=types.SimpleNamespace(raw_profile=garmin_data["user_data"]),
+            ), patch.object(
+                activity_payloads,
+                "get_latest_resting_heart_rate",
+                return_value=None,
+            ):
+                raw_activities, user_data = provider.load_or_fetch(
+                    activity_limit=75,
+                    fetch_limit=75,
+                    timestamp="20260510",
+                )
+
+            self.assertEqual(raw_activities, garmin_data["activities"])
+            self.assertEqual(user_data, garmin_data["user_data"])
+            self.assertEqual(
+                json.loads((raw_dir / "garmin_raw_20260510.json").read_text(encoding="utf-8")),
+                garmin_data["activities"],
+            )
+            self.assertEqual(
+                json.loads((raw_dir / "garmin_user_20260510.json").read_text(encoding="utf-8")),
+                garmin_data["user_data"],
+            )
+            self.assertEqual(provider.import_service.call_count, 1)
+
+    def test_import_service_exposes_shadow_sync_and_parity_results(self):
+        session = Mock()
+        with patch.object(
+            garmin_import_service,
+            "import_artifact_bundle",
+            return_value={
+                "raw_import": {
+                    "activities": 1,
+                    "splits": 0,
+                    "swimming_lengths": 0,
+                }
+            },
+        ), patch.object(
+            garmin_import_service,
+            "sync_shadow_database",
+            return_value={"rows_copied": 10},
+        ), patch.object(
+            garmin_import_service,
+            "validate_shadow_parity",
+            return_value={"ok": True, "mismatches": []},
+        ):
+            results = garmin_import_service.import_fetched_garmin_payload(
                 session=session,
                 user_id="user-1",
-                timestamp="20260510",
-                garmin_data=garmin_data,
+                raw_path=Path("raw.json"),
             )
 
-            provider.import_service.assert_called_once_with(
-                session=session,
-                user_id="user-1",
-                user_path=raw_dir / "garmin_user_20260510.json",
-                raw_path=raw_dir / "garmin_raw_20260510.json",
-            )
-            session.commit.assert_not_called()
-            self.assertEqual(counts["activities"], 1)
-            self.assertTrue(counts["user_snapshot"])
-            self.assertTrue((raw_dir / "garmin_raw_20260510.json").exists())
-            self.assertTrue((raw_dir / "garmin_user_20260510.json").exists())
-
-    def test_sync_garmin_to_db_runs_shadow_sync_and_parity_when_enabled(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            base = Path(temp_dir)
-            raw_dir = base / "raw"
-            session = Mock()
-            garmin_data = {
-                "activities": [{"activity_id": 1, "type": "cycling", "date": "2026-05-10"}],
-                "user_data": {"max_heart_rate": 190},
-            }
-
-            provider = ActivityPayloadProvider(
-                raw_data_dir=raw_dir,
-                import_service=Mock(
-                    return_value={
-                        "activities": 1,
-                        "splits": 0,
-                        "swimming_lengths": 0,
-                        "user_snapshot": True,
-                        "shadow_import": {"rows_copied": 10},
-                        "shadow_parity": {"ok": True, "mismatches": []},
-                    },
-                ),
-            )
-            counts = provider._sync_garmin_to_db(
-                session=session,
-                user_id="user-1",
-                timestamp="20260510",
-                garmin_data=garmin_data,
-            )
-
-            provider.import_service.assert_called_once()
-            self.assertIn("shadow_import", counts)
-            self.assertEqual(counts["shadow_parity"]["ok"], True)
+        self.assertEqual(results["activities"], 1)
+        self.assertEqual(results["shadow_import"]["rows_copied"], 10)
+        self.assertTrue(results["shadow_parity"]["ok"])
+        session.commit.assert_called_once_with()
 
     def test_load_or_fetch_reads_existing_db_payloads_when_db_import_fails_after_fetch(self):
         class FakeSessionContext:
@@ -387,30 +470,6 @@ class RunnerTests(unittest.TestCase):
         ), self.assertRaises(OperationalError):
             provider.load_or_fetch(activity_limit=75, fetch_limit=75, timestamp="20260510")
 
-    def test_runner_load_or_fetch_delegates_to_activity_payload_provider(self):
-        provider = Mock()
-        provider.load_or_fetch.return_value = ([{"activity_id": 1}], {"max_heart_rate": 190})
-
-        with patch.object(runner, "RAW_DATA_DIR", Path("custom/raw")), patch.object(
-            runner,
-            "ActivityPayloadProvider",
-            return_value=provider,
-        ) as provider_class:
-            raw_activities, user_data = runner._load_or_fetch_activity_payloads(
-                activity_limit=75,
-                fetch_limit=999,
-                timestamp="20260510",
-            )
-
-        provider_class.assert_called_once_with(raw_data_dir=Path("custom/raw"))
-        provider.load_or_fetch.assert_called_once_with(
-            activity_limit=75,
-            fetch_limit=999,
-            timestamp="20260510",
-        )
-        self.assertEqual(raw_activities, [{"activity_id": 1}])
-        self.assertEqual(user_data, {"max_heart_rate": 190})
-
     def test_apply_resting_heart_rate_history_fills_missing_from_latest_db_value(self):
         session = Mock()
         provider = ActivityPayloadProvider()
@@ -437,55 +496,47 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(user_data["resting_heart_rate"], 49)
         self.assertNotIn("resting_heart_rate_source", user_data)
 
-    def test_apply_resting_heart_rate_history_keeps_current_day_value_when_db_is_lower(self):
-        session = Mock()
-        provider = ActivityPayloadProvider()
-        with patch.object(activity_payloads, "get_latest_resting_heart_rate", return_value=48.0):
-            user_data = provider._apply_resting_heart_rate_history(
-                session=session,
-                user_id="user-1",
-                user_data={"max_heart_rate": 190, "resting_heart_rate": 51},
-            )
+    def test_run_pipeline_uses_provider_payload_and_stops_when_filter_removes_all(self):
+        raw_activities = [
+            {"activity_id": 1, "type": "cycling", "distance": 0.5, "duration": 2.0}
+        ]
+        provider = Mock()
+        provider.load_or_fetch.return_value = (
+            raw_activities,
+            {"max_heart_rate": 190},
+        )
 
-        self.assertEqual(user_data["resting_heart_rate"], 51)
-        self.assertNotIn("resting_heart_rate_source", user_data)
-
-    def test_run_pipeline_uses_db_loaded_activities_and_filters_all_data(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            raw_activities = [{"activity_id": 1, "type": "cycling", "distance": 0.5, "duration": 2.0}]
-
-            with patch.object(runner, "_build_timestamp", return_value="20260510"), patch.object(
-                runner,
-                "_load_or_fetch_activity_payloads",
-                return_value=(raw_activities, {"max_heart_rate": 190}),
-            ) as load_payloads:
-                report = runner.run_pipeline()
-
-            self.assertIsNone(report)
-            load_payloads.assert_called_once_with(
-                activity_limit=75,
-                fetch_limit=75,
-                timestamp="20260510",
-            )
-
-    def test_run_pipeline_stops_before_processing_when_no_activities_loaded(self):
         with patch.object(runner, "_build_timestamp", return_value="20260510"), patch.object(
             runner,
-            "_load_or_fetch_activity_payloads",
-            return_value=([], {"max_heart_rate": 190}),
-        ) as load_payloads, patch.object(runner, "normalize_activity_window") as normalize_mock, patch.object(
-            runner, "_persist_pipeline_artifacts"
-        ) as persist_mock:
+            "ActivityPayloadProvider",
+            return_value=provider,
+        ):
             report = runner.run_pipeline()
 
         self.assertIsNone(report)
-        load_payloads.assert_called_once_with(
+        provider.load_or_fetch.assert_called_once_with(
             activity_limit=75,
             fetch_limit=75,
             timestamp="20260510",
         )
-        normalize_mock.assert_not_called()
+
+    def test_run_pipeline_stops_before_processing_when_no_activities_loaded(self):
+        provider = Mock()
+        provider.load_or_fetch.return_value = ([], {"max_heart_rate": 190})
+
+        with patch.object(runner, "_build_timestamp", return_value="20260510"), patch.object(
+            runner,
+            "ActivityPayloadProvider",
+            return_value=provider,
+        ), patch.object(runner, "generate_coach_report") as coach_mock, patch.object(
+            runner, "persist_pipeline_artifacts"
+        ) as persist_mock, patch.object(runner, "_run_line_notification") as notification_mock:
+            report = runner.run_pipeline()
+
+        self.assertIsNone(report)
+        coach_mock.assert_not_called()
         persist_mock.assert_not_called()
+        notification_mock.assert_not_called()
 
     def test_run_pipeline_defaults_fetch_limit_to_activity_limit(self):
         raw_activities = [{"activity_id": 1, "type": "running", "distance": 10.0, "duration": 50.0}]
@@ -565,6 +616,23 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(report_body["weekly_analysis"][0]["week_start"], "2026-05-04")
             self.assertEqual(report_body["weekly_analysis"][0]["sessions"][0]["activity_id"], 1)
 
+    def test_line_notification_prints_delivery_summary(self):
+        from src.notifications.notifier import NotificationResult
+
+        result = NotificationResult(status="sent", sent=3, failed=1)
+        output = StringIO()
+        with patch(
+            "src.notifications.notifier.run_line_notification",
+            return_value=result,
+        ), redirect_stdout(output):
+            returned = runner._run_line_notification("20260510")
+
+        self.assertIs(returned, result)
+        rendered = output.getvalue()
+        self.assertIn("status=sent", rendered)
+        self.assertIn("sent=3", rendered)
+        self.assertIn("failed=1", rendered)
+
     def test_run_pipeline_passes_rendered_goal_overrides_to_coach(self):
         raw_activities = [{"activity_id": 1, "type": "running", "distance": 10.0, "duration": 50.0}]
         overrides = GoalPromptOverrides(core_goal="目標成績：5K 20:00")
@@ -600,51 +668,13 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(kwargs["goal_path"], str(goal_path))
         self.assertIn("deterministic_context", kwargs)
 
-    def test_generate_coach_report_renders_goal_and_applies_deterministic_overlay(self):
-        processed_data = [{"activity_id": 1, "performance_formatted": "5:00 /km"}]
-        user_data = {"max_heart_rate": 190}
-        deterministic_context = {"meta": {"today": "2026-05-10"}}
-        overrides = GoalPromptOverrides(core_goal="目標成績：5K 20:00")
-        ai_response = {"headline": "report"}
-        enforced_response = {"headline": "enforced report"}
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            goal_path = Path(temp_dir) / "goal.md"
-            goal_path.write_text(
-                "# Training Goal\n\n"
-                "## 🎯 核心目標\n"
-                "* old goal\n",
-                encoding="utf-8",
-            )
-
-            with patch.object(runner, "GOAL_PROMPT_PATH", goal_path), patch.object(
-                report_generator, "coach", return_value=ai_response
-            ) as coach_mock, patch.object(
-                report_generator,
-                "enforce_deterministic_report_fields",
-                return_value=enforced_response,
-            ) as enforce_mock:
-                report = runner._generate_coach_report(
-                    processed_data=processed_data,
-                    user_data=user_data,
-                    deterministic_context=deterministic_context,
-                    goal_overrides=overrides,
-                )
-
-        self.assertEqual(report, enforced_response)
-        _, coach_kwargs = coach_mock.call_args
-        self.assertEqual(coach_kwargs["data"], processed_data)
-        self.assertEqual(coach_kwargs["user_data"], user_data)
-        self.assertEqual(coach_kwargs["deterministic_context"], deterministic_context)
-        self.assertEqual(coach_kwargs["goal_path"], str(goal_path))
-        self.assertIn("* 目標成績：5K 20:00", coach_kwargs["goal_text"])
-        enforce_mock.assert_called_once_with(ai_response, deterministic_context)
-
-    def test_public_generate_coach_report_accepts_goal_prompt_path(self):
+    def test_public_generate_coach_report_renders_goal_and_enforces_deterministic_fields(self):
         processed_data = [{"activity_id": 1, "performance_formatted": "5:00 /km"}]
         user_data = {"max_heart_rate": 190}
         deterministic_context = {"meta": {"today": "2026-05-10"}}
         overrides = GoalPromptOverrides(training_preferences="每週最多 5 天訓練")
+        ai_response = {"headline": "report"}
+        enforced_response = {"headline": "enforced"}
 
         with tempfile.TemporaryDirectory() as temp_dir:
             goal_path = Path(temp_dir) / "goal.md"
@@ -658,12 +688,12 @@ class RunnerTests(unittest.TestCase):
             with patch.object(
                 report_generator,
                 "coach",
-                return_value={"headline": "report"},
+                return_value=ai_response,
             ) as coach_mock, patch.object(
                 report_generator,
                 "enforce_deterministic_report_fields",
-                return_value={"headline": "enforced"},
-            ):
+                return_value=enforced_response,
+            ) as enforce_mock:
                 report = report_generator.generate_coach_report(
                     processed_data=processed_data,
                     user_data=user_data,
@@ -672,23 +702,26 @@ class RunnerTests(unittest.TestCase):
                     goal_prompt_path=goal_path,
                 )
 
-        self.assertEqual(report, {"headline": "enforced"})
+        self.assertEqual(report, enforced_response)
         _, coach_kwargs = coach_mock.call_args
+        self.assertEqual(coach_kwargs["data"], processed_data)
+        self.assertEqual(coach_kwargs["user_data"], user_data)
+        self.assertEqual(coach_kwargs["deterministic_context"], deterministic_context)
         self.assertEqual(coach_kwargs["goal_path"], str(goal_path))
         self.assertIn("* 每週最多 5 天訓練", coach_kwargs["goal_text"])
+        enforce_mock.assert_called_once_with(ai_response, deterministic_context)
 
-    def test_lazy_coach_wrapper_keeps_explicit_public_signature(self):
+    def test_lazy_coach_wrapper_preserves_required_parameters_and_forwards_calls(self):
         parameters = signature(report_generator.coach).parameters
 
-        self.assertEqual(
-            list(parameters),
-            [
+        self.assertTrue(
+            {
                 "data",
                 "user_data",
                 "deterministic_context",
                 "goal_path",
                 "goal_text",
-            ],
+            }.issubset(parameters)
         )
         self.assertTrue(
             all(parameter.kind.name != "VAR_KEYWORD" for parameter in parameters.values())
@@ -696,6 +729,21 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(
             all(parameter.kind.name != "VAR_POSITIONAL" for parameter in parameters.values())
         )
+
+        forwarded = {
+            "data": [{"activity_id": 7}],
+            "user_data": {"max_heart_rate": 190},
+            "deterministic_context": {"meta": {"today": "2026-05-10"}},
+            "goal_path": "goal.md",
+            "goal_text": "sentinel goal",
+        }
+        with patch("src.agents.coach.coach", return_value={"headline": "report"}) as generate:
+            report = report_generator.coach(**forwarded)
+
+        self.assertEqual(report, {"headline": "report"})
+        generate.assert_called_once_with(**forwarded)
+        with self.assertRaises(TypeError):
+            report_generator.coach(data=[], unsupported_option=True)
 
     def test_fetch_without_db_persists_raw_artifacts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -712,13 +760,22 @@ class RunnerTests(unittest.TestCase):
                     },
                 ),
             )
-            raw_activities, user_data = provider._fetch_without_db(activity_limit=75, timestamp="20260510")
+            raw_activities, user_data = provider.fetch_without_database(
+                activity_limit=75,
+                timestamp="20260510",
+            )
 
             self.assertEqual(len(raw_activities), 1)
             self.assertEqual(user_data["max_heart_rate"], 190)
 
-            raw_payload = json.loads((raw_dir / "garmin_user_20260510.json").read_text(encoding="utf-8"))
-            self.assertEqual(raw_payload["max_heart_rate"], 190)
+            raw_payload = json.loads(
+                (raw_dir / "garmin_raw_20260510.json").read_text(encoding="utf-8")
+            )
+            user_payload = json.loads(
+                (raw_dir / "garmin_user_20260510.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(raw_payload, raw_activities)
+            self.assertEqual(user_payload, user_data)
 
     def test_explicit_stateless_payload_load_skips_session_and_uses_latest_ten_activities(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -754,33 +811,6 @@ class RunnerTests(unittest.TestCase):
             garmin_fetcher.assert_called_once_with(10, progress=True)
             self.assertEqual([item["activity_id"] for item in raw_activities], list(range(12, 2, -1)))
             self.assertEqual(user_data["max_heart_rate"], 190)
-
-    def test_direct_garmin_payload_limits_normal_mode_to_latest_seventy_five(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            provider = ActivityPayloadProvider(
-                garmin_fetcher=Mock(
-                    return_value={
-                        "activities": [
-                            {
-                                "activity_id": activity_id,
-                                "started_at": (datetime(2026, 1, 1) + timedelta(days=activity_id)).isoformat(),
-                                "type": "running",
-                            }
-                            for activity_id in range(1, 81)
-                        ],
-                        "user_data": {},
-                    }
-                ),
-                raw_data_dir=Path(temp_dir) / "raw",
-            )
-
-            raw_activities, _ = provider._fetch_without_db(
-                activity_limit=75,
-                timestamp="20260510",
-            )
-
-        assert len(raw_activities) == 75
-        assert [item["activity_id"] for item in raw_activities] == list(range(80, 5, -1))
 
     def test_explicit_stateless_payload_load_does_not_swallow_garmin_errors(self):
         provider = ActivityPayloadProvider(

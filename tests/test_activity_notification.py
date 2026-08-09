@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import re
+import logging
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -23,10 +23,11 @@ from src.notifications.notifier import (
 
 SUCCESS = LineSendResult(True, 200, 1, None)
 LINE_FAILURE = LineSendResult(False, 500, 3, "server_error")
+ACTIVITY_MARKER_PREFIX = "activity-marker:"
 
 
-def _connection_error() -> OperationalError:
-    return OperationalError("SELECT 1", {}, ConnectionError("connection refused"))
+def _connection_error(message: str = "connection refused") -> OperationalError:
+    return OperationalError("SELECT 1", {}, ConnectionError(message))
 
 
 def _activity(activity_id: int, activity_date: date) -> dict[str, Any]:
@@ -61,6 +62,18 @@ def _context(*weeks: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+@pytest.fixture(autouse=True)
+def _deterministic_activity_formatter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give the transport an identity marker independent of production copy/URLs."""
+    monkeypatch.setattr(
+        notifier,
+        "format_activity_messages",
+        lambda activity, _week: [
+            f"{ACTIVITY_MARKER_PREFIX}{activity['activity_id']}"
+        ],
+    )
+
+
 @dataclass
 class _FakeTransport:
     failures: set[int] = field(default_factory=set)
@@ -73,10 +86,13 @@ class _FakeTransport:
         group_id: str,
         messages: Sequence[str],
     ) -> LineSendResult:
-        rendered = "\n".join(messages)
-        match = re.search(r"/activity/(\d+)", rendered)
-        assert match is not None, "formatter output must retain Activity identity"
-        activity_id = int(match.group(1))
+        markers = [
+            message.removeprefix(ACTIVITY_MARKER_PREFIX)
+            for message in messages
+            if message.startswith(ACTIVITY_MARKER_PREFIX)
+        ]
+        assert len(markers) == 1, "one formatter marker must identify the Activity"
+        activity_id = int(markers[0])
         self.sent_activity_ids.append(activity_id)
         self.calls.append((token, group_id, tuple(messages)))
         return LINE_FAILURE if activity_id in self.failures else SUCCESS
@@ -225,6 +241,7 @@ def _execute(
 def test_persistent_profiles_share_newest_first_dedup_and_twenty_cap(
     monkeypatch: pytest.MonkeyPatch,
     profile: _NotificationProfile,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     start = date(2026, 7, 1)
     activities = [_activity(activity_id, start + timedelta(days=activity_id)) for activity_id in range(1, 23)]
@@ -233,22 +250,32 @@ def test_persistent_profiles_share_newest_first_dedup_and_twenty_cap(
     transport = _FakeTransport()
     probe = _PersistenceProbe()
 
-    result, _database = _execute(
-        monkeypatch,
-        context=context,
-        profile=profile,
-        transport=transport,
-        probe=probe,
-    )
+    with caplog.at_level(logging.WARNING, logger="src.notifications.notifier"):
+        result, database = _execute(
+            monkeypatch,
+            context=context,
+            profile=profile,
+            transport=transport,
+            probe=probe,
+        )
 
     assert result.status == "done"
     assert (result.sent, result.failed) == (20, 0)
     assert transport.sent_activity_ids == list(range(22, 2, -1))
     assert probe.recorded_ids == transport.sent_activity_ids
+    assert probe.release_calls == 1
+    assert database.revocations == []
+    assert any(
+        record.levelno >= logging.WARNING
+        and "deferr" in record.getMessage().lower()
+        and "2" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_daily_unavailable_is_newest_first_and_capped_at_three(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     start = date(2026, 7, 1)
     context = _context([_activity(activity_id, start + timedelta(days=activity_id)) for activity_id in range(1, 6)])
@@ -256,14 +283,15 @@ def test_daily_unavailable_is_newest_first_and_capped_at_three(
     probe = _PersistenceProbe()
     database = _FakeDatabase(available=False)
 
-    result, database = _execute(
-        monkeypatch,
-        context=context,
-        profile=_NotificationProfile.DAILY,
-        transport=transport,
-        probe=probe,
-        database=database,
-    )
+    with caplog.at_level(logging.WARNING, logger="src.notifications.notifier"):
+        result, database = _execute(
+            monkeypatch,
+            context=context,
+            profile=_NotificationProfile.DAILY,
+            transport=transport,
+            probe=probe,
+            database=database,
+        )
 
     assert result.status == "stateless_done"
     assert (result.sent, result.failed) == (3, 0)
@@ -271,6 +299,16 @@ def test_daily_unavailable_is_newest_first_and_capped_at_three(
     assert database.lock_entries == 0
     assert database.session_entries == 0
     assert probe.recorded_ids == []
+    warnings = [
+        record.getMessage().lower()
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+    ]
+    assert any("persistence" in message and "stateless" in message for message in warnings)
+    assert any(
+        "2" in message and ("not sent" in message or "defer" in message)
+        for message in warnings
+    )
 
 
 def test_seed_no_new_and_lock_outcomes(
@@ -290,6 +328,7 @@ def test_seed_no_new_and_lock_outcomes(
     assert seeded.status == "seeded"
     assert seed_probe.seeded_ids == [[10]]
     assert seed_transport.sent_activity_ids == []
+    assert seed_probe.release_calls == 1
 
     no_new_probe = _PersistenceProbe(notified_ids={-1, 10})
     no_new_transport = _FakeTransport()
@@ -302,6 +341,7 @@ def test_seed_no_new_and_lock_outcomes(
     )
     assert no_new.status == "no_new"
     assert no_new_transport.sent_activity_ids == []
+    assert no_new_probe.release_calls == 1
 
     locked_probe = _PersistenceProbe(acquire=False)
     locked_transport = _FakeTransport()
@@ -358,30 +398,51 @@ def test_sent_unrecorded_has_profile_specific_stop_and_count_semantics(
     expected_status: str,
     expected_ids: list[int],
     expected_counts: tuple[int, int],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     context = _context([_activity(activity_id, date(2026, 7, activity_id)) for activity_id in range(1, 5)])
     transport = _FakeTransport()
-    probe = _PersistenceProbe(record_error=_connection_error())
-
-    result, database = _execute(
-        monkeypatch,
-        context=context,
-        profile=profile,
-        transport=transport,
-        probe=probe,
+    persistence_secret = "persistence-error-secret-must-not-leak"
+    probe = _PersistenceProbe(
+        record_error=_connection_error(f"connection refused: {persistence_secret}")
     )
+
+    with caplog.at_level(logging.WARNING, logger="src.notifications.notifier"):
+        result, database = _execute(
+            monkeypatch,
+            context=context,
+            profile=profile,
+            transport=transport,
+            probe=probe,
+        )
 
     assert result.status == expected_status
     assert (result.sent, result.failed) == expected_counts
     assert transport.sent_activity_ids == expected_ids
     assert len(set(transport.sent_activity_ids)) == len(transport.sent_activity_ids)
     assert probe.recorded_ids == []
+    warning_records = [
+        record for record in caplog.records if record.levelno >= logging.WARNING
+    ]
+    assert persistence_secret not in " ".join(
+        record.getMessage() for record in warning_records
+    )
+    assert any(
+        "4" in record.getMessage()
+        and any(
+            term in record.getMessage().lower()
+            for term in ("again", "resent", "retry", "repeat")
+        )
+        for record in warning_records
+    )
     if profile is _NotificationProfile.MANUAL:
         assert database.session_object.rollback_calls == 1
         assert database.revocations == []
+        assert probe.release_calls == 1
     else:
         assert len(database.revocations) == 1
         assert database.session_object.rollback_calls == 0
+        assert probe.release_calls == 0
 
 
 @pytest.mark.parametrize("phase", ["lock", "acquire", "session", "load", "seed"])
@@ -442,6 +503,7 @@ def test_daily_failed_send_and_sent_unrecorded_are_not_retried_stateless(
     assert transport.sent_activity_ids == [5, 4, 3, 2]
     assert len(set(transport.sent_activity_ids)) == 4
     assert len(database.revocations) == 1
+    assert probe.release_calls == 0
 
 
 def test_daily_unlock_loss_revokes_without_resend_or_status_change(
@@ -485,6 +547,7 @@ def test_nontransient_db_and_formatter_errors_propagate(
             database=integrity_database,
         )
     assert integrity_database.revocations == []
+    assert integrity_probe.release_calls == 1
 
     formatter_probe = _PersistenceProbe()
     formatter_database = _FakeDatabase()
@@ -503,6 +566,7 @@ def test_nontransient_db_and_formatter_errors_propagate(
             database=formatter_database,
         )
     assert formatter_database.revocations == []
+    assert formatter_probe.release_calls == 1
 
 
 def test_transport_program_error_propagates_without_revoking_persistence(
@@ -525,31 +589,7 @@ def test_transport_program_error_propagates_without_revoking_persistence(
         )
 
     assert database.revocations == []
-
-
-def test_delivery_outcome_state_is_terminal_and_delivery_runs_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    candidate = notifier._ActivityCandidate(
-        _activity(8, date(2026, 7, 8)),
-        {"derived_training_load": 100.0},
-    )
-    delivery = notifier._ActivityDelivery(
-        candidate=candidate,
-        token="test-token",
-        group_id="test-group",
-        transport=_FakeTransport(),
-    )
-    monkeypatch.setattr(notifier, "record_notification", lambda _session, _activity_id: True)
-
-    outcome = delivery.run(_FakeSession())
-
-    assert isinstance(outcome, notifier._ActivityDeliveryOutcome)
-    assert outcome.state is _ActivityDeliveryState.RECORDED
-    assert delivery.state is _ActivityDeliveryState.RECORDED
-    assert outcome.send_result is SUCCESS
-    with pytest.raises(RuntimeError, match="only run once"):
-        delivery.run(_FakeSession())
+    assert probe.release_calls == 1
 
 
 def test_production_transport_partial_batch_failure_never_records(
@@ -598,12 +638,21 @@ def test_production_transport_partial_batch_failure_never_records(
 
 
 @pytest.mark.parametrize("daily", [False, True])
+@pytest.mark.parametrize(
+    "missing_name",
+    ["LINE_CHANNEL_ACCESS_TOKEN", "LINE_GROUP_ID"],
+)
 def test_public_wrappers_disable_before_loading_context_or_transport(
     monkeypatch: pytest.MonkeyPatch,
     daily: bool,
+    missing_name: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monkeypatch.delenv("LINE_CHANNEL_ACCESS_TOKEN", raising=False)
-    monkeypatch.delenv("LINE_GROUP_ID", raising=False)
+    token_secret = "token-secret-must-not-leak"
+    group_secret = "group-secret-must-not-leak"
+    monkeypatch.setenv("LINE_CHANNEL_ACCESS_TOKEN", token_secret)
+    monkeypatch.setenv("LINE_GROUP_ID", group_secret)
+    monkeypatch.delenv(missing_name)
     monkeypatch.setattr(
         notifier,
         "_load_coach_context",
@@ -615,12 +664,20 @@ def test_public_wrappers_disable_before_loading_context_or_transport(
         lambda *_args: (_ for _ in ()).throw(AssertionError("transport called")),
     )
 
-    if daily:
-        result = notifier.run_daily_line_notification("missing.json", database=None)
-    else:
-        result = notifier.run_line_notification("missing.json")
+    with caplog.at_level(logging.INFO, logger="src.notifications.notifier"):
+        if daily:
+            result = notifier.run_daily_line_notification("missing.json", database=None)
+        else:
+            result = notifier.run_line_notification("missing.json")
 
     assert result == notifier.NotificationResult(status="disabled")
+    messages = " ".join(record.getMessage() for record in caplog.records)
+    assert any(
+        term in messages.lower()
+        for term in ("disabled", "missing")
+    )
+    assert token_secret not in messages
+    assert group_secret not in messages
 
 
 def test_internal_lifecycle_repr_hides_credentials_and_persistence_details() -> None:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import secrets
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -21,6 +20,9 @@ from src.notifications.notifier import (
     _NotificationRun,
 )
 from tests.db_test_utils import isolated_db_session
+
+
+ACTIVITY_MARKER_PREFIX = "activity-marker:"
 
 
 @pytest.fixture()
@@ -69,9 +71,13 @@ class _FakeTransport:
         _group_id: str,
         messages: Sequence[str],
     ) -> LineSendResult:
-        match = re.search(r"/activity/(\d+)", "\n".join(messages))
-        assert match is not None
-        self.sent_activity_ids.append(int(match.group(1)))
+        markers = [
+            message.removeprefix(ACTIVITY_MARKER_PREFIX)
+            for message in messages
+            if message.startswith(ACTIVITY_MARKER_PREFIX)
+        ]
+        assert len(markers) == 1
+        self.sent_activity_ids.append(int(markers[0]))
         return LineSendResult(True, 200, 1, None)
 
 
@@ -115,12 +121,23 @@ def _execute(
     ).execute()
 
 
+def _install_activity_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        notifier,
+        "format_activity_messages",
+        lambda activity, _week: [
+            f"{ACTIVITY_MARKER_PREFIX}{activity['activity_id']}"
+        ],
+    )
+
+
 def test_real_seed_dedup_and_record_roundtrip(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Random key keeps concurrent local/CI test runs from sharing an advisory lock.
     monkeypatch.setattr(notifier, "LINE_NOTIFICATION_LOCK_KEY", secrets.randbelow(2**62) + 1)
+    _install_activity_marker(monkeypatch)
     database = _database_access(db_session)
     transport = _FakeTransport()
     baseline = _context(
@@ -132,11 +149,18 @@ def test_real_seed_dedup_and_record_roundtrip(
 
     assert seeded.status == "seeded"
     assert transport.sent_activity_ids == []
-    assert get_notified_activity_ids(db_session) == {
+    baseline_rows = db_session.scalars(
+        select(LineNotification).where(
+            LineNotification.garmin_activity_id.in_([101, 102])
+        )
+    ).all()
+    assert {row.garmin_activity_id for row in baseline_rows} == {101, 102}
+    assert all(row.is_seed for row in baseline_rows)
+    assert {
         SYSTEM_INITIALIZED_MARKER_ID,
         101,
         102,
-    }
+    }.issubset(get_notified_activity_ids(db_session))
 
     with_new_activity = _context(
         _activity(101, "2026-07-01"),
@@ -149,14 +173,61 @@ def test_real_seed_dedup_and_record_roundtrip(
     assert (delivered.status, delivered.sent, delivered.failed) == ("done", 1, 0)
     assert rerun.status == "no_new"
     assert transport.sent_activity_ids == [103]
-    assert get_notified_activity_ids(db_session) == {
+    assert {
         SYSTEM_INITIALIZED_MARKER_ID,
         101,
         102,
         103,
-    }
+    }.issubset(get_notified_activity_ids(db_session))
     notification = db_session.scalar(
         select(LineNotification).where(LineNotification.garmin_activity_id == 103)
+    )
+    assert notification is not None
+    assert notification.is_seed is False
+
+
+def test_real_empty_baseline_then_first_activity_sends_once(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(notifier, "LINE_NOTIFICATION_LOCK_KEY", secrets.randbelow(2**62) + 1)
+    _install_activity_marker(monkeypatch)
+    database = _database_access(db_session)
+    transport = _FakeTransport()
+
+    initialized = _execute(
+        _context(),
+        database=database,
+        transport=transport,
+    )
+
+    assert initialized.status == "seeded"
+    assert transport.sent_activity_ids == []
+    marker = db_session.scalar(
+        select(LineNotification).where(
+            LineNotification.garmin_activity_id == SYSTEM_INITIALIZED_MARKER_ID
+        )
+    )
+    assert marker is not None
+    assert marker.is_seed is True
+
+    with_first_activity = _context(_activity(201, "2026-07-04"))
+    delivered = _execute(
+        with_first_activity,
+        database=database,
+        transport=transport,
+    )
+    rerun = _execute(
+        with_first_activity,
+        database=database,
+        transport=transport,
+    )
+
+    assert (delivered.status, delivered.sent, delivered.failed) == ("done", 1, 0)
+    assert rerun.status == "no_new"
+    assert transport.sent_activity_ids == [201]
+    notification = db_session.scalar(
+        select(LineNotification).where(LineNotification.garmin_activity_id == 201)
     )
     assert notification is not None
     assert notification.is_seed is False

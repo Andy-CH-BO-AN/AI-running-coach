@@ -1,0 +1,4 @@
+interface:
+  display_name: "Clean Tests"
+  short_description: "Keep tests behavior-focused and refactor-resistant"
+  default_prompt: "Use $clean-tests to audit and improve tests without weakening real contracts."

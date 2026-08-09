@@ -13,6 +13,7 @@ docs, or related project automation.
 - `ai/shared/instructions.md`
 - `ai/shared/reviewer.agent.md`
 - `ai/shared/qa.agent.md`
+- When touching tests, also read `ai/skills/clean-tests/SKILL.md`.
 
 ## Escalate to security review
 

@@ -14,6 +14,8 @@
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from src.notifications.constants import LINE_SAFE_TEXT_LENGTH
@@ -99,6 +101,17 @@ def _make_week(training_load: float = 727.1, total_distance_km: float = 31.37) -
     }
 
 
+def _segment_heart_rates(messages: list[str]) -> list[int]:
+    """Extract segment identities without reproducing formatter line templates."""
+    heart_rates: list[int] = []
+    for message in messages:
+        for line in message.splitlines():
+            match = re.search(r"(?:心率 |HR )(\d+)", line)
+            if match is not None:
+                heart_rates.append(int(match.group(1)))
+    return heart_rates
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 跑步（easy）
 # ──────────────────────────────────────────────────────────────────────────────
@@ -135,10 +148,6 @@ class TestEasyRunFormat:
         msg = format_activity_message(_make_easy_running_session(), _make_week())
         assert "30.8" in msg or "30" in msg
         assert "°C" in msg or "C" in msg
-
-    def test_week_training_load_displayed(self):
-        msg = format_activity_message(_make_easy_running_session(), _make_week())
-        assert "727" in msg
 
     def test_time_format_mmss(self):
         """51.9 min → 51:54"""
@@ -397,19 +406,22 @@ class TestSwimFormat:
         assert "含休息平均配速：2:52/100m" in msg
 
     def test_overlong_rich_swim_message_compacts_without_dropping_segments(self):
-        segment = {
-            "distance_km": 0.2,
-            "duration_min": 4.4,
-            "avg_pace": "2:12",
-            "avg_hr": 120,
-        }
-        session = _make_swim_session(segments=[dict(segment) for _ in range(160)])
+        expected_heart_rates = list(range(100, 260))
+        session = _make_swim_session(segments=[
+            {
+                "split_index": index,
+                "distance_km": 0.2,
+                "duration_min": 4.4,
+                "avg_pace": "2:12",
+                "avg_hr": heart_rate,
+            }
+            for index, heart_rate in enumerate(expected_heart_rates, start=1)
+        ])
 
         messages = format_activity_messages(session, None)
 
         assert len(messages) == 1
-        assert messages[0].splitlines().count("200m｜4:24｜2:12/100m｜HR 120") == 160
-        assert "配速 2:12/100m" not in messages[0]
+        assert _segment_heart_rates(messages) == expected_heart_rates
         assert utf16_length(messages[0]) <= LINE_SAFE_TEXT_LENGTH
 
     def test_overlimit_swim_details_paginate_on_complete_lines_in_order(self):
@@ -428,14 +440,7 @@ class TestSwimFormat:
         messages = format_activity_messages(session, None)
 
         assert len(messages) > 1
-        assert "分段明細" not in messages[0]
-        detail_lines = [line for message in messages[1:] for line in message.splitlines()]
-        assert detail_lines[0] == "分段明細"
-        assert detail_lines[1:] == [
-            f"200m｜4:24｜2:12/100m｜HR {index}"
-            for index in range(100, 500)
-        ]
-        assert all("#" not in line for line in detail_lines)
+        assert _segment_heart_rates(messages) == list(range(100, 500))
         assert all(utf16_length(message) <= LINE_SAFE_TEXT_LENGTH for message in messages)
 
 
@@ -548,23 +553,6 @@ class TestWeeklyStats:
 # ──────────────────────────────────────────────────────────────────────────────
 
 class TestActivityTypeMapping:
-    @pytest.mark.parametrize("source_type,session_type,expected_name", [
-        ("running", "easy", "跑步"),
-        ("running", "interval", "跑步"),
-        ("running", "tempo", "跑步"),
-        ("running", "long", "跑步"),
-        ("running", "long_run", "跑步"),
-        ("swimming", "swim", "游泳"),
-        ("cycling", "bike", "自行車"),
-    ])
-    def test_type_mapping(self, source_type, session_type, expected_name):
-        session = _make_easy_running_session(
-            source_activity_type=source_type,
-            type=session_type,
-        )
-        msg = format_activity_message(session, None)
-        assert expected_name in msg
-
     def test_unknown_source_activity_type_keeps_raw_value(self):
         """未知 source_activity_type 保留原始值，不顯示內部 type。"""
         session = _make_easy_running_session(

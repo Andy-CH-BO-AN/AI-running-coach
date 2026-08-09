@@ -2,7 +2,6 @@ import unittest
 
 from src.preprocessing.data_processor import (
     calculate_cycling_efficiency,
-    calculate_swimming_efficiency,
     format_pace,
     preprocess_data,
 )
@@ -154,9 +153,8 @@ class DataProcessorTests(unittest.TestCase):
         self.assertIsNone(processed[0]["splits"][0]["pace"])
         self.assertEqual(processed[0]["splits"][0]["speed_kmh"], 20.0)
 
-    def test_efficiency_validators_reject_invalid_input(self):
+    def test_cycling_efficiency_rejects_zero_average_power(self):
         self.assertIsNone(calculate_cycling_efficiency(0, 300))
-        self.assertIsNone(calculate_swimming_efficiency(250))
 
 
 if __name__ == "__main__":

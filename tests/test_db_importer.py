@@ -1,5 +1,4 @@
 import json
-from types import SimpleNamespace
 
 import pytest
 
@@ -7,9 +6,14 @@ sqlalchemy = pytest.importorskip("sqlalchemy")
 
 from sqlalchemy import func, select
 
-from src.db.models import Activity, ActivitySplit, SwimmingLength, UserProfileSnapshot
+from src.db.models import (
+    Activity,
+    ActivityFeature,
+    ActivitySplit,
+    SwimmingLength,
+    UserProfileSnapshot,
+)
 from src.db.repositories import get_or_create_default_user
-from src.services import db_importer
 from src.services.db_importer import import_garmin_raw_file, import_garmin_user_file, import_processed_csv_file
 from tests.db_test_utils import isolated_db_session
 
@@ -120,7 +124,20 @@ def test_import_garmin_raw_file_skips_short_cycling_records(db_session, tmp_path
     assert activity.garmin_activity_id == 602
 
 
-def test_import_processed_csv_uses_repository_activity_lookup(monkeypatch, tmp_path):
+def test_import_processed_csv_persists_features_for_matching_activity(db_session, tmp_path):
+    raw_path = tmp_path / "garmin_raw_20260510.json"
+    _write_json(
+        raw_path,
+        [
+            {
+                "activity_id": 123,
+                "type": "running",
+                "date": "2026-05-10",
+                "distance": 5.2,
+                "duration": 26.0,
+            }
+        ],
+    )
     csv_path = tmp_path / "processed_20260510.csv"
     csv_path.write_text(
         "activity_id,distance_km\n"
@@ -129,49 +146,26 @@ def test_import_processed_csv_uses_repository_activity_lookup(monkeypatch, tmp_p
         ",1.0\n",
         encoding="utf-8",
     )
-    found_activity = SimpleNamespace(id="activity-uuid")
-    lookups = []
-    saved_features = []
-
-    def fake_find_activity(session, *, user_id, garmin_activity_id):
-        lookups.append((session, user_id, garmin_activity_id))
-        return found_activity if garmin_activity_id == 123 else None
-
-    def fake_save_activity_features(session, *, activity_id, feature_version, algorithm_version, features):
-        saved_features.append(
-            {
-                "session": session,
-                "activity_id": activity_id,
-                "feature_version": feature_version,
-                "algorithm_version": algorithm_version,
-                "features": features,
-            }
-        )
-
-    monkeypatch.setattr(db_importer, "find_activity_by_garmin_id", fake_find_activity)
-    monkeypatch.setattr(db_importer, "save_activity_features", fake_save_activity_features)
+    user = get_or_create_default_user(db_session)
+    import_garmin_raw_file(db_session, user.id, raw_path)
 
     counts = import_processed_csv_file(
-        session="session",
-        user_id="user-uuid",
+        session=db_session,
+        user_id=user.id,
         path=csv_path,
         feature_version="processed_csv:test",
     )
 
     assert counts == {"rows_seen": 3, "features_saved": 1, "missing_activities": 1}
-    assert lookups == [
-        ("session", "user-uuid", 123),
-        ("session", "user-uuid", 999),
-    ]
-    assert saved_features == [
-        {
-            "session": "session",
-            "activity_id": "activity-uuid",
-            "feature_version": "processed_csv:test",
-            "algorithm_version": "csv-import",
-            "features": {
-                "processed_row": {"activity_id": "123.0", "distance_km": "5.2"},
-                "source_file": str(csv_path),
-            },
-        }
-    ]
+    activity = db_session.scalars(
+        select(Activity).where(Activity.garmin_activity_id == 123)
+    ).one()
+    feature = db_session.scalars(select(ActivityFeature)).one()
+    assert feature.activity_id == activity.id
+    assert feature.feature_version == "processed_csv:test"
+    assert feature.algorithm_version == "csv-import"
+    assert feature.features["processed_row"] == {
+        "activity_id": "123.0",
+        "distance_km": "5.2",
+    }
+    assert feature.features["source_file"] == str(csv_path)

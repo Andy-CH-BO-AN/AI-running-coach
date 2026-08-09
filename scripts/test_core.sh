@@ -26,3 +26,10 @@ fi
   tests/test_db_session.py \
   tests/test_dashboard_adapter.py \
   tests/test_dashboard_server.py
+
+if ! command -v npm >/dev/null 2>&1 || ! node -e 'require.resolve("jsdom")' >/dev/null 2>&1; then
+  echo "Dashboard DOM tests require Node dependencies. Run: npm ci --ignore-scripts" >&2
+  exit 1
+fi
+
+npm run test:dashboard --silent

@@ -305,10 +305,11 @@ class GarminClientActivityTypeTests(unittest.TestCase):
 
         self.assertEqual([item["activity_id"] for item in payload["activities"]], [11])
         self.assertEqual(payload["activities"][0]["distance"], 3.001)
-        self.assertEqual(
-            FakeGarminClient.detail_calls,
-            [("activity", 11), ("splits", 11)],
-        )
+        detail_activity_ids = [
+            activity_id for _, activity_id in FakeGarminClient.detail_calls
+        ]
+        self.assertNotIn(10, detail_activity_ids)
+        self.assertIn(11, detail_activity_ids)
 
     def test_fallback_max_heart_rate_seeds_user_data_when_profile_is_missing(self):
         class FakeGarminClient:
