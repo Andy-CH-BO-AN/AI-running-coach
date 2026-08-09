@@ -19,8 +19,6 @@ import pytest
 import requests
 
 from src.notifications.line_client import (
-    LineSendResult,
-    _utf16_length,
     send_push_message,
     send_push_messages,
 )
@@ -38,6 +36,11 @@ def _make_response(status_code: int, headers: dict | None = None) -> MagicMock:
     if status_code >= 400:
         resp.raise_for_status.side_effect = requests.HTTPError(response=resp)
     return resp
+
+
+def _utf16_code_units(text: str) -> int:
+    """Independent LINE length oracle; astral characters consume two units."""
+    return len(text.encode("utf-16-le")) // 2
 
 
 TOKEN = "test_token_secret"
@@ -362,7 +365,7 @@ class TestMessageLength:
         assert result.success is True
         sent_texts = [message["text"] for message in session.post.call_args.kwargs["json"]["messages"]]
         assert "".join(sent_texts) == long_text
-        assert all(_utf16_length(sent_text) <= 5000 for sent_text in sent_texts)
+        assert all(_utf16_code_units(sent_text) <= 5000 for sent_text in sent_texts)
         log_messages = " ".join(record.getMessage() for record in caplog.records)
         assert "秘密內容" not in log_messages
         assert TOKEN not in log_messages
@@ -388,7 +391,7 @@ class TestMessageLength:
             for message in call.kwargs["json"]["messages"]
         ]
         assert "".join(sent_texts) == long_text
-        assert all(_utf16_length(sent_text) <= 5000 for sent_text in sent_texts)
+        assert all(_utf16_code_units(sent_text) <= 5000 for sent_text in sent_texts)
         assert len(sent_texts) == 6
         retry_keys = [call.kwargs["headers"]["X-Line-Retry-Key"] for call in session.post.call_args_list]
         assert len(set(retry_keys)) == 2
@@ -438,16 +441,3 @@ class TestMessageLength:
         assert retry_keys[0] != retry_keys[1]
         assert retry_keys[0] == retry_keys[2]
         assert retry_keys[1] == retry_keys[3]
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# LineSendResult 型別
-# ──────────────────────────────────────────────────────────────────────────────
-
-class TestLineSendResult:
-    def test_result_fields(self):
-        r = LineSendResult(success=True, status_code=200, attempts=1, error_type=None)
-        assert r.success is True
-        assert r.status_code == 200
-        assert r.attempts == 1
-        assert r.error_type is None

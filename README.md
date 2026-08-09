@@ -329,6 +329,12 @@ docker compose down
 
 ## 測試
 
+首次執行或 `package-lock.json` 更新後，先安裝 Dashboard DOM 測試依賴：
+
+```bash
+npm ci --ignore-scripts
+```
+
 Core regression：
 
 ```bash
@@ -353,6 +359,7 @@ docker compose --profile test up \
 測試原則：
 
 - 一般 unit tests 不呼叫真實 Garmin API。
+- Core regression 會以 jsdom 執行 Dashboard DOM behavior tests。
 - test DB guard 會拒絕 primary DB / 非 test database。
 - Cloud Daily Run tests 驗 migration retry、state transition、Neon revoke、75/10 activity window、stateless notification 與 secret-safe errors。
 - CI 使用 PostgreSQL service 跑 migration + core + DB tests。

@@ -13,6 +13,7 @@ only contain thin adapters that point here.
 | `ai/shared/security.agent.md` | Security review |
 | `ai/shared/uiux.agent.md` | Dashboard UI/UX review and audit |
 | `ai/skills/*/SKILL.md` | Shared skills and communication overlays |
+| [`ai/skills/clean-tests/SKILL.md`](skills/clean-tests/SKILL.md) | Behavior-focused test audit, rewrite, and deletion rules |
 
 ## Local developer tools
 
@@ -53,6 +54,10 @@ When you add or change behavior, edit files under `ai/` first, then update
 adapters only if paths, discovery metadata, or tool-specific frontmatter
 must change.
 
+Any AI adding, modifying, auditing, rewriting, or deleting tests must read
+[`ai/skills/clean-tests/SKILL.md`](skills/clean-tests/SKILL.md) first. The
+shared workflow enforces this condition for all platform adapters.
+
 ## Default communication overlay
 
 - `ai/skills/token-decrease/SKILL.md` is the default response-style overlay for
@@ -80,6 +85,7 @@ must change.
    - `.cursor/skills/<skill-name>/SKILL.md`
    - `.codex/skills/<skill-name>/SKILL.md`
    - `.github/skills/<skill-name>/SKILL.md`
+   - `.agents/skills/<skill-name>/SKILL.md`
 
 Keep adapters minimal: tell the agent to read `ai/skills/<skill-name>/SKILL.md`
 before acting. In Cursor, `@ai/...` includes work in `.cursor/rules/*.mdc` only;

@@ -14,6 +14,12 @@ explicit user request requires normal phrasing.
 This workflow applies to feature work, bug fixes, and test changes that
 touch `src/`, `tests/`, or Python files.
 
+## Test-change gate
+
+Before adding, modifying, auditing, rewriting, or deleting tests, read and
+apply `ai/skills/clean-tests/SKILL.md`. State the behavior or contract being
+protected, and name replacement coverage before deleting a test.
+
 ## Workflow
 
 1. Implement the minimal change required to address the task or bug.
@@ -84,5 +90,6 @@ touch `src/`, `tests/`, or Python files.
 - `ai/shared/reviewer.agent.md`
 - `ai/shared/qa.agent.md`
 - `ai/shared/security.agent.md`
+- `ai/skills/clean-tests/SKILL.md`
 - `ai/skills/git-change-conventions/SKILL.md`
 - `ai/skills/token-decrease/SKILL.md`

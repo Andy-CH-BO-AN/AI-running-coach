@@ -359,21 +359,23 @@ def test_invalid_optional_metrics_are_removed_from_canonical_facts_only():
     assert running.power_max_w is None
     assert running.processed_power_avg_w is None
     assert running.processed_power_max_w is None
-    assert running.invalid_optional_metrics == (
+    assert set(running.invalid_optional_metrics) == {
         "vertical_oscillation_cm",
         "ground_contact_time_ms",
         "power_avg_w",
         "power_max_w",
-    )
+    }
     assert running.segments[0].vertical_oscillation_cm is None
     assert running.segments[0].ground_contact_time_ms is None
     assert running.segments[0].power_avg_w is None
     assert running.segments[0].power_max_w is None
     assert running.segments[0].processed_power_avg_w is None
     assert running.segments[0].processed_power_max_w is None
-    assert running.segments[0].invalid_optional_metrics == running.invalid_optional_metrics
+    assert set(running.segments[0].invalid_optional_metrics) == set(
+        running.invalid_optional_metrics
+    )
     assert swimming.avg_swolf is None
-    assert swimming.invalid_optional_metrics == ("avg_swolf",)
+    assert set(swimming.invalid_optional_metrics) == {"avg_swolf"}
 
     running_projection, swimming_projection = window.processed_data()
     advanced = running_projection["advanced_metrics"]

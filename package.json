@@ -1,0 +1,13 @@
+{
+  "name": "ai-running-coach-test-support",
+  "private": true,
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  },
+  "scripts": {
+    "test:dashboard": "node --test tests/dashboard_renderer.test.cjs"
+  },
+  "devDependencies": {
+    "jsdom": "30.0.1"
+  }
+}

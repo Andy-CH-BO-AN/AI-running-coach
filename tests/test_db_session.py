@@ -294,23 +294,48 @@ def test_database_connection_classifier_ignores_unrelated_implicit_exception_con
             assert is_database_connection_error(fatal) is False
 
 
-def test_dispose_database_connections_clears_cached_engines_and_factories(monkeypatch):
+def test_dispose_database_connections_rebuilds_public_resources(monkeypatch):
     module = _load_session_module(monkeypatch)
-    primary_engine = Mock()
-    shadow_engine = Mock()
-    module._engine = primary_engine
-    module._shadow_engine = shadow_engine
-    module._session_factory = Mock()
-    module._shadow_session_factory = Mock()
+    first_primary_engine = Mock(name="first_primary_engine")
+    first_shadow_engine = Mock(name="first_shadow_engine")
+    next_primary_engine = Mock(name="next_primary_engine")
+    next_shadow_engine = Mock(name="next_shadow_engine")
+    monkeypatch.setattr(
+        module,
+        "build_engine",
+        Mock(
+            side_effect=[
+                first_primary_engine,
+                first_shadow_engine,
+                next_primary_engine,
+                next_shadow_engine,
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "get_shadow_database_url",
+        lambda: "postgresql+psycopg://user:pass@localhost/app_test",
+    )
+
+    original_engine = module.get_engine()
+    original_factory = module.get_session_factory()
+    original_shadow_factory = module.get_shadow_session_factory()
 
     module.dispose_database_connections()
 
-    primary_engine.dispose.assert_called_once_with()
-    shadow_engine.dispose.assert_called_once_with()
-    assert module._engine is None
-    assert module._shadow_engine is None
-    assert module._session_factory is None
-    assert module._shadow_session_factory is None
+    rebuilt_engine = module.get_engine()
+    rebuilt_factory = module.get_session_factory()
+    rebuilt_shadow_factory = module.get_shadow_session_factory()
+
+    assert original_engine is first_primary_engine
+    assert rebuilt_engine is next_primary_engine
+    assert rebuilt_factory is not original_factory
+    assert rebuilt_shadow_factory is not original_shadow_factory
+    first_primary_engine.dispose.assert_called_once_with()
+    first_shadow_engine.dispose.assert_called_once_with()
+    next_primary_engine.dispose.assert_not_called()
+    next_shadow_engine.dispose.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

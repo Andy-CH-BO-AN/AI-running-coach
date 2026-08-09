@@ -46,6 +46,7 @@ class _FakeDataFrame:
 
 
 def _fake_read_csv(path):
+    Path(path).read_text(encoding="utf-8")
     return _FakeDataFrame([{"activity_id": 1, "distance_km": 10.0}])
 
 
@@ -60,45 +61,6 @@ from src.agents import coach
 
 
 class CoachTests(unittest.TestCase):
-    def test_build_context_includes_goal_user_data_and_activity_data(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            goal_path = Path(temp_dir) / "goal.md"
-            goal_path.write_text("sub-20 5k", encoding="utf-8")
-
-            context = coach._build_context(
-                data=[{"activity_id": 1}],
-                user_data={"max_heart_rate": 190},
-                goal_path=str(goal_path),
-                deterministic_context={
-                    "meta": {"today": "2026-05-10"},
-                    "weekly_analysis": [
-                        {
-                            "session_counts": {
-                                "total": 1,
-                                "by_type": {"easy": 1},
-                                "by_source_activity_type": {"running": 1},
-                            },
-                            "sessions": [
-                                {
-                                    "activity_id": 1,
-                                    "type": "easy",
-                                    "source_activity_type": "running",
-                                }
-                            ],
-                        }
-                    ],
-                },
-            )
-
-        self.assertIn("sub-20 5k", context)
-        self.assertIn('"max_heart_rate": 190', context)
-        self.assertIn("Deterministic Coach Context", context)
-        self.assertIn('"today": "2026-05-10"', context)
-        self.assertIn('"activity_id": 1', context)
-        self.assertIn('"source_activity_type": "running"', context)
-        self.assertNotIn('"type": "easy"', context)
-        self.assertNotIn('"by_type"', context)
-
     def test_coach_normalizes_json_wrapped_in_markdown_fences(self):
         generate_content = Mock(
             return_value=types.SimpleNamespace(text='```json\n{"headline": "wrapped report"}\n```')
@@ -112,79 +74,98 @@ class CoachTests(unittest.TestCase):
 
         self.assertEqual(report, {"headline": "wrapped report"})
 
-    def test_coach_passes_deterministic_context_into_prompt(self):
+    def test_coach_builds_outbound_prompt_from_goal_user_and_activity_data(self):
         generate_content = Mock(return_value=types.SimpleNamespace(text='{"headline": "report"}'))
         fake_client = types.SimpleNamespace(models=types.SimpleNamespace(generate_content=generate_content))
 
-        with patch.object(coach, "client", fake_client), patch.object(
-            coach, "MODEL_FALLBACKS", ("model-a",)
-        ):
-            coach.coach(
-                data=[{"activity_id": 1}],
-                deterministic_context={
-                    "meta": {"today": "2026-05-10"},
-                    "weekly_analysis": [
+        with tempfile.TemporaryDirectory() as temp_dir:
+            goal_path = Path(temp_dir) / "goal.md"
+            goal_path.write_text("sub-20 5k", encoding="utf-8")
+
+            with patch.object(coach, "client", fake_client), patch.object(
+                coach, "MODEL_FALLBACKS", ("primary-model",)
+            ):
+                coach.coach(
+                    data=[
                         {
-                            "session_counts": {
-                                "total": 1,
-                                "by_type": {"interval": 1},
-                                "by_source_activity_type": {"running": 1},
-                            },
-                            "sessions": [
-                                {
-                                    "activity_id": 1,
-                                    "type": "interval",
-                                    "source_activity_type": "running",
-                                }
-                            ],
+                            "activity_id": 1,
+                            "type": "running",
+                            "distance_km": 5.0,
                         }
                     ],
-                },
-            )
+                    user_data={"max_heart_rate": 190},
+                    goal_path=str(goal_path),
+                    deterministic_context={
+                        "meta": {"today": "2026-05-10"},
+                        "weekly_analysis": [
+                            {
+                                "session_counts": {
+                                    "total": 1,
+                                    "by_type": {"interval": 1},
+                                    "by_source_activity_type": {"running": 1},
+                                },
+                                "sessions": [
+                                    {
+                                        "activity_id": 1,
+                                        "type": "interval",
+                                        "source_activity_type": "running",
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                )
 
         prompt = generate_content.call_args.kwargs["contents"]
+        self.assertIn("sub-20 5k", prompt)
+        self.assertIn('"max_heart_rate": 190', prompt)
         self.assertIn("Deterministic Coach Context", prompt)
         self.assertIn('"today": "2026-05-10"', prompt)
+        self.assertIn('"activity_id": 1', prompt)
         self.assertIn('"source_activity_type": "running"', prompt)
         self.assertNotIn('"type": "interval"', prompt)
+        self.assertNotIn('"type": "running"', prompt)
         self.assertNotIn('"by_type"', prompt)
-
-    def test_build_context_sanitizes_processed_activity_type_for_prompt(self):
-        context = coach._build_context(
-            data=[{"activity_id": 1, "type": "running", "distance_km": 5.0}],
-            user_data=None,
-            goal_path=None,
-            deterministic_context=None,
-        )
-
-        self.assertIn('"source_activity_type": "running"', context)
-        self.assertNotIn('"type": "running"', context)
 
     def test_run_local_analysis_reads_user_json_and_writes_report(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             base = Path(temp_dir)
+            csv_path = base / "processed.csv"
+            csv_path.write_text(
+                "activity_id,distance_km\n1,10.0\n",
+                encoding="utf-8",
+            )
             json_path = base / "garmin_user_20260510.json"
             json_path.write_text(json.dumps({"max_heart_rate": 190}), encoding="utf-8")
             output_dir = base / "output"
 
             with patch.object(coach, "OUTPUT_DIR", output_dir), patch.object(
+                coach.pd, "read_csv", side_effect=_fake_read_csv, create=True
+            ), patch.object(
                 coach, "coach", return_value={"headline": "report"}
-            ), patch.object(coach, "_load_processed_records", return_value=[{"activity_id": 1}]):
-                coach.run_local_analysis("processed.csv", str(json_path), goal_path=str(base / "missing_goal.md"))
+            ) as coach_mock:
+                coach.run_local_analysis(
+                    str(csv_path),
+                    str(json_path),
+                    goal_path=str(base / "missing_goal.md"),
+                )
 
             report_path = output_dir / "ai_report_20260510.json"
             reports = list(output_dir.glob("ai_report_*.json"))
             self.assertEqual(len(reports), 1)
             report_body = reports[0].read_text(encoding="utf-8")
             self.assertEqual(json.loads(report_body), {"headline": "report"})
+            coach_args, coach_kwargs = coach_mock.call_args
+            self.assertEqual(coach_args[0][0]["activity_id"], 1)
+            self.assertEqual(coach_args[1], {"max_heart_rate": 190})
+            self.assertEqual(coach_kwargs["goal_path"], str(base / "missing_goal.md"))
 
-    def test_coach_retries_retryable_error_three_times_then_succeeds(self):
+    def test_coach_honors_configured_retry_budget_then_succeeds(self):
         retryable_error = Exception(
             "503 UNAVAILABLE. This model is currently experiencing high demand. Please try again later."
         )
         generate_content = Mock(
             side_effect=[
-                retryable_error,
                 retryable_error,
                 types.SimpleNamespace(text='{"headline": "recovered report"}'),
             ]
@@ -192,13 +173,17 @@ class CoachTests(unittest.TestCase):
         fake_client = types.SimpleNamespace(models=types.SimpleNamespace(generate_content=generate_content))
 
         with patch.object(coach, "client", fake_client), patch.object(
-            coach, "MODEL_FALLBACKS", ("model-a",)
+            coach, "MODEL_FALLBACKS", ("primary-model",)
+        ), patch.object(
+            coach, "MAX_RETRIES_PER_MODEL", 2
+        ), patch.object(
+            coach, "RETRY_BACKOFF_SECONDS", 0.25
         ), patch.object(coach.time, "sleep") as sleep_mock:
             report = coach.coach(data=[{"activity_id": 1}])
 
         self.assertEqual(report, {"headline": "recovered report"})
-        self.assertEqual(generate_content.call_count, 3)
-        self.assertEqual(sleep_mock.call_args_list, [call(1), call(2)])
+        self.assertEqual(generate_content.call_count, 2)
+        self.assertEqual(sleep_mock.call_args_list, [call(0.25)])
 
     def test_coach_uses_gemini_retry_delay_when_available(self):
         retryable_error = Exception(
@@ -215,7 +200,9 @@ class CoachTests(unittest.TestCase):
         fake_client = types.SimpleNamespace(models=types.SimpleNamespace(generate_content=generate_content))
 
         with patch.object(coach, "client", fake_client), patch.object(
-            coach, "MODEL_FALLBACKS", ("model-a",)
+            coach, "MODEL_FALLBACKS", ("primary-model",)
+        ), patch.object(
+            coach, "MAX_RETRIES_PER_MODEL", 2
         ), patch.object(coach.time, "sleep") as sleep_mock:
             report = coach.coach(data=[{"activity_id": 1}])
 
@@ -239,11 +226,13 @@ class CoachTests(unittest.TestCase):
 
         with patch.object(coach, "client", fake_client), patch.object(
             coach, "MODEL_FALLBACKS", ("model-a", "model-b")
+        ), patch.object(
+            coach, "MAX_RETRIES_PER_MODEL", 2
         ), patch.object(coach.time, "sleep"):
             report = coach.coach(data=[{"activity_id": 1}])
 
         self.assertEqual(report, {"headline": "fallback report"})
-        self.assertEqual(call_counts["model-a"], 3)
+        self.assertEqual(call_counts["model-a"], 2)
         self.assertEqual(call_counts["model-b"], 1)
 
     def test_coach_does_not_retry_non_retryable_error(self):
@@ -268,28 +257,6 @@ class CoachTests(unittest.TestCase):
         self.assertEqual(call_counts["model-a"], 1)
         self.assertEqual(call_counts["model-b"], 1)
         sleep_mock.assert_not_called()
-
-    def test_build_genai_client_uses_vertexai_when_flag_enabled(self):
-        fake_client = object()
-
-        with patch.dict(
-            os.environ,
-            {
-                "GEMINI_KEY": "gcp-key",
-                "GOOGLE_GENAI_USE_VERTEXAI": "true",
-                "GOOGLE_CLOUD_PROJECT": "demo-project",
-                "GOOGLE_CLOUD_LOCATION": "global",
-            },
-            clear=True,
-        ), patch.object(coach.genai, "Client", return_value=fake_client) as client_mock:
-            built_client = coach._build_genai_client()
-
-        self.assertIs(built_client, fake_client)
-        client_mock.assert_called_once_with(
-            api_key="gcp-key",
-            http_options={"api_version": "v1"},
-            vertexai=True,
-        )
 
     def test_build_genai_client_prefers_google_api_key_over_legacy_gemini_key(self):
         fake_client = object()

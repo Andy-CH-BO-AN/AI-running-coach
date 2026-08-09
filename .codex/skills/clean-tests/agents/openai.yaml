@@ -1,0 +1,6 @@
+# Thin Codex adapter. Canonical metadata lives in
+# ai/skills/clean-tests/agents/openai.yaml.
+interface:
+  display_name: "Clean Tests"
+  short_description: "Keep tests behavior-focused and refactor-resistant"
+  default_prompt: "Use $clean-tests to audit and improve tests without weakening real contracts."

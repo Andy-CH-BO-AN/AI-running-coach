@@ -34,6 +34,9 @@ def isolated_db_session() -> Generator[Session, None, None]:
     try:
         connection.execute(text(f"set search_path to {schema_name}"))
         Base.metadata.create_all(connection)
+        # Keep fixture DDL outside the test transaction so a behavior test can
+        # roll back its own writes without also removing the isolated schema.
+        connection.commit()
         session = Session(bind=connection, autoflush=False, expire_on_commit=False, future=True)
         try:
             yield session

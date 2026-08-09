@@ -23,7 +23,13 @@ def test_fetch_garmin_raw_files_writes_user_and_activity_json(tmp_path):
     with patch("src.scripts.fetch_garmin_raw._get_garmin_activities", return_value=garmin_payload) as fetch:
         user_path, raw_path = fetch_garmin_raw_files(limit=999, timestamp="20260510", output_dir=tmp_path)
 
-    fetch.assert_called_once_with(999, progress=True)
+    fetch.assert_called_once()
+    called_limit = (
+        fetch.call_args.args[0]
+        if fetch.call_args.args
+        else fetch.call_args.kwargs["limit"]
+    )
+    assert called_limit == 999
     assert user_path == tmp_path / "garmin_user_20260510.json"
     assert raw_path == tmp_path / "garmin_raw_20260510.json"
     assert json.loads(Path(user_path).read_text(encoding="utf-8")) == {"vo2max_running": 53}

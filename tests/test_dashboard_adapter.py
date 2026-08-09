@@ -88,63 +88,6 @@ def test_weekly_metrics_are_derived_from_sessions_and_mark_partial_data(tmp_path
     assert set(metrics["missing_fields"]) == {"duration_min", "training_load"}
 
 
-def test_dashboard_renderer_does_not_write_report_text_via_inner_html():
-    source = Path("dashboard/app.js").read_text(encoding="utf-8")
-
-    unsafe_fragments = [
-        'p.innerHTML = "<strong>" + block.label + "：</strong>" + block.text;',
-        'top.innerHTML = "<h4 class=\'week-title\'>" + week.week_label + "</h4>";',
-        'summaryLead.innerHTML = "<p><strong>總結：</strong>" + trend.summaryNote + "</p>";',
-        'temp.innerHTML = "<p>🌡️ 高溫校正：" + trend.temperature_note + "</p>";',
-        'row.innerHTML = "<td>" + (metric.label || metric.metric || "指標") + "</td><td><b>" + value + "</b></td><td>" + (metric.source_label || "資料來源") + "</td>";',
-        'card.innerHTML = "<span class=\'coach-note-label\'>" + block.label + "</span><p>" + block.text + "</p>";',
-    ]
-
-    for fragment in unsafe_fragments:
-        assert fragment not in source
-
-
-def test_evidence_metrics_table_hides_source_context_column():
-    source = Path("dashboard/app.js").read_text(encoding="utf-8")
-
-    assert '資料脈絡' not in source
-    assert 'evidence-metric-grid' in source
-    assert 'renderEvidenceMetricCard' in source
-
-
-def test_splits_table_hides_running_mechanics_columns_when_missing():
-    source = Path("dashboard/app.js").read_text(encoding="utf-8")
-
-    assert '<th>步頻</th><th>步幅</th>' not in source
-    assert 'var showCadence' in source
-    assert 'var showStrideLength' in source
-
-
-def test_latest_activity_shows_splits_without_session_type_or_interval_layout():
-    source = Path("dashboard/app.js").read_text(encoding="utf-8")
-
-    assert 'if (latest.work_reps.length > 0)' in source
-    assert 'latest.layout === "interval" && latest.work_reps.length > 0' not in source
-    assert 'textElement("summary", "", "分段明細")' in source
-
-
-def test_cycling_splits_use_speed_column_and_kmh_unit():
-    source = Path("dashboard/app.js").read_text(encoding="utf-8")
-
-    assert 'var isCycling = String(sourceActivityType || "").toLowerCase() === "cycling";' in source
-    assert 'var performanceHeader = isCycling ? "速度" : "配速";' in source
-    assert 'String(segment.speed_kmh) + " km/h"' in source
-
-
-def test_dashboard_uses_local_font_stack_only():
-    index_source = Path("dashboard/index.html").read_text(encoding="utf-8")
-    style_source = Path("dashboard/styles.css").read_text(encoding="utf-8")
-
-    assert "fonts.googleapis.com" not in index_source
-    assert "fonts.gstatic.com" not in index_source
-    assert "font-family: Inter" not in style_source
-
-
 def test_12_week_trend_uses_db_weeks_and_hides_single_profile_snapshot(tmp_path):
     report = {
         "twelve_week_summary": [
