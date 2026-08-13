@@ -1,6 +1,12 @@
 from src.db import mirror
 
 
+def test_delivery_ledger_is_not_automatically_mirrored():
+    assert "line_notifications" not in mirror.MIRROR_TABLES
+    assert "ai_reports" in mirror.MIRROR_TABLES
+    assert "weekly_summaries" in mirror.MIRROR_TABLES
+
+
 def test_sync_shadow_database_returns_none_when_mirror_mode_disabled(monkeypatch):
     monkeypatch.setattr(mirror, "mirror_mode_enabled", lambda: False)
 

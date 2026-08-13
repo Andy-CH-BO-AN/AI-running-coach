@@ -282,6 +282,7 @@ def map_ai_report_values(
     report_text: str,
     input_json: dict[str, Any],
     *,
+    idempotency_key: str,
     model_name: str = "unknown",
     prompt_version: str = "unknown",
     activity_id: uuid.UUID | None = None,
@@ -292,6 +293,7 @@ def map_ai_report_values(
     output_path: str | None = None,
 ) -> dict[str, Any]:
     return {
+        "idempotency_key": idempotency_key,
         "user_id": user_id,
         "activity_id": activity_id,
         "weekly_summary_id": weekly_summary_id,

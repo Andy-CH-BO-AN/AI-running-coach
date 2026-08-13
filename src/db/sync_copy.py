@@ -16,6 +16,9 @@ DEFAULT_SYNC_BATCH_SIZE = 500
 LOGICAL_KEY_COLUMNS = {
     "users": ("external_source", "external_user_id"),
     "activities": ("garmin_activity_id",),
+    "weekly_summaries": ("user_id", "week_start", "summary_version"),
+    "ai_reports": ("user_id", "idempotency_key"),
+    "line_notifications": ("garmin_activity_id", "weekly_summary_id"),
 }
 
 
@@ -85,7 +88,7 @@ def _find_logical_key_conflicts(
     source_index = _build_index(source_rows)
     target_index = _build_index(target_rows)
     conflicts = []
-    for logical_key in sorted(set(source_index) & set(target_index)):
+    for logical_key in sorted(set(source_index) & set(target_index), key=repr):
         if source_index[logical_key] == target_index[logical_key]:
             continue
         conflicts.append(

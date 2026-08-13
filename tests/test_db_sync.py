@@ -63,3 +63,23 @@ def test_find_logical_key_conflicts_detects_same_business_key_with_different_pri
             "target_primary_key": ("cloud-user-id",),
         }
     ]
+
+
+def test_find_logical_key_conflicts_orders_mixed_line_subjects_safely():
+    conflicts = sync._find_logical_key_conflicts(
+        source_rows=[
+            {"id": "local-activity", "garmin_activity_id": 123, "weekly_summary_id": None},
+            {"id": "local-weekly", "garmin_activity_id": None, "weekly_summary_id": "week-a"},
+        ],
+        target_rows=[
+            {"id": "cloud-activity", "garmin_activity_id": 123, "weekly_summary_id": None},
+            {"id": "cloud-weekly", "garmin_activity_id": None, "weekly_summary_id": "week-a"},
+        ],
+        logical_key_columns=("garmin_activity_id", "weekly_summary_id"),
+        primary_key_columns=("id",),
+    )
+
+    assert {conflict["logical_key"] for conflict in conflicts} == {
+        (123, None),
+        (None, "week-a"),
+    }

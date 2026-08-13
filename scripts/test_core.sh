@@ -22,6 +22,7 @@ fi
   tests/test_run_daily_pipeline.py \
   tests/test_runner.py \
   tests/test_activity_payload_provider.py \
+  tests/test_ai_report_resolution.py \
   tests/test_coach.py \
   tests/test_coach_context.py \
   tests/test_db_session.py \
