@@ -96,6 +96,26 @@ def _sport_totals(sessions: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
     ]
 
 
+def _combined_sport_metrics(
+    sport_totals: Sequence[Mapping[str, Any]],
+    source_types: frozenset[str],
+) -> dict[str, float | int]:
+    """Return DB metrics for one sport, including its Garmin aliases."""
+    matching = [
+        entry
+        for entry in sport_totals
+        if str(entry.get("source_activity_type")) in source_types
+    ]
+    return {
+        "distance_km": _round_or_none(
+            sum(_number(entry.get("distance_km")) for entry in matching),
+            2,
+        )
+        or 0.0,
+        "count": sum(int(entry.get("count") or 0) for entry in matching),
+    }
+
+
 def _load_metrics(
     weekly_analysis: Sequence[Mapping[str, Any]],
     week_start: date,
@@ -119,13 +139,15 @@ def _load_metrics(
         else None
     )
 
-    daily_loads: dict[str, float] = {}
+    daily_loads = {
+        week_start + timedelta(days=offset): 0.0
+        for offset in range(7)
+    }
     for session in sessions:
         day = _parse_date(session.get("date"))
-        if day is None:
+        if day not in daily_loads:
             continue
-        key = day.isoformat()
-        daily_loads[key] = daily_loads.get(key, 0.0) + _number(
+        daily_loads[day] += _number(
             session.get("training_load")
         )
     values = list(daily_loads.values())
@@ -209,17 +231,10 @@ def build_completed_week_summary(
         training_load,
     )
     counts = week.get("session_counts") if isinstance(week.get("session_counts"), Mapping) else {}
-    running = next(
-        (entry for entry in sport_totals if entry["source_activity_type"] == "running"),
-        None,
-    )
-    swimming = next(
-        (
-            entry
-            for entry in sport_totals
-            if entry["source_activity_type"] in {"swimming", "lap_swimming"}
-        ),
-        None,
+    running = _combined_sport_metrics(sport_totals, frozenset({"running"}))
+    swimming = _combined_sport_metrics(
+        sport_totals,
+        frozenset({"swimming", "lap_swimming"}),
     )
     high_intensity_count = sum(
         1
@@ -255,11 +270,11 @@ def build_completed_week_summary(
         metrics={
             "total_distance_km": summary_json["totals"]["distance_km"],
             "total_duration_min": summary_json["totals"]["duration_min"],
-            "running_distance_km": running["distance_km"] if running else 0.0,
-            "swimming_distance_km": swimming["distance_km"] if swimming else 0.0,
+            "running_distance_km": running["distance_km"],
+            "swimming_distance_km": swimming["distance_km"],
             "workout_count": summary_json["totals"]["workout_count"],
-            "running_count": running["count"] if running else 0,
-            "swimming_count": swimming["count"] if swimming else 0,
+            "running_count": running["count"],
+            "swimming_count": swimming["count"],
             "high_intensity_count": high_intensity_count,
             # Coach context intentionally does not infer run workout labels.
             # Keep this nullable rather than declaring every run a long run.

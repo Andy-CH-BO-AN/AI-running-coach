@@ -177,6 +177,27 @@ def test_completed_week_summary_uses_previous_complete_week_and_keeps_sport_tota
     assert summary.summary_json["next_week_plan_seed"]["days"][0]["date"] == "2026-08-10"
 
 
+def test_completed_week_summary_combines_swimming_aliases_and_rest_days_for_load_metrics():
+    sessions = [
+        _session(101, "2026-08-03", "swimming", 2.0, 45.0, 30.0),
+        _session(102, "2026-08-05", "lap_swimming", 3.0, 60.0, 40.0),
+    ]
+    context = _context()
+    context["weekly_analysis"][1] = _week(
+        "2026-08-03",
+        "2026-08-09",
+        sessions,
+        70.0,
+    )
+
+    summary = build_completed_week_summary(context, today=date(2026, 8, 10))
+
+    assert summary.metrics["swimming_distance_km"] == 5.0
+    assert summary.metrics["swimming_count"] == 2
+    assert summary.metrics["monotony"] == pytest.approx(0.62)
+    assert summary.metrics["strain"] == pytest.approx(43.4)
+
+
 def test_weekly_runner_persists_then_sends_once_and_recomputes_sent_summary(db_session: Session):
     user = get_or_create_default_user(db_session)
     transport = _Transport()

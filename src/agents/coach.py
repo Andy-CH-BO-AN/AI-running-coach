@@ -58,7 +58,17 @@ def _build_genai_client(*, vertexai: bool | None = None) -> genai.Client:
     return genai.Client(**client_kwargs)
 
 
-client = _build_genai_client()
+# Creating a Gemini client validates credentials in newer SDK releases.  Keep
+# imports usable in commands and test collection that do not invoke the model.
+client: Any | None = None
+
+
+def _get_genai_client() -> Any:
+    """Return the process client, constructing it only for a model request."""
+    global client
+    if client is None:
+        client = _build_genai_client()
+    return client
 
 
 class ReportParseError(ValueError):
@@ -215,7 +225,7 @@ def _generate_content_with_retries(model_name: str, full_prompt: str) -> Dict[st
     for attempt in range(1, MAX_RETRIES_PER_MODEL + 1):
         try:
             print(f"正在嘗試使用模型: {model_name} (第 {attempt}/{MAX_RETRIES_PER_MODEL} 次)...")
-            response = client.models.generate_content(
+            response = _get_genai_client().models.generate_content(
                 model=model_name,
                 contents=full_prompt,
                 config={
