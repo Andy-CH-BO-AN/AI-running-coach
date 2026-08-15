@@ -512,7 +512,15 @@ class _NotificationRun:
                 )
             return
 
-        _release_advisory_lock(connection)
+        try:
+            _release_advisory_lock(connection)
+        except SQLAlchemyError as exc:
+            if not is_database_connection_error(exc):
+                raise
+            logger.warning(
+                "LINE notification: advisory-lock release failed (%s)",
+                type(exc).__name__,
+            )
 
     def _daily_persistence_unavailable(self) -> bool:
         return self.profile is _NotificationProfile.DAILY and (

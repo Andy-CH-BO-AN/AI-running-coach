@@ -718,7 +718,7 @@ def test_daily_acknowledgement_connection_loss_skips_unlock_after_neon_revoke(
     assert release_calls == 1
 
 
-def test_manual_unlock_connection_loss_remains_persistence_failure(
+def test_manual_unlock_connection_loss_preserves_completed_delivery(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -737,6 +737,56 @@ def test_manual_unlock_connection_loss_remains_persistence_failure(
     monkeypatch.setattr(
         notifier,
         "list_pending_activity_notifications",
+        lambda *_args, **_kwargs: [notification] if notification.sent_at is None else [],
+    )
+    monkeypatch.setattr(
+        notifier,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: notification,
+    )
+
+    def mark_sent(_session: _FakeSession, _notification_id: uuid.UUID) -> None:
+        notification.sent_at = datetime.now(timezone.utc)
+
+    sent_messages: list[tuple[str, ...]] = []
+    monkeypatch.setattr(notifier, "mark_notification_sent", mark_sent)
+    monkeypatch.setattr(
+        notifier,
+        "send_push_messages",
+        lambda _token, _group, messages: sent_messages.append(tuple(messages)) or SUCCESS,
+    )
+
+    env, path = _run_manual(tmp_path, monkeypatch, _context())
+    with env:
+        first = run_line_notification(str(path))
+    with env:
+        second = run_line_notification(str(path))
+
+    assert (first.status, first.sent, first.failed) == ("done", 1, 0)
+    assert (second.status, second.sent, second.failed) == ("no_new", 0, 0)
+    assert release_calls == 3
+    assert sent_messages == [tuple(notification.rendered_messages or [])]
+
+
+def test_manual_nonconnection_unlock_error_propagates_after_delivery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_manual_persistence(monkeypatch)
+    notification = _prepared_notification(906)
+    release_calls = 0
+
+    def release(_connection: object) -> None:
+        nonlocal release_calls
+        release_calls += 1
+        if release_calls == 2:
+            raise IntegrityError("UNLOCK", {}, Exception("constraint failed"))
+
+    monkeypatch.setattr(notifier, "_release_advisory_lock", release)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {906})
+    monkeypatch.setattr(
+        notifier,
+        "list_pending_activity_notifications",
         lambda *_args, **_kwargs: [notification],
     )
     monkeypatch.setattr(
@@ -748,11 +798,8 @@ def test_manual_unlock_connection_loss_remains_persistence_failure(
     monkeypatch.setattr(notifier, "send_push_messages", lambda *_args: SUCCESS)
 
     env, path = _run_manual(tmp_path, monkeypatch, _context())
-    with env:
-        result = run_line_notification(str(path))
-
-    assert (result.status, result.sent, result.failed) == ("persistence_unavailable", 0, 1)
-    assert release_calls == 2
+    with env, pytest.raises(IntegrityError):
+        run_line_notification(str(path))
 
 
 def test_nonconnection_acknowledgement_error_propagates_after_line_acceptance(
