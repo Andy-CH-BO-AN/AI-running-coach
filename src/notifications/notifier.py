@@ -207,9 +207,7 @@ class _NotificationRun:
     transport: _LineTransport
 
     def execute(self) -> NotificationResult:
-        if self.profile is _NotificationProfile.DAILY and (
-            self.database is None or not self.database.is_available()
-        ):
+        if self._daily_persistence_unavailable():
             return self._persistence_unavailable()
 
         try:
@@ -225,6 +223,8 @@ class _NotificationRun:
 
         if isinstance(work, NotificationResult):
             return work
+        if self._daily_persistence_unavailable():
+            return self._persistence_unavailable()
 
         sent = 0
         failed = 0
@@ -233,6 +233,10 @@ class _NotificationRun:
         persistence_deferred = False
 
         for pending in work.pending:
+            if self._daily_persistence_unavailable():
+                return NotificationResult(
+                    status="persistence_unavailable", sent=sent, failed=failed
+                )
             outcome = self._send_prepared(
                 garmin_activity_id=pending.garmin_activity_id,
                 expected_delivery=pending.delivery,
@@ -244,6 +248,10 @@ class _NotificationRun:
                 return NotificationResult(status=outcome.status, sent=sent, failed=failed)
 
         for candidate in work.candidates:
+            if self._daily_persistence_unavailable():
+                return NotificationResult(
+                    status="persistence_unavailable", sent=sent, failed=failed
+                )
             try:
                 delivery = self._prepare_candidate(candidate)
             except _NotificationLockUnavailable:
@@ -269,6 +277,10 @@ class _NotificationRun:
                     status="persistence_unavailable",
                     sent=sent,
                     failed=failed + 1,
+                )
+            if self._daily_persistence_unavailable():
+                return NotificationResult(
+                    status="persistence_unavailable", sent=sent, failed=failed
                 )
 
             outcome = self._send_prepared(
@@ -473,7 +485,31 @@ class _NotificationRun:
             try:
                 yield
             finally:
+                self._release_lock(connection)
+
+    def _release_lock(self, connection: Any) -> None:
+        """Release when safe; a revoked Daily Neon capability must stay untouched."""
+        if self.profile is _NotificationProfile.DAILY:
+            if self.database is None or not self.database.is_available():
+                return
+            try:
                 _release_advisory_lock(connection)
+            except SQLAlchemyError as exc:
+                if not is_database_connection_error(exc):
+                    raise
+                self._revoke_database(exc)
+                logger.warning(
+                    "LINE notification: persistence lost while releasing advisory lock (%s)",
+                    type(exc).__name__,
+                )
+            return
+
+        _release_advisory_lock(connection)
+
+    def _daily_persistence_unavailable(self) -> bool:
+        return self.profile is _NotificationProfile.DAILY and (
+            self.database is None or not self.database.is_available()
+        )
 
     def _lock_connection(self) -> ContextManager[Any]:
         if self.profile is _NotificationProfile.MANUAL:

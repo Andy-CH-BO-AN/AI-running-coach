@@ -441,6 +441,240 @@ def test_line_acknowledgement_persistence_failure_never_falls_back_to_stateless_
     assert sent_messages == [tuple(notification.rendered_messages or [])]
 
 
+def test_daily_unlock_connection_loss_stops_later_delivery_and_preserves_completed_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeSession()
+    notification = _prepared_notification(903)
+    deferred_notification = _prepared_notification(904)
+    available = True
+    release_calls = 0
+    revoked: list[BaseException] = []
+
+    @contextmanager
+    def session_factory() -> Iterator[_FakeSession]:
+        yield session
+
+    @contextmanager
+    def lock_factory() -> Iterator[object]:
+        yield object()
+
+    def release(_connection: object) -> None:
+        nonlocal release_calls
+        release_calls += 1
+        if release_calls == 2:
+            raise OperationalError("UNLOCK", {}, ConnectionError("connection refused"))
+
+    def revoke(error: BaseException) -> None:
+        nonlocal available
+        available = False
+        revoked.append(error)
+
+    database = NotificationDatabaseAccess(
+        is_available=lambda: available,
+        session=session_factory,
+        lock_connection=lock_factory,
+        revoke=revoke,
+    )
+    monkeypatch.setattr(notifier, "_acquire_advisory_lock", lambda _connection: True)
+    monkeypatch.setattr(notifier, "_release_advisory_lock", release)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {903})
+    monkeypatch.setattr(
+        notifier,
+        "list_pending_activity_notifications",
+        lambda *_args, **_kwargs: [notification, deferred_notification],
+    )
+    monkeypatch.setattr(
+        notifier,
+        "get_prepared_activity_notification",
+        lambda _session, activity_id: {
+            903: notification,
+            904: deferred_notification,
+        }[activity_id],
+    )
+    monkeypatch.setattr(notifier, "mark_notification_sent", lambda *_args: None)
+    sent_messages: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        notifier,
+        "send_push_messages",
+        lambda _token, _group, messages: sent_messages.append(tuple(messages)) or SUCCESS,
+    )
+
+    path = _write_context(tmp_path, _context())
+    with patch.dict(
+        os.environ,
+        {"LINE_CHANNEL_ACCESS_TOKEN": "test-token", "LINE_GROUP_ID": "test-group"},
+        clear=True,
+    ):
+        result = run_daily_line_notification(str(path), database=database)
+
+    assert (result.status, result.sent, result.failed) == ("persistence_unavailable", 1, 0)
+    assert release_calls == 2
+    assert len(revoked) == 1
+    assert sent_messages == [tuple(notification.rendered_messages or [])]
+
+
+def test_daily_selection_unlock_loss_defers_without_ai_or_line_send(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeSession()
+    available = True
+    release_calls = 0
+
+    @contextmanager
+    def session_factory() -> Iterator[_FakeSession]:
+        yield session
+
+    @contextmanager
+    def lock_factory() -> Iterator[object]:
+        yield object()
+
+    def release(_connection: object) -> None:
+        nonlocal release_calls
+        release_calls += 1
+        raise OperationalError("UNLOCK", {}, ConnectionError("connection refused"))
+
+    def revoke(_error: BaseException) -> None:
+        nonlocal available
+        available = False
+
+    database = NotificationDatabaseAccess(
+        is_available=lambda: available,
+        session=session_factory,
+        lock_connection=lock_factory,
+        revoke=revoke,
+    )
+    monkeypatch.setattr(notifier, "_acquire_advisory_lock", lambda _connection: True)
+    monkeypatch.setattr(notifier, "_release_advisory_lock", release)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {-1})
+    monkeypatch.setattr(notifier, "list_pending_activity_notifications", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        notifier,
+        "ActivityAINotificationPreparer",
+        lambda **_kwargs: pytest.fail("unlock loss must not invoke AI"),
+    )
+    monkeypatch.setattr(
+        notifier,
+        "send_push_messages",
+        lambda *_args: pytest.fail("unlock loss must not send LINE"),
+    )
+
+    path = _write_context(tmp_path, _context(905))
+    with patch.dict(
+        os.environ,
+        {"LINE_CHANNEL_ACCESS_TOKEN": "test-token", "LINE_GROUP_ID": "test-group"},
+        clear=True,
+    ):
+        result = run_daily_line_notification(str(path), database=database)
+
+    assert (result.status, result.sent, result.failed) == ("persistence_unavailable", 0, 1)
+    assert release_calls == 1
+
+
+def test_daily_acknowledgement_connection_loss_skips_unlock_after_neon_revoke(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    notification = _prepared_notification(904)
+    available = True
+    release_calls = 0
+
+    @dataclass
+    class _FailingSession(_FakeSession):
+        def commit(self) -> None:
+            raise OperationalError("COMMIT", {}, ConnectionError("connection refused"))
+
+    session = _FailingSession()
+
+    @contextmanager
+    def session_factory() -> Iterator[_FailingSession]:
+        yield session
+
+    @contextmanager
+    def lock_factory() -> Iterator[object]:
+        yield object()
+
+    def release(_connection: object) -> None:
+        nonlocal release_calls
+        release_calls += 1
+
+    def revoke(_error: BaseException) -> None:
+        nonlocal available
+        available = False
+
+    database = NotificationDatabaseAccess(
+        is_available=lambda: available,
+        session=session_factory,
+        lock_connection=lock_factory,
+        revoke=revoke,
+    )
+    monkeypatch.setattr(notifier, "_acquire_advisory_lock", lambda _connection: True)
+    monkeypatch.setattr(notifier, "_release_advisory_lock", release)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {904})
+    monkeypatch.setattr(
+        notifier,
+        "list_pending_activity_notifications",
+        lambda *_args, **_kwargs: [notification],
+    )
+    monkeypatch.setattr(
+        notifier,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: notification,
+    )
+    monkeypatch.setattr(notifier, "mark_notification_sent", lambda *_args: None)
+    monkeypatch.setattr(notifier, "send_push_messages", lambda *_args: SUCCESS)
+
+    path = _write_context(tmp_path, _context())
+    with patch.dict(
+        os.environ,
+        {"LINE_CHANNEL_ACCESS_TOKEN": "test-token", "LINE_GROUP_ID": "test-group"},
+        clear=True,
+    ):
+        result = run_daily_line_notification(str(path), database=database)
+
+    assert (result.status, result.sent, result.failed) == ("persistence_unavailable", 1, 1)
+    assert release_calls == 1
+
+
+def test_manual_unlock_connection_loss_remains_persistence_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_manual_persistence(monkeypatch)
+    notification = _prepared_notification(905)
+    release_calls = 0
+
+    def release(_connection: object) -> None:
+        nonlocal release_calls
+        release_calls += 1
+        if release_calls == 2:
+            raise OperationalError("UNLOCK", {}, ConnectionError("connection refused"))
+
+    monkeypatch.setattr(notifier, "_release_advisory_lock", release)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {905})
+    monkeypatch.setattr(
+        notifier,
+        "list_pending_activity_notifications",
+        lambda *_args, **_kwargs: [notification],
+    )
+    monkeypatch.setattr(
+        notifier,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: notification,
+    )
+    monkeypatch.setattr(notifier, "mark_notification_sent", lambda *_args: None)
+    monkeypatch.setattr(notifier, "send_push_messages", lambda *_args: SUCCESS)
+
+    env, path = _run_manual(tmp_path, monkeypatch, _context())
+    with env:
+        result = run_line_notification(str(path))
+
+    assert (result.status, result.sent, result.failed) == ("persistence_unavailable", 0, 1)
+    assert release_calls == 2
+
+
 def test_nonconnection_acknowledgement_error_propagates_after_line_acceptance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
