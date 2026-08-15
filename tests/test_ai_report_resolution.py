@@ -147,6 +147,11 @@ def test_external_generation_is_unlocked_and_conflict_winner_drives_downstream(
         )
 
     monkeypatch.setattr(resolution, "get_ai_report_by_idempotency_key", get_report)
+    monkeypatch.setattr(
+        resolution,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: None,
+    )
     monkeypatch.setattr(resolution, "save_ai_report", save_report)
     monkeypatch.setattr(
         resolution,
@@ -262,6 +267,11 @@ def test_notification_conflict_returns_persisted_payload_not_local_render(
     )
     monkeypatch.setattr(
         resolution,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: None,
+    )
+    monkeypatch.setattr(
+        resolution,
         "prepare_activity_notification",
         lambda _session, **_values: existing_notification,
     )
@@ -303,6 +313,11 @@ def test_single_string_render_is_rejected_by_notification_repository_seam(
         "get_ai_report_by_idempotency_key",
         lambda _session, _user_id, _key: report,
     )
+    monkeypatch.setattr(
+        resolution,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: None,
+    )
 
     with pytest.raises(ValueError, match="collection of messages"):
         ActivityAINotificationPreparer(
@@ -315,8 +330,18 @@ def test_single_string_render_is_rejected_by_notification_repository_seam(
     assert events == ["lock"]
 
 
-def test_sent_notification_conflict_is_not_sendable(
+@pytest.mark.parametrize(
+    ("sent_at", "should_send"),
+    [
+        (None, True),
+        (datetime(2026, 8, 12, tzinfo=timezone.utc), False),
+    ],
+    ids=["pending", "sent"],
+)
+def test_existing_prepared_delivery_skips_resolution_and_renderer(
     monkeypatch: pytest.MonkeyPatch,
+    sent_at: datetime | None,
+    should_send: bool,
 ) -> None:
     report = _report(
         report_id=uuid.uuid4(),
@@ -328,8 +353,8 @@ def test_sent_notification_conflict_is_not_sendable(
         garmin_activity_id=123,
         weekly_summary_id=None,
         ai_report_id=report.id,
-        rendered_messages=["already delivered payload"],
-        sent_at=datetime(2026, 8, 12, tzinfo=timezone.utc),
+        rendered_messages=["persisted payload"],
+        sent_at=sent_at,
         is_seed=False,
     )
 
@@ -339,28 +364,34 @@ def test_sent_notification_conflict_is_not_sendable(
 
     @contextmanager
     def notification_lock():
+        pytest.fail("persisted delivery must skip notification locking")
         yield
 
     monkeypatch.setattr(
         resolution,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: existing_notification,
+    )
+    monkeypatch.setattr(
+        resolution,
         "get_ai_report_by_idempotency_key",
-        lambda _session, _user_id, _key: report,
+        lambda *_args: pytest.fail("persisted delivery must skip AI report lookup"),
     )
     monkeypatch.setattr(
         resolution,
         "prepare_activity_notification",
-        lambda _session, **_values: existing_notification,
+        lambda *_args, **_values: pytest.fail("persisted delivery must skip prepare"),
     )
 
     delivery = ActivityAINotificationPreparer(
         session_factory=session_factory,
         notification_lock=notification_lock,
-        generate=lambda _spec: pytest.fail("existing report must skip external AI"),
-        render=lambda _report: ["local loser"],
+        generate=lambda _spec: pytest.fail("persisted delivery must skip external AI"),
+        render=lambda _report: pytest.fail("persisted delivery must skip renderer"),
     ).prepare(spec=_spec(report), garmin_activity_id=123)
 
-    assert delivery.should_send is False
-    assert delivery.rendered_messages == ("already delivered payload",)
+    assert delivery.should_send is should_send
+    assert delivery.rendered_messages == ("persisted payload",)
 
 
 def test_existing_report_with_mismatched_identity_fails_closed(
@@ -388,6 +419,11 @@ def test_existing_report_with_mismatched_identity_fails_closed(
         resolution,
         "get_ai_report_by_idempotency_key",
         lambda _session, _user_id, _key: report,
+    )
+    monkeypatch.setattr(
+        resolution,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: None,
     )
 
     with pytest.raises(RuntimeError, match="does not match"):
@@ -434,6 +470,11 @@ def test_generator_and_identity_use_json_normalized_input(
         resolution,
         "get_ai_report_by_idempotency_key",
         lambda _session, _user_id, _key: None,
+    )
+    monkeypatch.setattr(
+        resolution,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: None,
     )
     monkeypatch.setattr(
         resolution,
@@ -490,6 +531,11 @@ def test_generator_cannot_mutate_persisted_report_identity(
         resolution,
         "get_ai_report_by_idempotency_key",
         lambda _session, _user_id, _key: None,
+    )
+    monkeypatch.setattr(
+        resolution,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: None,
     )
 
     def generate(request: AIReportSpec) -> AIReportDraft:

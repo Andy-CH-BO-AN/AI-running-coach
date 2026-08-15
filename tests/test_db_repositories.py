@@ -30,6 +30,7 @@ from src.db.repositories import (
     SYSTEM_INITIALIZED_MARKER_ID,
     get_activity_with_splits,
     get_ai_report_by_idempotency_key,
+    get_prepared_activity_notification,
     get_latest_resting_heart_rate,
     get_latest_user_profile,
     get_notified_activity_ids,
@@ -868,6 +869,7 @@ def test_activity_notification_conflict_reuses_canonical_payload_and_first_sent_
         ai_report_id=winner_report.id,
         rendered_messages=["canonical page 1", "canonical page 2"],
     )
+    prepared = get_prepared_activity_notification(db_session, 123)
     conflict_result = prepare_activity_notification(
         db_session,
         garmin_activity_id=123,
@@ -876,6 +878,9 @@ def test_activity_notification_conflict_reuses_canonical_payload_and_first_sent_
     )
 
     assert conflict_result.id == winner.id
+    assert prepared is not None
+    assert prepared.id == winner.id
+    assert prepared.rendered_messages == ["canonical page 1", "canonical page 2"]
     assert conflict_result.ai_report_id == winner_report.id
     assert conflict_result.rendered_messages == [
         "canonical page 1",

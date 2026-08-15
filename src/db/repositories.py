@@ -522,6 +522,30 @@ def _validate_activity_report_subject(
         raise ValueError("AI report does not match the Activity notification subject")
 
 
+def get_prepared_activity_notification(
+    session: Session,
+    garmin_activity_id: int,
+) -> LineNotification | None:
+    """Return one validated prepared Activity delivery, if it exists."""
+    notification = get_activity_notification(session, garmin_activity_id)
+    if notification is None:
+        return None
+    session.refresh(notification)
+    if (
+        notification.is_seed
+        or notification.ai_report_id is None
+        or notification.rendered_messages is None
+    ):
+        return None
+    _validate_rendered_messages(notification.rendered_messages)
+    _validate_activity_report_subject(
+        session,
+        ai_report_id=notification.ai_report_id,
+        garmin_activity_id=garmin_activity_id,
+    )
+    return notification
+
+
 def _validate_weekly_report_subject(
     session: Session,
     *,

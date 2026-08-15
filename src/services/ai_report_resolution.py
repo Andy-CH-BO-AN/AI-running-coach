@@ -13,6 +13,7 @@ from src.db.mappers import jsonable
 from src.db.models import AIReport, Activity, LineNotification
 from src.db.repositories import (
     get_ai_report_by_idempotency_key,
+    get_prepared_activity_notification,
     prepare_activity_notification,
     save_ai_report,
 )
@@ -156,6 +157,12 @@ class ActivityAINotificationPreparer:
             weekly_summary_id=spec.weekly_summary_id,
             feature_version=spec.feature_version,
         )
+        existing_delivery = self._existing_prepared_delivery(
+            normalized_spec,
+            garmin_activity_id=garmin_activity_id,
+        )
+        if existing_delivery is not None:
+            return existing_delivery
         canonical_report = self._resolve_report(
             normalized_spec,
             garmin_activity_id=garmin_activity_id,
@@ -175,6 +182,26 @@ class ActivityAINotificationPreparer:
                 session.commit()
                 return PreparedLineDelivery.from_model(canonical_notification)
 
+    def _existing_prepared_delivery(
+        self,
+        spec: AIReportSpec,
+        *,
+        garmin_activity_id: int,
+    ) -> PreparedLineDelivery | None:
+        with self.session_factory() as session:
+            self._validate_activity_subject(
+                session,
+                spec,
+                garmin_activity_id=garmin_activity_id,
+            )
+            notification = get_prepared_activity_notification(
+                session,
+                garmin_activity_id,
+            )
+            if notification is None:
+                return None
+            return PreparedLineDelivery.from_model(notification)
+
     def _resolve_report(
         self,
         spec: AIReportSpec,
@@ -182,15 +209,11 @@ class ActivityAINotificationPreparer:
         garmin_activity_id: int,
     ) -> PersistedAIReport:
         with self.session_factory() as session:
-            activity = session.get(Activity, spec.activity_id)
-            if (
-                activity is None
-                or activity.user_id != spec.user_id
-                or activity.garmin_activity_id != garmin_activity_id
-            ):
-                raise ValueError(
-                    "Activity AI report spec does not match the notification subject"
-                )
+            self._validate_activity_subject(
+                session,
+                spec,
+                garmin_activity_id=garmin_activity_id,
+            )
             existing = get_ai_report_by_idempotency_key(
                 session,
                 spec.user_id,
@@ -234,6 +257,23 @@ class ActivityAINotificationPreparer:
             self._validate_canonical_report(spec, canonical)
             session.commit()
             return PersistedAIReport.from_model(canonical)
+
+    @staticmethod
+    def _validate_activity_subject(
+        session: Session,
+        spec: AIReportSpec,
+        *,
+        garmin_activity_id: int,
+    ) -> None:
+        activity = session.get(Activity, spec.activity_id)
+        if (
+            activity is None
+            or activity.user_id != spec.user_id
+            or activity.garmin_activity_id != garmin_activity_id
+        ):
+            raise ValueError(
+                "Activity AI report spec does not match the notification subject"
+            )
 
     @staticmethod
     def _validate_canonical_report(spec: AIReportSpec, report: AIReport) -> None:
