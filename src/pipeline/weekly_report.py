@@ -15,6 +15,7 @@ from src.db.repositories import (
     get_or_create_default_user,
 )
 from src.db.session import SessionLocal
+from src.pipeline.goal_prompt import GoalPromptOverrides
 from src.preprocessing.activity_window import normalize_activity_window
 from src.preprocessing.coach_context import build_deterministic_coach_context
 from src.services.weekly_training_report import (
@@ -90,6 +91,7 @@ def execute_weekly_training_report(
     retry_only: bool = False,
     session_factory: Callable[[], Session] = SessionLocal,
     runner_factory: Callable[..., WeeklyTrainingReportRunner] = WeeklyTrainingReportRunner,
+    goal_overrides: GoalPromptOverrides | None = None,
 ) -> WeeklyTrainingReportResult:
     """Build a weekly report from persisted Garmin data only.
 
@@ -116,4 +118,8 @@ def execute_weekly_training_report(
         user_id=user.id,
         deterministic_context=context,
         today=resolved_today,
+        core_goal=goal_overrides.core_goal if goal_overrides else None,
+        training_preferences=(
+            goal_overrides.training_preferences if goal_overrides else None
+        ),
     )

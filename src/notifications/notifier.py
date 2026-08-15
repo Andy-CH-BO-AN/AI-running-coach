@@ -196,6 +196,28 @@ def _week_facts(week: dict[str, Any]) -> dict[str, Any]:
     return {key: week[key] for key in keys if key in week}
 
 
+def _athlete_profile_input(context: dict[str, Any]) -> dict[str, Any]:
+    """Select existing deterministic athlete facts useful to Activity coaching."""
+    physio_metrics = context.get("physio_metrics")
+    if not isinstance(physio_metrics, dict):
+        physio_metrics = {}
+    personal_records = context.get("pb_validation_seed")
+    return {
+        "vo2max": physio_metrics.get("vo2max"),
+        "max_heart_rate": physio_metrics.get("max_heart_rate"),
+        "resting_heart_rate": physio_metrics.get("resting_heart_rate"),
+        "lactate_threshold": physio_metrics.get("lactate_threshold"),
+        "running_personal_records": [
+            {"event": record.get("event"), "raw_value": record.get("raw_value")}
+            for record in personal_records
+            if isinstance(record, dict)
+        ]
+        if isinstance(personal_records, list)
+        else [],
+        "pace_zones": physio_metrics.get("pace_zones", []),
+    }
+
+
 @dataclass(repr=False)
 class _NotificationRun:
     """Deep module owning Activity AI preparation and persistent delivery."""
@@ -206,6 +228,8 @@ class _NotificationRun:
     profile: _NotificationProfile
     database: NotificationDatabaseAccess | None
     transport: _LineTransport
+    core_goal: str | None = None
+    training_preferences: str | None = None
 
     def execute(self) -> NotificationResult:
         if self._daily_persistence_unavailable():
@@ -386,6 +410,9 @@ class _NotificationRun:
                     for week in self.context.get("weekly_analysis", [])
                     if isinstance(week, dict)
                 ],
+                "core_goal": self.core_goal,
+                "training_preferences": self.training_preferences,
+                "athlete_profile": _athlete_profile_input(self.context),
             }
         )
         canonical_input = json.dumps(
@@ -567,6 +594,8 @@ def _run_notification(
     profile: _NotificationProfile,
     database: NotificationDatabaseAccess | None,
     transport: _LineTransport,
+    core_goal: str | None = None,
+    training_preferences: str | None = None,
 ) -> NotificationResult:
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
     group_id = os.environ.get("LINE_GROUP_ID")
@@ -580,6 +609,8 @@ def _run_notification(
         profile=profile,
         database=database,
         transport=transport,
+        core_goal=core_goal,
+        training_preferences=training_preferences,
     ).execute()
 
 
@@ -587,6 +618,8 @@ def run_daily_line_notification(
     coach_context_path: str,
     *,
     database: NotificationDatabaseAccess | None,
+    core_goal: str | None = None,
+    training_preferences: str | None = None,
 ) -> NotificationResult:
     """Run Daily Activity notifications; DB unavailability defers LINE delivery."""
     return _run_notification(
@@ -594,14 +627,23 @@ def run_daily_line_notification(
         profile=_NotificationProfile.DAILY,
         database=database,
         transport=_ProductionLineTransport(),
+        core_goal=core_goal,
+        training_preferences=training_preferences,
     )
 
 
-def run_line_notification(coach_context_path: str) -> NotificationResult:
+def run_line_notification(
+    coach_context_path: str,
+    *,
+    core_goal: str | None = None,
+    training_preferences: str | None = None,
+) -> NotificationResult:
     """Run manual Activity notifications with the same persistent delivery contract."""
     return _run_notification(
         coach_context_path,
         profile=_NotificationProfile.MANUAL,
         database=None,
         transport=_ProductionLineTransport(),
+        core_goal=core_goal,
+        training_preferences=training_preferences,
     )

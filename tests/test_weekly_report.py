@@ -83,6 +83,23 @@ def _context(*, target_load: float = 120.0) -> dict[str, Any]:
             "available_training_days": ["Mon", "Wed", "Sat"],
             "preferred_long_training_days": ["Sat"],
         },
+        "physio_metrics": {
+            "vo2max": {"value": 52, "unit": "ml/kg/min"},
+            "max_heart_rate": {"value": 190, "unit": "bpm"},
+            "resting_heart_rate": {"value": 48, "unit": "bpm"},
+            "lactate_threshold": {
+                "pace": {"value": "4:20", "unit": "/km"},
+                "heart_rate": {"value": 172, "unit": "bpm"},
+            },
+            "pace_zones": [{"zone": "Z2", "pace_min": "5:20", "pace_max": "6:00"}],
+        },
+        "pb_validation_seed": [
+            {
+                "event": "5K",
+                "raw_value": "20:30",
+                "source_path": "raw_profile.running.pr.5k",
+            }
+        ],
         "weekly_analysis": [
             _week("2026-08-10", "2026-08-16", [], 0.0),
             _week("2026-08-03", "2026-08-09", target_sessions, target_load),
@@ -252,6 +269,62 @@ def test_weekly_runner_persists_then_sends_once_and_recomputes_sent_summary(db_s
     assert db_session.scalar(select(func.count()).select_from(LineNotification)) == 1
 
 
+def test_weekly_runner_adds_goal_preferences_and_compact_profile_to_ai_input(
+    db_session: Session,
+):
+    user = get_or_create_default_user(db_session)
+    captured: list[AIReportSpec] = []
+
+    def generate(spec: AIReportSpec) -> AIReportDraft:
+        captured.append(spec)
+        return _draft(spec)
+
+    result = _runner(db_session, generate=generate).run(
+        user_id=user.id,
+        deterministic_context=_context(),
+        today=date(2026, 8, 10),
+        core_goal="10 公里 45 分鐘",
+        training_preferences="週二游泳、週五重訓",
+    )
+
+    assert result.status == "sent"
+    assert len(captured) == 1
+    input_json = captured[0].input_json
+    assert input_json["core_goal"] == "10 公里 45 分鐘"
+    assert input_json["training_preferences"] == "週二游泳、週五重訓"
+    assert input_json["athlete_profile"] == {
+        "vo2max": {"value": 52, "unit": "ml/kg/min"},
+        "max_heart_rate": {"value": 190, "unit": "bpm"},
+        "resting_heart_rate": {"value": 48, "unit": "bpm"},
+        "lactate_threshold": {
+            "pace": {"value": "4:20", "unit": "/km"},
+            "heart_rate": {"value": 172, "unit": "bpm"},
+        },
+        "running_personal_records": [{"event": "5K", "raw_value": "20:30"}],
+        "pace_zones": [{"zone": "Z2", "pace_min": "5:20", "pace_max": "6:00"}],
+    }
+
+
+def test_weekly_idempotency_hashes_final_goal_and_profile_input():
+    projection = build_completed_week_summary(_context(), today=date(2026, 8, 10))
+    base_input = {
+        **projection.summary_json,
+        "core_goal": "10 公里 45 分鐘",
+        "training_preferences": "週二游泳",
+        "athlete_profile": {"vo2max": {"value": 52}},
+    }
+    changed_goal = {**base_input, "core_goal": "半馬 1:45"}
+    changed_profile = {
+        **base_input,
+        "athlete_profile": {"vo2max": {"value": 55}},
+    }
+
+    baseline_key = _weekly_ai_idempotency_key(projection, base_input)
+
+    assert baseline_key != _weekly_ai_idempotency_key(projection, changed_goal)
+    assert baseline_key != _weekly_ai_idempotency_key(projection, changed_profile)
+
+
 def test_weekly_runner_retries_immutable_pending_payload_without_ai_or_render(db_session: Session):
     user = get_or_create_default_user(db_session)
     first_transport = _Transport([False])
@@ -408,18 +481,36 @@ def test_weekly_retry_skips_expired_delivery_and_sends_newer_safe_pending(db_ses
     assert expired.sent_at is None
 
 
-def test_weekly_runner_reuses_persisted_report_with_unavailable_days_safely(db_session: Session):
+def test_weekly_runner_preserves_persisted_cross_training_on_unavailable_day(db_session: Session):
     user = get_or_create_default_user(db_session)
     transport = _Transport()
     runner = _runner(db_session, transport=transport)
     projection = build_completed_week_summary(_context(), today=date(2026, 8, 10))
     summary = runner._save_summary(user.id, projection)
+    input_json = {
+        **summary.summary_json,
+        "core_goal": None,
+        "training_preferences": None,
+        "athlete_profile": {
+            "vo2max": {"value": 52, "unit": "ml/kg/min"},
+            "max_heart_rate": {"value": 190, "unit": "bpm"},
+            "resting_heart_rate": {"value": 48, "unit": "bpm"},
+            "lactate_threshold": {
+                "pace": {"value": "4:20", "unit": "/km"},
+                "heart_rate": {"value": 172, "unit": "bpm"},
+            },
+            "running_personal_records": [{"event": "5K", "raw_value": "20:30"}],
+            "pace_zones": [
+                {"zone": "Z2", "pace_min": "5:20", "pace_max": "6:00"}
+            ],
+        },
+    }
     report = runner._resolve_report(
         AIReportSpec(
-            idempotency_key=_weekly_ai_idempotency_key(projection),
+            idempotency_key=_weekly_ai_idempotency_key(projection, input_json),
             user_id=user.id,
             report_scope="weekly",
-            input_json=dict(summary.summary_json),
+            input_json=input_json,
             prompt_version="weekly-coach:v1",
             weekly_summary_id=summary.id,
             feature_version="weekly:v1",
@@ -428,7 +519,10 @@ def test_weekly_runner_reuses_persisted_report_with_unavailable_days_safely(db_s
     persisted = db_session.get(AIReport, report.id)
     assert persisted is not None
     plan = [dict(entry) for entry in persisted.report_json["next_week_plan"]]
-    plan[1] = {"session": "高強度間歇", "description": "進行高強度跑步課表。"}
+    plan[1] = {
+        "session": "固定游泳",
+        "description": "45 分鐘輕鬆游泳，作為低衝擊有氧與跑步恢復。",
+    }
     persisted.report_json = {**persisted.report_json, "next_week_plan": plan}
     db_session.commit()
 
@@ -444,8 +538,7 @@ def test_weekly_runner_reuses_persisted_report_with_unavailable_days_safely(db_s
 
     rendered = "\n".join(transport.messages[0])
     assert result.status == "sent"
-    assert "Tue 2026-08-11｜休息／恢復：此日不可訓練；安排休息或低強度恢復。" in rendered
-    assert "高強度間歇" not in rendered
+    assert "Tue 2026-08-11｜固定游泳：45 分鐘輕鬆游泳，作為低衝擊有氧與跑步恢復。" in rendered
 
 
 def test_weekly_runner_retries_post_line_acknowledgement_failure_with_saved_payload(db_session: Session):

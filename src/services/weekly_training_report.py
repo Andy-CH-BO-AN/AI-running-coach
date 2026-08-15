@@ -76,9 +76,10 @@ class _ProductionWeeklyLineTransport:
 
 def _weekly_ai_idempotency_key(
     projection: CompletedWeekSummary,
+    input_json: Mapping[str, Any],
 ) -> str:
     canonical_input = json.dumps(
-        jsonable(projection.summary_json),
+        jsonable(input_json),
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -88,6 +89,30 @@ def _weekly_ai_idempotency_key(
         f"weekly:{projection.week_start.isoformat()}:"
         f"{WEEKLY_REPORT_PROMPT_VERSION}:{digest}"
     )
+
+
+def _athlete_profile_input(
+    deterministic_context: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Select existing deterministic athlete facts useful to weekly coaching."""
+    physio_metrics = deterministic_context.get("physio_metrics")
+    if not isinstance(physio_metrics, Mapping):
+        physio_metrics = {}
+    personal_records = deterministic_context.get("pb_validation_seed")
+    return {
+        "vo2max": physio_metrics.get("vo2max"),
+        "max_heart_rate": physio_metrics.get("max_heart_rate"),
+        "resting_heart_rate": physio_metrics.get("resting_heart_rate"),
+        "lactate_threshold": physio_metrics.get("lactate_threshold"),
+        "running_personal_records": [
+            {"event": record.get("event"), "raw_value": record.get("raw_value")}
+            for record in personal_records
+            if isinstance(record, Mapping)
+        ]
+        if isinstance(personal_records, list)
+        else [],
+        "pace_zones": physio_metrics.get("pace_zones", []),
+    }
 
 
 def _default_renderer(
@@ -123,6 +148,8 @@ class WeeklyTrainingReportRunner:
         user_id: uuid.UUID,
         deterministic_context: Mapping[str, Any],
         today: date,
+        core_goal: str | None = None,
+        training_preferences: str | None = None,
     ) -> WeeklyTrainingReportResult:
         projection = build_completed_week_summary(
             deterministic_context,
@@ -147,11 +174,19 @@ class WeeklyTrainingReportRunner:
                 )
             return result
 
+        input_json = jsonable(
+            {
+                **summary.summary_json,
+                "core_goal": core_goal,
+                "training_preferences": training_preferences,
+                "athlete_profile": _athlete_profile_input(deterministic_context),
+            }
+        )
         spec = AIReportSpec(
-            idempotency_key=_weekly_ai_idempotency_key(projection),
+            idempotency_key=_weekly_ai_idempotency_key(projection, input_json),
             user_id=user_id,
             report_scope="weekly",
-            input_json=dict(summary.summary_json),
+            input_json=input_json,
             prompt_version=WEEKLY_REPORT_PROMPT_VERSION,
             weekly_summary_id=summary.id,
             feature_version=WEEKLY_SUMMARY_VERSION,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 from sqlalchemy.exc import OperationalError
@@ -13,26 +14,38 @@ from src.services.weekly_training_report import WeeklyTrainingReportResult
 def test_weekly_cli_passes_explicit_date_and_prints_safe_result(monkeypatch, capsys):
     captured = {}
 
-    def execute(*, today, retry_only):
+    def execute(*, today, retry_only, goal_overrides):
         captured["today"] = today
         captured["retry_only"] = retry_only
+        captured["goal_overrides"] = goal_overrides
         return WeeklyTrainingReportResult(status="sent", sent=1)
 
     monkeypatch.setattr(weekly_cli, "execute_weekly_training_report", execute)
 
-    exit_code = weekly_cli.main(["--as-of", "2026-08-10"])
+    exit_code = weekly_cli.main(
+        [
+            "--as-of",
+            "2026-08-10",
+            "--core-goal",
+            "10 公里 45 分鐘",
+            "--training-preferences",
+            "週二游泳",
+        ]
+    )
 
     output = capsys.readouterr()
     assert exit_code == 0
     assert captured["today"].isoformat() == "2026-08-10"
     assert captured["retry_only"] is False
+    assert captured["goal_overrides"].core_goal == "10 公里 45 分鐘"
+    assert captured["goal_overrides"].training_preferences == "週二游泳"
     assert "status=sent" in output.out
 
 
 def test_weekly_cli_hides_database_error_details(monkeypatch, capsys):
     secret = "postgresql://owner:secret-password@example.invalid/coach"
 
-    def execute(*, today, retry_only):
+    def execute(*, today, retry_only, goal_overrides):
         raise OperationalError("SELECT 1", {}, ConnectionError(secret))
 
     monkeypatch.setattr(weekly_cli, "execute_weekly_training_report", execute)
@@ -90,3 +103,14 @@ def test_weekly_context_reads_full_required_time_window(monkeypatch):
         tzinfo=timezone.utc,
     )
     assert captured["context_kwargs"]["weekly_analysis_weeks"] == 5
+
+
+def test_weekly_workflow_passes_goal_environment_to_cli():
+    workflow = Path(".github/workflows/weekly_training_report.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "CORE_GOAL: ${{ vars.CORE_GOAL }}" in workflow
+    assert "TRAINING_PREFERENCES: ${{ vars.TRAINING_PREFERENCES }}" in workflow
+    assert '--core-goal "$CORE_GOAL"' in workflow
+    assert '--training-preferences "$TRAINING_PREFERENCES"' in workflow

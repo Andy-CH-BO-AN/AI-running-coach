@@ -33,6 +33,23 @@ LINE_FAILURE = LineSendResult(False, 500, 3, "server_error")
 
 def _context(*activity_ids: int) -> dict[str, Any]:
     return {
+        "physio_metrics": {
+            "vo2max": {"value": 52, "unit": "ml/kg/min"},
+            "max_heart_rate": {"value": 190, "unit": "bpm"},
+            "resting_heart_rate": {"value": 48, "unit": "bpm"},
+            "lactate_threshold": {
+                "pace": {"value": "4:20", "unit": "/km"},
+                "heart_rate": {"value": 172, "unit": "bpm"},
+            },
+            "pace_zones": [{"zone": "Z2", "pace_min": "5:20", "pace_max": "6:00"}],
+        },
+        "pb_validation_seed": [
+            {
+                "event": "5K",
+                "raw_value": "20:30",
+                "source_path": "raw_profile.running.pr.5k",
+            }
+        ],
         "weekly_analysis": [
             {
                 "week_start": "2026-08-10",
@@ -197,6 +214,21 @@ def test_new_activity_prepares_ai_payload_outside_selection_lock_then_sends_cano
             assert spec.report_scope == "activity"
             assert spec.input_json["activity"]["activity_id"] == 123
             assert spec.input_json["recent_training_weeks"][0]["derived_training_load"] == 180.0
+            assert spec.input_json["core_goal"] == "10 公里 45 分鐘"
+            assert spec.input_json["training_preferences"] == "週二游泳"
+            assert spec.input_json["athlete_profile"] == {
+                "vo2max": {"value": 52, "unit": "ml/kg/min"},
+                "max_heart_rate": {"value": 190, "unit": "bpm"},
+                "resting_heart_rate": {"value": 48, "unit": "bpm"},
+                "lactate_threshold": {
+                    "pace": {"value": "4:20", "unit": "/km"},
+                    "heart_rate": {"value": 172, "unit": "bpm"},
+                },
+                "running_personal_records": [{"event": "5K", "raw_value": "20:30"}],
+                "pace_zones": [
+                    {"zone": "Z2", "pace_min": "5:20", "pace_max": "6:00"}
+                ],
+            }
             return prepared
 
     sent_messages: list[tuple[str, ...]] = []
@@ -226,7 +258,11 @@ def test_new_activity_prepares_ai_payload_outside_selection_lock_then_sends_cano
 
     env, path = _run_manual(tmp_path, monkeypatch, _context(123))
     with env:
-        result = run_line_notification(str(path))
+        result = run_line_notification(
+            str(path),
+            core_goal="10 公里 45 分鐘",
+            training_preferences="週二游泳",
+        )
 
     assert (result.status, result.sent, result.failed) == ("done", 1, 0)
     assert sent_messages == [prepared.rendered_messages]
@@ -237,6 +273,53 @@ def test_new_activity_prepares_ai_payload_outside_selection_lock_then_sends_cano
         "lock:acquire",
         "lock:release",
     ]
+
+
+def test_activity_idempotency_changes_with_goal_or_compact_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_manual_persistence(monkeypatch)
+    activity = Activity(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        garmin_activity_id=123,
+    )
+    monkeypatch.setattr(
+        notifier,
+        "get_activity_by_garmin_id",
+        lambda _session, _activity_id: activity,
+    )
+    candidate = notifier._ActivityCandidate(
+        _context(123)["weekly_analysis"][0]["sessions"][0],
+        _context(123)["weekly_analysis"][0],
+    )
+
+    def spec_for(*, core_goal: str, vo2max: int):
+        context = _context(123)
+        context["physio_metrics"]["vo2max"] = {
+            "value": vo2max,
+            "unit": "ml/kg/min",
+        }
+        run = notifier._NotificationRun(
+            context=context,
+            token="token",
+            group_id="group",
+            profile=notifier._NotificationProfile.MANUAL,
+            database=None,
+            transport=_FakeTransport(),
+            core_goal=core_goal,
+            training_preferences="週二游泳",
+        )
+        return run._build_activity_spec(candidate, garmin_activity_id=123)
+
+    baseline = spec_for(core_goal="10 公里 45 分鐘", vo2max=52)
+
+    assert baseline.idempotency_key != spec_for(
+        core_goal="半馬 1:45", vo2max=52
+    ).idempotency_key
+    assert baseline.idempotency_key != spec_for(
+        core_goal="10 公里 45 分鐘", vo2max=55
+    ).idempotency_key
 
 
 def test_pending_payload_retries_without_ai_or_renderer_even_after_context_ages_out(

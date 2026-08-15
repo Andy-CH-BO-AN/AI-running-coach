@@ -38,4 +38,9 @@ jobs:
           NEON_DATABASE_DIRECT_URL: ${{ secrets.NEON_DATABASE_DIRECT_URL }}
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_GROUP_ID: ${{ secrets.LINE_GROUP_ID }}
-        run: python -m src.scripts.run_weekly_training_report
+          CORE_GOAL: ${{ vars.CORE_GOAL }}
+          TRAINING_PREFERENCES: ${{ vars.TRAINING_PREFERENCES }}
+        run: >-
+          python -m src.scripts.run_weekly_training_report
+          --core-goal "$CORE_GOAL"
+          --training-preferences "$TRAINING_PREFERENCES"
