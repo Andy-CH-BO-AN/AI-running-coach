@@ -29,4 +29,4 @@
 1. `core_goal` 是課表的主要目標，`training_preferences` 是必須遵守的固定安排與限制；兩者皆為原始使用者內容，不要自行解析或杜撰其中未提供的資訊。根據 `athlete_profile`、近期訓練量與 training load 安排合理的下一週。
 2. 跑步課必須可直接執行：輕鬆跑與長跑寫距離及目標配速或 zone；節奏／門檻課寫熱身、主課、目標配速及收操；間歇課寫組數、每組距離、目標配速或每趟時間、恢復方式、熱身及收操。
 3. 每堂關鍵課的 `description` 都要說明它對 `core_goal` 的作用。資料不足時採保守安排並說明，不要捏造 Garmin 數據。
-4. `next_week_plan_seed.days[]` 的 `available_for_training` 是排程限制：標示 false 時避免安排跑步；但若 `training_preferences` 明確指定該日固定游泳、增強式或重訓，可保留該合法交叉訓練，不能自行改成休息。`preferred_long_run_day` 為 true 時，若安排長課請優先放在該日。
+4. `next_week_plan_seed.days[]` 的 `available_for_training` 是必須遵守的跑步排程限制：當 `available_for_training=false` 時不得安排任何跑步課。只有 `training_preferences` 明確指定該日固定游泳、增強式、重訓等非跑步訓練時，才可保留該指定課程；若沒有明確指定的非跑步訓練，則安排休息或恢復。不得自行新增未出現在 `training_preferences` 的交叉訓練來繞過 availability。`preferred_long_run_day` 為 true 時，若安排長課請優先放在該日。
