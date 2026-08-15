@@ -16,6 +16,10 @@ MAX_ANALYSIS_UTF16_LENGTH = 320
 MAX_RECOMMENDATION_UTF16_LENGTH = 320
 MAX_PLAN_SESSION_UTF16_LENGTH = 100
 MAX_PLAN_DESCRIPTION_UTF16_LENGTH = 360
+_UNAVAILABLE_DAY_PLAN = {
+    "session": "休息／恢復",
+    "description": "此日不可訓練；安排休息或低強度恢復。",
+}
 
 
 class WeeklyCoachError(RuntimeError):
@@ -38,14 +42,35 @@ def _text(
     return normalized
 
 
-def _normalize_plan(payload: dict[str, Any]) -> list[dict[str, str]]:
+def _unavailable_plan_indexes(input_json: dict[str, Any]) -> frozenset[int]:
+    seed = input_json.get("next_week_plan_seed")
+    if not isinstance(seed, dict):
+        return frozenset()
+    days = seed.get("days")
+    if not isinstance(days, list):
+        return frozenset()
+    return frozenset(
+        index
+        for index, day in enumerate(days)
+        if isinstance(day, dict) and day.get("available_for_training") is False
+    )
+
+
+def _normalize_plan(
+    payload: dict[str, Any],
+    *,
+    unavailable_indexes: frozenset[int],
+) -> list[dict[str, str]]:
     plan = payload.get("next_week_plan")
     if not isinstance(plan, list) or len(plan) != 7:
         raise WeeklyCoachError("Weekly AI response must contain a seven-day plan")
     normalized: list[dict[str, str]] = []
-    for entry in plan:
+    for index, entry in enumerate(plan):
         if not isinstance(entry, dict):
             raise WeeklyCoachError("Weekly AI plan entries must be objects")
+        if index in unavailable_indexes:
+            normalized.append(dict(_UNAVAILABLE_DAY_PLAN))
+            continue
         normalized.append(
             {
                 "session": _text(
@@ -63,7 +88,11 @@ def _normalize_plan(payload: dict[str, Any]) -> list[dict[str, str]]:
     return normalized
 
 
-def _normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _normalize_payload(
+    payload: dict[str, Any],
+    *,
+    unavailable_indexes: frozenset[int],
+) -> dict[str, Any]:
     return {
         "analysis": _text(
             payload.get("analysis"),
@@ -76,18 +105,26 @@ def _normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
             field="recommendation",
             maximum_utf16_length=MAX_RECOMMENDATION_UTF16_LENGTH,
         ),
-        "next_week_plan": _normalize_plan(payload),
+        "next_week_plan": _normalize_plan(
+            payload,
+            unavailable_indexes=unavailable_indexes,
+        ),
     }
 
 
-def _generate_payload(full_prompt: str) -> tuple[str, dict[str, Any]]:
+def _generate_payload(
+    full_prompt: str,
+    *,
+    unavailable_indexes: frozenset[int],
+) -> tuple[str, dict[str, Any]]:
     """Reuse the established model fallback and retry policy for weekly output."""
     switched_to_vertexai = False
     last_error: Exception | None = None
     for model_name in coach_agent.MODEL_FALLBACKS:
         try:
             return model_name, _normalize_payload(
-                coach_agent._generate_content_with_retries(model_name, full_prompt)
+                coach_agent._generate_content_with_retries(model_name, full_prompt),
+                unavailable_indexes=unavailable_indexes,
             )
         except Exception as exc:
             last_error = exc
@@ -100,7 +137,8 @@ def _generate_payload(full_prompt: str) -> tuple[str, dict[str, Any]]:
                 switched_to_vertexai = True
                 try:
                     return model_name, _normalize_payload(
-                        coach_agent._generate_content_with_retries(model_name, full_prompt)
+                        coach_agent._generate_content_with_retries(model_name, full_prompt),
+                        unavailable_indexes=unavailable_indexes,
                     )
                 except Exception as vertex_error:
                     last_error = vertex_error
@@ -121,7 +159,10 @@ def generate_weekly_report(spec: AIReportSpec) -> AIReportDraft:
         "### Deterministic weekly facts (source of truth)\n"
         f"{json.dumps(spec.input_json, ensure_ascii=False, indent=2)}"
     )
-    model_name, payload = _generate_payload(full_prompt)
+    model_name, payload = _generate_payload(
+        full_prompt,
+        unavailable_indexes=_unavailable_plan_indexes(spec.input_json),
+    )
     report_text = f"{payload['analysis']}\n\n建議：{payload['recommendation']}"
     return AIReportDraft(
         report_text=report_text,

@@ -6,14 +6,14 @@ from src.agents import weekly_coach
 from src.services.ai_report_resolution import AIReportSpec
 
 
-def _spec() -> AIReportSpec:
+def _spec(*, input_json: dict | None = None) -> AIReportSpec:
     import uuid
 
     return AIReportSpec(
         idempotency_key="weekly:2026-08-03:test",
         user_id=uuid.uuid4(),
         report_scope="weekly",
-        input_json={"week_start": "2026-08-03"},
+        input_json=input_json or {"week_start": "2026-08-03"},
         prompt_version="weekly-coach:v1",
         weekly_summary_id=uuid.uuid4(),
         feature_version="weekly:v1",
@@ -77,3 +77,40 @@ def test_weekly_coach_rejects_oversized_analysis_before_persistence(monkeypatch,
 
     with pytest.raises(weekly_coach.WeeklyCoachError, match="unavailable"):
         weekly_coach.generate_weekly_report(_spec())
+
+
+def test_weekly_coach_replaces_unavailable_day_workout_with_recovery(monkeypatch, tmp_path):
+    prompt = tmp_path / "weekly.md"
+    prompt.write_text("system prompt", encoding="utf-8")
+    payload = _payload()
+    payload["next_week_plan"][1] = {
+        "session": "高強度間歇",
+        "description": "進行高強度跑步課表。",
+    }
+    monkeypatch.setattr(weekly_coach, "WEEKLY_PROMPT_PATH", prompt)
+    monkeypatch.setattr(
+        weekly_coach.coach_agent,
+        "_generate_content_with_retries",
+        lambda _model, _prompt: payload,
+    )
+    monkeypatch.setattr(weekly_coach.coach_agent, "MODEL_FALLBACKS", ("test-model",))
+
+    draft = weekly_coach.generate_weekly_report(
+        _spec(
+            input_json={
+                "week_start": "2026-08-03",
+                "next_week_plan_seed": {
+                    "days": [
+                        {"available_for_training": index != 1}
+                        for index in range(7)
+                    ]
+                },
+            }
+        )
+    )
+
+    assert draft.report_json is not None
+    assert draft.report_json["next_week_plan"][1] == {
+        "session": "休息／恢復",
+        "description": "此日不可訓練；安排休息或低強度恢復。",
+    }

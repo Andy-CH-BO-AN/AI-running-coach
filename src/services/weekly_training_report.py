@@ -7,13 +7,13 @@ import uuid
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Mapping, Protocol
 
 from sqlalchemy.orm import Session
 
 from src.db.mappers import jsonable
-from src.db.models import AIReport, LineNotification, WeeklySummary
+from src.db.models import AIReport, LineNotification, WeeklySummary, utc_now
 from src.db.repositories import (
     get_ai_report_by_idempotency_key,
     get_prepared_weekly_notification,
@@ -38,6 +38,9 @@ from src.services.ai_report_resolution import (
 )
 
 WEEKLY_REPORT_PROMPT_VERSION = "weekly-coach:v1"
+# LINE retains a retry key for 24 hours.  Stop one hour earlier so a delayed
+# request never leaves the documented duplicate-protection window.
+LINE_RETRY_KEY_SAFE_WINDOW = timedelta(hours=23)
 
 
 class WeeklyLineTransport(Protocol):
@@ -126,7 +129,10 @@ class WeeklyTrainingReportRunner:
             today=today,
         )
         summary = self._save_summary(user_id, projection)
-        pending_result = self._deliver_existing_pending(user_id)
+        pending_result = self._deliver_existing_pending(
+            user_id,
+            report_expired=False,
+        )
         if pending_result is not None and pending_result.failed:
             return pending_result
         existing_delivery = self._existing_delivery(summary)
@@ -175,6 +181,8 @@ class WeeklyTrainingReportRunner:
     def _deliver_existing_pending(
         self,
         user_id: uuid.UUID,
+        *,
+        report_expired: bool = True,
     ) -> WeeklyTrainingReportResult | None:
         """Retry earlier weeks before producing a newer report, in order."""
         with self.session_factory() as session:
@@ -189,6 +197,7 @@ class WeeklyTrainingReportRunner:
         if not pending_ids:
             return None
         sent = 0
+        expired_summary_id: uuid.UUID | None = None
         for summary_id in pending_ids:
             with self.session_factory() as session:
                 notification = get_prepared_weekly_notification(session, summary_id)
@@ -197,16 +206,37 @@ class WeeklyTrainingReportRunner:
                         "Pending weekly notification is not a valid prepared delivery"
                     )
                 delivery = PreparedLineDelivery.from_model(notification)
+                if not delivery.should_send:
+                    continue
+                if self._retry_window_expired(delivery):
+                    expired_summary_id = expired_summary_id or summary_id
+                    continue
             result = self._send_delivery(delivery, summary_id)
             sent += result.sent
             if result.failed:
                 return WeeklyTrainingReportResult(
-                    status="line_failed",
+                    status=result.status,
                     sent=sent,
                     failed=result.failed,
                     weekly_summary_id=summary_id,
                 )
-        return WeeklyTrainingReportResult(status="retried_pending", sent=sent)
+        if expired_summary_id is not None and report_expired:
+            return WeeklyTrainingReportResult(
+                status="retry_window_expired",
+                sent=sent,
+                failed=1,
+                weekly_summary_id=expired_summary_id,
+            )
+        return (
+            WeeklyTrainingReportResult(status="retried_pending", sent=sent)
+            if sent
+            else None
+        )
+
+    @staticmethod
+    def _retry_window_expired(delivery: PreparedLineDelivery) -> bool:
+        """Fail closed before LINE can no longer deduplicate this payload."""
+        return utc_now() - delivery.recorded_at >= LINE_RETRY_KEY_SAFE_WINDOW
 
     def _save_summary(
         self,
@@ -329,6 +359,12 @@ class WeeklyTrainingReportRunner:
         if not delivery.should_send:
             return WeeklyTrainingReportResult(
                 status="already_sent",
+                weekly_summary_id=summary_id,
+            )
+        if self._retry_window_expired(delivery):
+            return WeeklyTrainingReportResult(
+                status="retry_window_expired",
+                failed=1,
                 weekly_summary_id=summary_id,
             )
         response = self.transport.send(

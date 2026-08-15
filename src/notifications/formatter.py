@@ -540,8 +540,12 @@ def _weekly_plan_lines(
             raise ValueError("Weekly report plan entries must be objects")
         day_of_week = day.get("day_of_week")
         date_value = day.get("date")
-        session = suggestion.get("session")
-        description = suggestion.get("description")
+        if day.get("available_for_training") is False:
+            session = "休息／恢復"
+            description = "此日不可訓練；安排休息或低強度恢復。"
+        else:
+            session = suggestion.get("session")
+            description = suggestion.get("description")
         if not all(isinstance(value, str) and value.strip() for value in (day_of_week, date_value, session, description)):
             raise ValueError("Weekly report plan is incomplete")
         lines.append(f"• {day_of_week} {date_value}｜{session}：{description}")

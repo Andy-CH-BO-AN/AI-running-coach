@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
@@ -14,7 +14,11 @@ from src.db.repositories import get_or_create_default_user
 from src.notifications.line_client import LineSendResult
 from src.preprocessing.weekly_report import build_completed_week_summary
 from src.services.ai_report_resolution import AIReportDraft, AIReportSpec
-from src.services.weekly_training_report import WeeklyTrainingReportRunner
+from src.services.weekly_training_report import (
+    LINE_RETRY_KEY_SAFE_WINDOW,
+    WeeklyTrainingReportRunner,
+    _weekly_ai_idempotency_key,
+)
 from tests.db_test_utils import isolated_db_session
 
 
@@ -275,6 +279,161 @@ def test_weekly_runner_retries_immutable_pending_payload_without_ai_or_render(db
     assert notification is not None
     assert notification.rendered_messages == list(persisted_payload)
     assert notification.sent_at is not None
+
+
+def test_weekly_runner_fails_closed_after_line_retry_key_window(db_session: Session):
+    user = get_or_create_default_user(db_session)
+    first_runner = _runner(db_session, transport=_Transport([False]))
+    first_runner.run(
+        user_id=user.id,
+        deterministic_context=_context(),
+        today=date(2026, 8, 10),
+    )
+    notification = db_session.scalar(select(LineNotification))
+    assert notification is not None
+    notification.recorded_at -= LINE_RETRY_KEY_SAFE_WINDOW + timedelta(seconds=1)
+    db_session.commit()
+
+    retry_transport = _Transport()
+    result = _runner(db_session, transport=retry_transport).retry_pending(user_id=user.id)
+
+    assert result.status == "retry_window_expired"
+    assert result.failed == 1
+    assert retry_transport.messages == []
+    db_session.refresh(notification)
+    assert notification.sent_at is None
+
+
+def test_weekly_runner_sends_new_week_after_expired_earlier_delivery(db_session: Session):
+    user = get_or_create_default_user(db_session)
+    first_runner = _runner(db_session, transport=_Transport([False]))
+    first_runner.run(
+        user_id=user.id,
+        deterministic_context=_context(),
+        today=date(2026, 8, 10),
+    )
+    expired = db_session.scalar(select(LineNotification))
+    assert expired is not None
+    expired.recorded_at -= LINE_RETRY_KEY_SAFE_WINDOW + timedelta(seconds=1)
+    db_session.commit()
+
+    next_week_transport = _Transport()
+    result = _runner(
+        db_session,
+        transport=next_week_transport,
+    ).run(
+        user_id=user.id,
+        deterministic_context=_context(),
+        today=date(2026, 8, 17),
+    )
+
+    db_session.refresh(expired)
+    assert result.status == "sent"
+    assert result.sent == 1
+    assert next_week_transport.messages
+    assert expired.sent_at is None
+    assert db_session.scalar(select(func.count()).select_from(LineNotification)) == 2
+
+
+def test_weekly_runner_does_not_send_expired_delivery_for_the_same_week(db_session: Session):
+    user = get_or_create_default_user(db_session)
+    first_runner = _runner(db_session, transport=_Transport([False]))
+    first_runner.run(
+        user_id=user.id,
+        deterministic_context=_context(),
+        today=date(2026, 8, 10),
+    )
+    expired = db_session.scalar(select(LineNotification))
+    assert expired is not None
+    expired.recorded_at -= LINE_RETRY_KEY_SAFE_WINDOW + timedelta(seconds=1)
+    db_session.commit()
+
+    retry_transport = _Transport()
+    result = _runner(
+        db_session,
+        generate=lambda _spec: pytest.fail("expired payload must not generate AI"),
+        render=lambda *_args: pytest.fail("expired payload must not rerender"),
+        transport=retry_transport,
+    ).run(
+        user_id=user.id,
+        deterministic_context=_context(),
+        today=date(2026, 8, 10),
+    )
+
+    assert result.status == "retry_window_expired"
+    assert result.failed == 1
+    assert retry_transport.messages == []
+
+
+def test_weekly_retry_skips_expired_delivery_and_sends_newer_safe_pending(db_session: Session):
+    user = get_or_create_default_user(db_session)
+    old_runner = _runner(db_session, transport=_Transport([False]))
+    old_runner.run(
+        user_id=user.id,
+        deterministic_context=_context(),
+        today=date(2026, 8, 10),
+    )
+    expired = db_session.scalar(select(LineNotification))
+    assert expired is not None
+    expired.recorded_at -= LINE_RETRY_KEY_SAFE_WINDOW + timedelta(seconds=1)
+    db_session.commit()
+
+    newer_runner = _runner(db_session, transport=_Transport([False]))
+    newer_runner.run(
+        user_id=user.id,
+        deterministic_context=_context(),
+        today=date(2026, 8, 17),
+    )
+
+    retry_transport = _Transport()
+    result = _runner(db_session, transport=retry_transport).retry_pending(user_id=user.id)
+
+    assert result.status == "retry_window_expired"
+    assert result.sent == 1
+    assert result.failed == 1
+    assert len(retry_transport.messages) == 1
+    db_session.refresh(expired)
+    assert expired.sent_at is None
+
+
+def test_weekly_runner_reuses_persisted_report_with_unavailable_days_safely(db_session: Session):
+    user = get_or_create_default_user(db_session)
+    transport = _Transport()
+    runner = _runner(db_session, transport=transport)
+    projection = build_completed_week_summary(_context(), today=date(2026, 8, 10))
+    summary = runner._save_summary(user.id, projection)
+    report = runner._resolve_report(
+        AIReportSpec(
+            idempotency_key=_weekly_ai_idempotency_key(projection),
+            user_id=user.id,
+            report_scope="weekly",
+            input_json=dict(summary.summary_json),
+            prompt_version="weekly-coach:v1",
+            weekly_summary_id=summary.id,
+            feature_version="weekly:v1",
+        )
+    )
+    persisted = db_session.get(AIReport, report.id)
+    assert persisted is not None
+    plan = [dict(entry) for entry in persisted.report_json["next_week_plan"]]
+    plan[1] = {"session": "高強度間歇", "description": "進行高強度跑步課表。"}
+    persisted.report_json = {**persisted.report_json, "next_week_plan": plan}
+    db_session.commit()
+
+    result = _runner(
+        db_session,
+        generate=lambda _spec: pytest.fail("persisted report must be reused"),
+        transport=transport,
+    ).run(
+        user_id=user.id,
+        deterministic_context=_context(),
+        today=date(2026, 8, 10),
+    )
+
+    rendered = "\n".join(transport.messages[0])
+    assert result.status == "sent"
+    assert "Tue 2026-08-11｜休息／恢復：此日不可訓練；安排休息或低強度恢復。" in rendered
+    assert "高強度間歇" not in rendered
 
 
 def test_weekly_runner_retries_post_line_acknowledgement_failure_with_saved_payload(db_session: Session):
