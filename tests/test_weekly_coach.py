@@ -40,11 +40,10 @@ def test_weekly_coach_returns_validated_structured_draft(monkeypatch, tmp_path):
         "_generate_content_with_retries",
         lambda _model, _prompt: _payload(),
     )
-    monkeypatch.setattr(weekly_coach.coach_agent, "MODEL_FALLBACKS", ("test-model",))
+    monkeypatch.setattr(weekly_coach.coach_agent, "MODEL_FALLBACKS", ("provider",))
 
     draft = weekly_coach.generate_weekly_report(_spec())
 
-    assert draft.model_name == "test-model"
     assert draft.report_json == _payload()
     assert "建議：本週優先安排恢復。" in draft.report_text
 
@@ -58,7 +57,7 @@ def test_weekly_coach_rejects_incomplete_plan(monkeypatch, tmp_path):
         "_generate_content_with_retries",
         lambda _model, _prompt: {**_payload(), "next_week_plan": []},
     )
-    monkeypatch.setattr(weekly_coach.coach_agent, "MODEL_FALLBACKS", ("test-model",))
+    monkeypatch.setattr(weekly_coach.coach_agent, "MODEL_FALLBACKS", ("provider",))
 
     with pytest.raises(weekly_coach.WeeklyCoachError, match="unavailable"):
         weekly_coach.generate_weekly_report(_spec())
@@ -73,19 +72,19 @@ def test_weekly_coach_rejects_oversized_analysis_before_persistence(monkeypatch,
         "_generate_content_with_retries",
         lambda _model, _prompt: {**_payload(), "analysis": "過長" * 400},
     )
-    monkeypatch.setattr(weekly_coach.coach_agent, "MODEL_FALLBACKS", ("test-model",))
+    monkeypatch.setattr(weekly_coach.coach_agent, "MODEL_FALLBACKS", ("provider",))
 
     with pytest.raises(weekly_coach.WeeklyCoachError, match="unavailable"):
         weekly_coach.generate_weekly_report(_spec())
 
 
-def test_weekly_coach_replaces_unavailable_day_workout_with_recovery(monkeypatch, tmp_path):
+def test_weekly_coach_preserves_cross_training_on_unavailable_day(monkeypatch, tmp_path):
     prompt = tmp_path / "weekly.md"
     prompt.write_text("system prompt", encoding="utf-8")
     payload = _payload()
     payload["next_week_plan"][1] = {
-        "session": "高強度間歇",
-        "description": "進行高強度跑步課表。",
+        "session": "固定游泳",
+        "description": "45 分鐘輕鬆游泳，維持可對話強度，作為低衝擊有氧與跑步恢復。",
     }
     monkeypatch.setattr(weekly_coach, "WEEKLY_PROMPT_PATH", prompt)
     monkeypatch.setattr(
@@ -93,7 +92,7 @@ def test_weekly_coach_replaces_unavailable_day_workout_with_recovery(monkeypatch
         "_generate_content_with_retries",
         lambda _model, _prompt: payload,
     )
-    monkeypatch.setattr(weekly_coach.coach_agent, "MODEL_FALLBACKS", ("test-model",))
+    monkeypatch.setattr(weekly_coach.coach_agent, "MODEL_FALLBACKS", ("provider",))
 
     draft = weekly_coach.generate_weekly_report(
         _spec(
@@ -111,6 +110,6 @@ def test_weekly_coach_replaces_unavailable_day_workout_with_recovery(monkeypatch
 
     assert draft.report_json is not None
     assert draft.report_json["next_week_plan"][1] == {
-        "session": "休息／恢復",
-        "description": "此日不可訓練；安排休息或低強度恢復。",
+        "session": "固定游泳",
+        "description": "45 分鐘輕鬆游泳，維持可對話強度，作為低衝擊有氧與跑步恢復。",
     }

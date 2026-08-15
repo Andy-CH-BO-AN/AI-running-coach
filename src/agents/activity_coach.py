@@ -12,7 +12,7 @@ from src.services.ai_report_resolution import AIReportDraft, AIReportSpec
 ACTIVITY_PROMPT_PATH = Path("prompts/activity_coach.md")
 ACTIVITY_PROMPT_VERSION = "activity-coach:v1"
 MIN_ANALYSIS_UTF16_LENGTH = 100
-MAX_ANALYSIS_UTF16_LENGTH = 280
+MAX_ANALYSIS_UTF16_LENGTH = 600
 
 
 class ActivityCoachError(RuntimeError):

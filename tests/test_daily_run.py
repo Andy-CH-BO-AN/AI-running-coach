@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from src.db import session as database_session
 from src.notifications.notifier import NotificationResult
 from src.pipeline import activity_payloads, daily_run
+from src.pipeline.goal_prompt import GoalPromptOverrides
 
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "daily_pipeline.yml"
@@ -585,13 +586,20 @@ def test_activity_persistence_loss_passes_no_database_to_notification(
     )
     notification_database = []
 
-    def notify(_path, *, database):
+    def notify(_path, *, database, core_goal, training_preferences):
         notification_database.append(database)
+        assert core_goal == "10 公里 45 分鐘"
+        assert training_preferences == "週二游泳"
         return NotificationResult(status="persistence_unavailable", failed=1)
 
     monkeypatch.setattr(daily_run, "run_daily_line_notification", notify)
 
-    result = daily_run.execute_daily_run()
+    result = daily_run.execute_daily_run(
+        goal_overrides=GoalPromptOverrides(
+            core_goal="10 公里 45 分鐘",
+            training_preferences="週二游泳",
+        )
+    )
 
     assert result.mode is daily_run.DailyRunMode.PERSISTENCE_LOSS
     assert notification_database == [None]
@@ -645,7 +653,9 @@ def test_final_result_exposes_notification_persistence_loss(monkeypatch, tmp_pat
         lambda *_args, **_kwargs: {"coach_context": tmp_path / "context.json"},
     )
 
-    def notify(_path, *, database):
+    def notify(_path, *, database, core_goal, training_preferences):
+        assert core_goal is None
+        assert training_preferences is None
         database.revoke(_connection_error())
         return NotificationResult(status="persistence_unavailable", failed=1)
 

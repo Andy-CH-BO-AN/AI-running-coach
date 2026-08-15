@@ -399,6 +399,10 @@ def execute_daily_run(
         notification = run_daily_line_notification(
             str(coach_context_path),
             database=database_access,
+            core_goal=goal_overrides.core_goal if goal_overrides else None,
+            training_preferences=(
+                goal_overrides.training_preferences if goal_overrides else None
+            ),
         )
     except SQLAlchemyError:
         raise _block_runtime_persistence_failure() from None

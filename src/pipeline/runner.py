@@ -88,7 +88,7 @@ def run_pipeline(
     if report_path is None:
         return None
 
-    _run_line_notification(timestamp)
+    _run_line_notification(timestamp, goal_overrides=goal_overrides)
     return str(report_path)
 
 
@@ -140,7 +140,11 @@ def _run_pipeline_from_payloads(
     return report_path
 
 
-def _run_line_notification(timestamp: str) -> Any:
+def _run_line_notification(
+    timestamp: str,
+    *,
+    goal_overrides: GoalPromptOverrides | None = None,
+) -> Any:
     """執行 LINE 群組通知（pipeline 最後一步）。
 
     使用 persist_pipeline_artifacts 寫出的實際 coach_context 路徑，
@@ -157,6 +161,12 @@ def _run_line_notification(timestamp: str) -> Any:
         output_dir=OUTPUT_DIR,
     )["coach_context"]
 
-    result = run_line_notification(str(coach_context_path))
+    result = run_line_notification(
+        str(coach_context_path),
+        core_goal=goal_overrides.core_goal if goal_overrides else None,
+        training_preferences=(
+            goal_overrides.training_preferences if goal_overrides else None
+        ),
+    )
     print(f"📱 LINE notification: {result}")
     return result
