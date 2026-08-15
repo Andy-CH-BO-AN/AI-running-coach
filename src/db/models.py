@@ -263,6 +263,11 @@ class AIReport(Base):
     __tablename__ = "ai_reports"
     __table_args__ = (
         CheckConstraint("report_scope in ('activity', 'weekly', 'profile', 'custom')", name="report_scope_allowed"),
+        UniqueConstraint(
+            "user_id",
+            "idempotency_key",
+            name="uq_ai_reports_user_idempotency_key",
+        ),
         Index("ix_ai_reports_user_id", "user_id"),
         Index("ix_ai_reports_activity_id", "activity_id"),
         Index("ix_ai_reports_weekly_summary_id", "weekly_summary_id"),
@@ -271,6 +276,7 @@ class AIReport(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
@@ -299,13 +305,14 @@ class AIReport(Base):
 
 
 class LineNotification(Base):
-    """記錄已通知或已 seed 的 Garmin 活動。
+    """Record an Activity/weekly LINE delivery or Activity baseline seed.
 
     is_seed=True：baseline 初始化紀錄。
         首次啟用時為所有現有活動建立，以避免推送歷史資料。
         recorded_at 反映 seed 時間，非 LINE 發送時間。
-    is_seed=False：LINE 訊息已成功發送後建立的紀錄。
-        recorded_at 反映實際通知時間。
+    is_seed=False：新流程為 prepared delivery；rendered_messages 一旦寫入不可覆寫，
+        sent_at 僅在整組 LINE 訊息成功後設定。Legacy runtime 暫時仍可留下
+        rendered_messages=NULL、sent_at 已設定的成功 marker。
 
     所有寫入均使用 INSERT ... ON CONFLICT DO NOTHING 確保冪等性。
     """
@@ -316,12 +323,43 @@ class LineNotification(Base):
             "garmin_activity_id",
             name="uq_line_notifications_garmin_activity_id",
         ),
+        UniqueConstraint(
+            "weekly_summary_id",
+            name="uq_line_notifications_weekly_summary_id",
+        ),
+        CheckConstraint(
+            "(garmin_activity_id is not null and weekly_summary_id is null) "
+            "or (garmin_activity_id is null and weekly_summary_id is not null and not is_seed)",
+            name="subject_exactly_one",
+        ),
+        CheckConstraint(
+            "rendered_messages is null "
+            "or (ai_report_id is not null and jsonb_typeof(rendered_messages) = 'array')",
+            name="rendered_messages_valid",
+        ),
+        CheckConstraint(
+            "not is_seed or (ai_report_id is null and rendered_messages is null and sent_at is null)",
+            name="seed_shape",
+        ),
+        Index("ix_line_notifications_garmin_activity_id", "garmin_activity_id"),
+        Index("ix_line_notifications_ai_report_id", "ai_report_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    garmin_activity_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    garmin_activity_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    weekly_summary_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("weekly_summaries.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    ai_report_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_reports.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    rendered_messages: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -331,6 +369,7 @@ class LineNotification(Base):
     is_seed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

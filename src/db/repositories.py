@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import Select, desc, func, select
+from sqlalchemy import Select, desc, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
@@ -309,6 +310,7 @@ def save_ai_report(
     report_scope: str,
     report_text: str,
     input_json: dict[str, Any],
+    idempotency_key: str,
     model_name: str = "unknown",
     prompt_version: str = "unknown",
     activity_id: uuid.UUID | None = None,
@@ -318,7 +320,25 @@ def save_ai_report(
     confidence: str | None = None,
     output_path: str | None = None,
 ) -> AIReport:
+    if not idempotency_key.strip():
+        raise ValueError("idempotency_key must not be empty")
+    if report_scope == "activity":
+        if activity_id is None or weekly_summary_id is not None:
+            raise ValueError("Activity AI reports require only activity_id")
+        activity = session.get(Activity, activity_id)
+        if activity is None or activity.user_id != user_id:
+            raise ValueError("Activity AI report subject must belong to user_id")
+    elif report_scope == "weekly":
+        if weekly_summary_id is None or activity_id is not None:
+            raise ValueError("Weekly AI reports require only weekly_summary_id")
+        summary = session.get(WeeklySummary, weekly_summary_id)
+        if summary is None or summary.user_id != user_id:
+            raise ValueError("Weekly AI report subject must belong to user_id")
+    elif activity_id is not None or weekly_summary_id is not None:
+        raise ValueError("Profile/custom AI reports cannot reference a training subject")
+
     values = map_ai_report_values(
+        idempotency_key=idempotency_key,
         user_id=user_id,
         report_scope=report_scope,
         report_text=report_text,
@@ -332,10 +352,66 @@ def save_ai_report(
         confidence=confidence,
         output_path=output_path,
     )
-    report = AIReport(**values)
-    session.add(report)
+    stmt = (
+        pg_insert(AIReport)
+        .values(**values)
+        .on_conflict_do_nothing(constraint="uq_ai_reports_user_idempotency_key")
+        .returning(AIReport.id)
+    )
+    report_id = session.scalar(stmt)
     session.flush()
+    report = (
+        session.get(AIReport, report_id)
+        if report_id is not None
+        else get_ai_report_by_idempotency_key(
+            session,
+            user_id=user_id,
+            idempotency_key=idempotency_key,
+        )
+    )
+    if report is None:
+        raise RuntimeError(
+            "AI report idempotency conflict did not resolve to a persisted report"
+        )
+    session.refresh(report)
+    expected_identity = (
+        values["user_id"],
+        values["idempotency_key"],
+        values["report_scope"],
+        values["activity_id"],
+        values["weekly_summary_id"],
+        values["prompt_version"],
+        values["feature_version"],
+        values["input_json"],
+    )
+    persisted_identity = (
+        report.user_id,
+        report.idempotency_key,
+        report.report_scope,
+        report.activity_id,
+        report.weekly_summary_id,
+        report.prompt_version,
+        report.feature_version,
+        report.input_json,
+    )
+    if persisted_identity != expected_identity:
+        raise RuntimeError(
+            "Canonical AI report does not match the requested report identity"
+        )
     return report
+
+
+def get_ai_report_by_idempotency_key(
+    session: Session,
+    user_id: uuid.UUID,
+    idempotency_key: str,
+) -> AIReport | None:
+    return session.scalars(
+        select(AIReport).where(
+            AIReport.user_id == user_id,
+            AIReport.idempotency_key == idempotency_key,
+        )
+    ).one_or_none()
 
 
 def get_recent_activities(session: Session, user_id: uuid.UUID, limit: int = 20) -> list[Activity]:
@@ -374,22 +450,299 @@ SYSTEM_INITIALIZED_MARKER_ID: int = -1
 
 
 def is_notification_system_initialized(session: Session) -> bool:
-    """檢查是否已完成 baseline 初始化（即是否存在任何紀錄，包含 sentinel 標記）。
-
-    註：notifier 模組在取得 notified_ids 後，會在記憶體中複用 `len(notified_ids) > 0`
-    作為初始化依據，以避免在單次通知流程中產生二次重複 SQL 查詢。
-    此 helper 供外部 Repository 調用者與獨立單元測試使用。
-    """
-    notified_ids = get_notified_activity_ids(session)
-    return len(notified_ids) > 0
+    """Return whether the explicit Activity baseline sentinel exists."""
+    return session.scalar(
+        select(LineNotification.id)
+        .where(
+            LineNotification.garmin_activity_id == SYSTEM_INITIALIZED_MARKER_ID,
+            LineNotification.is_seed.is_(True),
+        )
+        .limit(1)
+    ) is not None
 
 
 def get_notified_activity_ids(session: Session) -> set[int]:
     """回傳所有已記錄（seed 或已通知）的 garmin_activity_id 集合。"""
     rows = session.execute(
-        select(LineNotification.garmin_activity_id)
+        select(LineNotification.garmin_activity_id).where(
+            LineNotification.garmin_activity_id.is_not(None)
+        )
     ).scalars().all()
     return set(rows)
+
+
+def get_activity_notification(
+    session: Session,
+    garmin_activity_id: int,
+) -> LineNotification | None:
+    return session.scalars(
+        select(LineNotification).where(
+            LineNotification.garmin_activity_id == garmin_activity_id
+        )
+    ).one_or_none()
+
+
+def get_weekly_notification(
+    session: Session,
+    weekly_summary_id: uuid.UUID,
+) -> LineNotification | None:
+    return session.scalars(
+        select(LineNotification).where(
+            LineNotification.weekly_summary_id == weekly_summary_id
+        )
+    ).one_or_none()
+
+
+def _validate_rendered_messages(rendered_messages: Sequence[str]) -> list[str]:
+    if isinstance(rendered_messages, str):
+        raise ValueError("rendered_messages must be a collection of messages")
+    messages = list(rendered_messages)
+    if not messages:
+        raise ValueError("rendered_messages must contain at least one message")
+    if any(not isinstance(message, str) or not message for message in messages):
+        raise ValueError("rendered_messages must contain non-empty strings")
+    return messages
+
+
+def _validate_activity_report_subject(
+    session: Session,
+    *,
+    ai_report_id: uuid.UUID,
+    garmin_activity_id: int,
+) -> None:
+    report = session.get(AIReport, ai_report_id)
+    if report is None or report.report_scope != "activity" or report.activity_id is None:
+        raise ValueError("ai_report_id must reference an Activity AI report")
+    activity = session.get(Activity, report.activity_id)
+    if (
+        activity is None
+        or activity.garmin_activity_id != garmin_activity_id
+        or activity.user_id != report.user_id
+    ):
+        raise ValueError("AI report does not match the Activity notification subject")
+
+
+def get_prepared_activity_notification(
+    session: Session,
+    garmin_activity_id: int,
+) -> LineNotification | None:
+    """Return one validated prepared Activity delivery, if it exists."""
+    notification = get_activity_notification(session, garmin_activity_id)
+    if notification is None:
+        return None
+    session.refresh(notification)
+    if (
+        notification.is_seed
+        or notification.ai_report_id is None
+        or notification.rendered_messages is None
+    ):
+        return None
+    _validate_rendered_messages(notification.rendered_messages)
+    _validate_activity_report_subject(
+        session,
+        ai_report_id=notification.ai_report_id,
+        garmin_activity_id=garmin_activity_id,
+    )
+    return notification
+
+
+def _validate_weekly_report_subject(
+    session: Session,
+    *,
+    ai_report_id: uuid.UUID,
+    weekly_summary_id: uuid.UUID,
+) -> None:
+    report = session.get(AIReport, ai_report_id)
+    summary = session.get(WeeklySummary, weekly_summary_id)
+    if (
+        report is None
+        or summary is None
+        or report.report_scope != "weekly"
+        or report.weekly_summary_id != weekly_summary_id
+        or report.user_id != summary.user_id
+    ):
+        raise ValueError("AI report does not match the weekly notification subject")
+
+
+def prepare_activity_notification(
+    session: Session,
+    *,
+    garmin_activity_id: int,
+    ai_report_id: uuid.UUID,
+    rendered_messages: Sequence[str],
+) -> LineNotification:
+    """Persist once and return the canonical immutable Activity delivery."""
+    messages = _validate_rendered_messages(rendered_messages)
+    _validate_activity_report_subject(
+        session,
+        ai_report_id=ai_report_id,
+        garmin_activity_id=garmin_activity_id,
+    )
+    now = utc_now()
+    stmt = (
+        pg_insert(LineNotification)
+        .values(
+            id=uuid.uuid4(),
+            garmin_activity_id=garmin_activity_id,
+            weekly_summary_id=None,
+            ai_report_id=ai_report_id,
+            rendered_messages=messages,
+            recorded_at=now,
+            is_seed=False,
+            sent_at=None,
+            created_at=now,
+        )
+        .on_conflict_do_nothing(
+            constraint="uq_line_notifications_garmin_activity_id"
+        )
+        .returning(LineNotification.id)
+    )
+    notification_id = session.scalar(stmt)
+    session.flush()
+    notification = (
+        session.get(LineNotification, notification_id)
+        if notification_id is not None
+        else get_activity_notification(session, garmin_activity_id)
+    )
+    if notification is None:
+        raise RuntimeError(
+            "Activity notification conflict did not resolve to a persisted delivery"
+        )
+    session.refresh(notification)
+    if notification.ai_report_id is None or notification.rendered_messages is None:
+        raise ValueError("Canonical Activity notification is not a prepared delivery")
+    _validate_rendered_messages(notification.rendered_messages)
+    _validate_activity_report_subject(
+        session,
+        ai_report_id=notification.ai_report_id,
+        garmin_activity_id=garmin_activity_id,
+    )
+    return notification
+
+
+def prepare_weekly_notification(
+    session: Session,
+    *,
+    weekly_summary_id: uuid.UUID,
+    ai_report_id: uuid.UUID,
+    rendered_messages: Sequence[str],
+) -> LineNotification:
+    """Persist once and return the canonical immutable weekly delivery."""
+    messages = _validate_rendered_messages(rendered_messages)
+    _validate_weekly_report_subject(
+        session,
+        ai_report_id=ai_report_id,
+        weekly_summary_id=weekly_summary_id,
+    )
+    now = utc_now()
+    stmt = (
+        pg_insert(LineNotification)
+        .values(
+            id=uuid.uuid4(),
+            garmin_activity_id=None,
+            weekly_summary_id=weekly_summary_id,
+            ai_report_id=ai_report_id,
+            rendered_messages=messages,
+            recorded_at=now,
+            is_seed=False,
+            sent_at=None,
+            created_at=now,
+        )
+        .on_conflict_do_nothing(
+            constraint="uq_line_notifications_weekly_summary_id"
+        )
+        .returning(LineNotification.id)
+    )
+    notification_id = session.scalar(stmt)
+    session.flush()
+    notification = (
+        session.get(LineNotification, notification_id)
+        if notification_id is not None
+        else get_weekly_notification(session, weekly_summary_id)
+    )
+    if notification is None:
+        raise RuntimeError(
+            "Weekly notification conflict did not resolve to a persisted delivery"
+        )
+    session.refresh(notification)
+    if notification.ai_report_id is None or notification.rendered_messages is None:
+        raise ValueError("Canonical weekly notification is not a prepared delivery")
+    _validate_rendered_messages(notification.rendered_messages)
+    _validate_weekly_report_subject(
+        session,
+        ai_report_id=notification.ai_report_id,
+        weekly_summary_id=weekly_summary_id,
+    )
+    return notification
+
+
+def list_pending_activity_notifications(
+    session: Session,
+    *,
+    limit: int | None = None,
+) -> list[LineNotification]:
+    stmt = (
+        select(LineNotification)
+        .where(
+            LineNotification.garmin_activity_id.is_not(None),
+            LineNotification.is_seed.is_(False),
+            LineNotification.rendered_messages.is_not(None),
+            LineNotification.sent_at.is_(None),
+        )
+        .order_by(LineNotification.recorded_at, LineNotification.id)
+    )
+    if limit is not None:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        stmt = stmt.limit(limit)
+    return list(session.scalars(stmt))
+
+
+def list_pending_weekly_notifications(
+    session: Session,
+    *,
+    limit: int | None = None,
+) -> list[LineNotification]:
+    stmt = (
+        select(LineNotification)
+        .where(
+            LineNotification.weekly_summary_id.is_not(None),
+            LineNotification.is_seed.is_(False),
+            LineNotification.rendered_messages.is_not(None),
+            LineNotification.sent_at.is_(None),
+        )
+        .order_by(LineNotification.recorded_at, LineNotification.id)
+    )
+    if limit is not None:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        stmt = stmt.limit(limit)
+    return list(session.scalars(stmt))
+
+
+def mark_notification_sent(
+    session: Session,
+    notification_id: uuid.UUID,
+    *,
+    sent_at: datetime | None = None,
+) -> LineNotification:
+    """Record first successful delivery time without changing immutable payload."""
+    stmt = (
+        update(LineNotification)
+        .where(
+            LineNotification.id == notification_id,
+            LineNotification.sent_at.is_(None),
+        )
+        .values(sent_at=sent_at or utc_now())
+        .returning(LineNotification.id)
+    )
+    updated_id = session.scalar(stmt)
+    session.flush()
+    notification = session.get(LineNotification, updated_id or notification_id)
+    if notification is None:
+        raise LookupError(f"LINE notification not found: {notification_id}")
+    session.refresh(notification)
+    return notification
 
 
 def seed_baseline_notifications(session: Session, activity_ids: list[int]) -> int:
@@ -429,14 +782,16 @@ def record_notification(session: Session, garmin_activity_id: int) -> bool:
     使用 INSERT ... ON CONFLICT DO NOTHING 確保冪等。
     回傳 True 表示成功插入，False 表示已存在。
     """
+    now = utc_now()
     stmt = (
         pg_insert(LineNotification)
         .values(
             id=uuid.uuid4(),
             garmin_activity_id=garmin_activity_id,
             is_seed=False,
-            recorded_at=utc_now(),
-            created_at=utc_now(),
+            recorded_at=now,
+            sent_at=now,
+            created_at=now,
         )
         .on_conflict_do_nothing(index_elements=["garmin_activity_id"])
         .returning(LineNotification.id)

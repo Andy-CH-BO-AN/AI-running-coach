@@ -1,4 +1,5 @@
 import uuid
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
 
 import pytest
@@ -16,10 +17,20 @@ from src.db.mappers import (
     map_user_profile_snapshot_values,
     map_weekly_summary_values,
 )
-from src.db.models import AIReport, Activity, ActivityFeature, ActivitySplit, SwimmingLength, User
+from src.db.models import (
+    AIReport,
+    Activity,
+    ActivityFeature,
+    ActivitySplit,
+    LineNotification,
+    SwimmingLength,
+    User,
+)
 from src.db.repositories import (
     SYSTEM_INITIALIZED_MARKER_ID,
     get_activity_with_splits,
+    get_ai_report_by_idempotency_key,
+    get_prepared_activity_notification,
     get_latest_resting_heart_rate,
     get_latest_user_profile,
     get_notified_activity_ids,
@@ -29,13 +40,25 @@ from src.db.repositories import (
     get_recent_max_heart_rate,
     insert_user_profile_snapshot,
     is_notification_system_initialized,
+    list_pending_activity_notifications,
+    list_pending_weekly_notifications,
+    mark_notification_sent,
+    prepare_activity_notification,
+    prepare_weekly_notification,
     record_notification,
     save_activity_features,
     save_ai_report,
+    save_weekly_summary,
     seed_baseline_notifications,
     upsert_activity,
     upsert_activity_splits,
     upsert_swimming_lengths,
+    upsert_user,
+)
+from src.services.ai_report_resolution import (
+    AIReportDraft,
+    AIReportSpec,
+    ActivityAINotificationPreparer,
 )
 from tests.db_test_utils import isolated_db_session
 
@@ -212,6 +235,7 @@ def test_ai_report_values_jsonify_payloads_without_db_roundtrip():
         "activity",
         "report",
         {"generated_at": datetime(2026, 5, 10, tzinfo=timezone.utc)},
+        idempotency_key="activity:123:coach:v1:input-a",
         model_name="gemini",
         prompt_version="coach:v1",
         activity_id=activity_id,
@@ -220,6 +244,7 @@ def test_ai_report_values_jsonify_payloads_without_db_roundtrip():
     )
 
     assert values["user_id"] == user_id
+    assert values["idempotency_key"] == "activity:123:coach:v1:input-a"
     assert values["activity_id"] == activity_id
     assert values["model_name"] == "gemini"
     assert values["input_json"] == {"generated_at": "2026-05-10T00:00:00+00:00"}
@@ -316,6 +341,7 @@ def test_activity_delete_cascades_children_and_preserves_ai_report_with_null_act
     report = save_ai_report(
         db_session,
         user.id,
+        idempotency_key="activity:123:delete-test",
         report_scope="activity",
         report_text="report",
         input_json={"activity_id": 123},
@@ -345,6 +371,7 @@ def test_user_delete_cascades_profile_activities_and_ai_reports(db_session):
     save_ai_report(
         db_session,
         user.id,
+        idempotency_key="activity:123:user-delete-test",
         report_scope="activity",
         report_text="report",
         input_json={"activity_id": 123},
@@ -605,13 +632,14 @@ def test_activity_features_allow_multiple_versions(db_session):
     assert db_session.scalar(select(func.count()).select_from(ActivityFeature)) == 2
 
 
-def test_ai_reports_allow_multiple_model_prompt_rows_for_same_activity(db_session):
+def test_ai_reports_allow_multiple_logical_versions_for_same_activity(db_session):
     user = get_or_create_default_user(db_session)
     activity = upsert_activity(db_session, user.id, _activity_payload())
 
     save_ai_report(
         db_session,
         user.id,
+        idempotency_key="activity:123:feature-v1:coach-v1:input-a",
         report_scope="activity",
         report_text="report one",
         input_json={"activity_id": 123},
@@ -622,6 +650,7 @@ def test_ai_reports_allow_multiple_model_prompt_rows_for_same_activity(db_sessio
     save_ai_report(
         db_session,
         user.id,
+        idempotency_key="activity:123:feature-v1:coach-v2:input-a",
         report_scope="activity",
         report_text="report two",
         input_json={"activity_id": 123},
@@ -631,6 +660,501 @@ def test_ai_reports_allow_multiple_model_prompt_rows_for_same_activity(db_sessio
     )
 
     assert db_session.scalar(select(func.count()).select_from(AIReport)) == 2
+
+
+def test_ai_report_conflict_returns_canonical_persisted_row(db_session):
+    user = get_or_create_default_user(db_session)
+    activity = upsert_activity(db_session, user.id, _activity_payload())
+    key = "activity:123:feature-v1:coach-v1:input-a"
+
+    winner = save_ai_report(
+        db_session,
+        user.id,
+        idempotency_key=key,
+        report_scope="activity",
+        report_text="canonical report",
+        input_json={"activity_id": 123},
+        model_name="canonical-model",
+        prompt_version="coach:v1",
+        activity_id=activity.id,
+        report_json={"analysis": "canonical"},
+    )
+    conflict_result = save_ai_report(
+        db_session,
+        user.id,
+        idempotency_key=key,
+        report_scope="activity",
+        report_text="losing draft",
+        input_json={"activity_id": 123},
+        model_name="losing-model",
+        prompt_version="coach:v1",
+        activity_id=activity.id,
+        report_json={"analysis": "loser"},
+    )
+
+    assert conflict_result.id == winner.id
+    assert conflict_result.report_text == "canonical report"
+    assert conflict_result.model_name == "canonical-model"
+    assert conflict_result.report_json == {"analysis": "canonical"}
+    assert get_ai_report_by_idempotency_key(db_session, user.id, key).id == winner.id
+    assert db_session.scalar(select(func.count()).select_from(AIReport)) == 1
+
+
+def test_ai_report_idempotency_is_scoped_to_user(db_session):
+    first_user = get_or_create_default_user(db_session)
+    second_user = upsert_user(
+        db_session,
+        external_source="local",
+        external_user_id="second-athlete",
+    )
+    key = "weekly:2026-08-03:coach-v1:input-a"
+    first_summary = save_weekly_summary(
+        db_session,
+        first_user.id,
+        week_start=date(2026, 8, 3),
+        week_end=date(2026, 8, 9),
+        summary_version="weekly:v1",
+        summary_json={"week_start": "2026-08-03"},
+    )
+    second_summary = save_weekly_summary(
+        db_session,
+        second_user.id,
+        week_start=date(2026, 8, 3),
+        week_end=date(2026, 8, 9),
+        summary_version="weekly:v1",
+        summary_json={"week_start": "2026-08-03"},
+    )
+
+    first_report = save_ai_report(
+        db_session,
+        first_user.id,
+        idempotency_key=key,
+        report_scope="weekly",
+        report_text="first athlete",
+        input_json={"week_start": "2026-08-03"},
+        weekly_summary_id=first_summary.id,
+    )
+    second_report = save_ai_report(
+        db_session,
+        second_user.id,
+        idempotency_key=key,
+        report_scope="weekly",
+        report_text="second athlete",
+        input_json={"week_start": "2026-08-03"},
+        weekly_summary_id=second_summary.id,
+    )
+
+    assert first_report.id != second_report.id
+    assert get_ai_report_by_idempotency_key(db_session, first_user.id, key).id == first_report.id
+    assert get_ai_report_by_idempotency_key(db_session, second_user.id, key).id == second_report.id
+
+
+def test_ai_report_subject_must_belong_to_user(db_session):
+    first_user = get_or_create_default_user(db_session)
+    second_user = upsert_user(
+        db_session,
+        external_source="local",
+        external_user_id="other-athlete",
+    )
+    activity = upsert_activity(db_session, second_user.id, _activity_payload())
+
+    with pytest.raises(ValueError, match="belong to user_id"):
+        save_ai_report(
+            db_session,
+            first_user.id,
+            idempotency_key="activity:123:wrong-owner",
+            report_scope="activity",
+            report_text="wrong owner",
+            input_json={"activity_id": 123},
+            activity_id=activity.id,
+        )
+
+
+def test_generated_loser_never_reaches_persisted_activity_delivery(db_session):
+    user = get_or_create_default_user(db_session)
+    activity = upsert_activity(db_session, user.id, _activity_payload())
+    key = "activity:123:feature-v1:coach-v1:input-a"
+    lock_state = {"held": False}
+
+    @contextmanager
+    def session_factory():
+        yield db_session
+
+    @contextmanager
+    def notification_lock():
+        assert lock_state["held"] is False
+        lock_state["held"] = True
+        try:
+            yield
+        finally:
+            lock_state["held"] = False
+
+    def generate(_spec: AIReportSpec) -> AIReportDraft:
+        assert lock_state["held"] is False
+        save_ai_report(
+            db_session,
+            user.id,
+            idempotency_key=key,
+            report_scope="activity",
+            report_text="canonical concurrent winner",
+            input_json={"activity_id": 123},
+            model_name="canonical-model",
+            prompt_version="coach:v1",
+            activity_id=activity.id,
+            feature_version="feature:v1",
+            report_json={"analysis": "canonical"},
+        )
+        db_session.commit()
+        return AIReportDraft(
+            report_text="losing generated draft",
+            model_name="losing-model",
+            report_json={"analysis": "loser"},
+        )
+
+    delivery = ActivityAINotificationPreparer(
+        session_factory=session_factory,
+        notification_lock=notification_lock,
+        generate=generate,
+        render=lambda report: [f"AI:{report.report_text}"],
+    ).prepare(
+        spec=AIReportSpec(
+            idempotency_key=key,
+            user_id=user.id,
+            report_scope="activity",
+            input_json={"activity_id": 123},
+            prompt_version="coach:v1",
+            activity_id=activity.id,
+            feature_version="feature:v1",
+        ),
+        garmin_activity_id=123,
+    )
+
+    report = get_ai_report_by_idempotency_key(db_session, user.id, key)
+    notification = db_session.get(LineNotification, delivery.notification_id)
+    assert report is not None
+    assert report.report_text == "canonical concurrent winner"
+    assert db_session.scalar(select(func.count()).select_from(AIReport)) == 1
+    assert notification.ai_report_id == report.id
+    assert notification.rendered_messages == ["AI:canonical concurrent winner"]
+    assert delivery.rendered_messages == ("AI:canonical concurrent winner",)
+
+
+def test_activity_notification_conflict_reuses_canonical_payload_and_first_sent_time(
+    db_session,
+):
+    user = get_or_create_default_user(db_session)
+    activity = upsert_activity(db_session, user.id, _activity_payload())
+    winner_report = save_ai_report(
+        db_session,
+        user.id,
+        idempotency_key="activity:123:notification-winner",
+        report_scope="activity",
+        report_text="canonical report",
+        input_json={"activity_id": 123},
+        activity_id=activity.id,
+    )
+    loser_report = save_ai_report(
+        db_session,
+        user.id,
+        idempotency_key="activity:123:notification-loser",
+        report_scope="activity",
+        report_text="loser report",
+        input_json={"activity_id": 123},
+        activity_id=activity.id,
+    )
+
+    winner = prepare_activity_notification(
+        db_session,
+        garmin_activity_id=123,
+        ai_report_id=winner_report.id,
+        rendered_messages=["canonical page 1", "canonical page 2"],
+    )
+    prepared = get_prepared_activity_notification(db_session, 123)
+    conflict_result = prepare_activity_notification(
+        db_session,
+        garmin_activity_id=123,
+        ai_report_id=loser_report.id,
+        rendered_messages=["loser page"],
+    )
+
+    assert conflict_result.id == winner.id
+    assert prepared is not None
+    assert prepared.id == winner.id
+    assert prepared.rendered_messages == ["canonical page 1", "canonical page 2"]
+    assert conflict_result.ai_report_id == winner_report.id
+    assert conflict_result.rendered_messages == [
+        "canonical page 1",
+        "canonical page 2",
+    ]
+    assert [row.id for row in list_pending_activity_notifications(db_session)] == [
+        winner.id
+    ]
+
+    first_sent_at = datetime(2026, 8, 12, 8, 0, tzinfo=timezone.utc)
+    later_sent_at = datetime(2026, 8, 12, 9, 0, tzinfo=timezone.utc)
+    sent = mark_notification_sent(db_session, winner.id, sent_at=first_sent_at)
+    sent_again = mark_notification_sent(db_session, winner.id, sent_at=later_sent_at)
+
+    assert sent.sent_at == first_sent_at
+    assert sent_again.sent_at == first_sent_at
+    assert list_pending_activity_notifications(db_session) == []
+
+
+def test_activity_notification_conflict_rejects_stale_owner_payload(db_session):
+    first_user = get_or_create_default_user(db_session)
+    second_user = upsert_user(
+        db_session,
+        external_source="local",
+        external_user_id="reassigned-athlete",
+    )
+    activity = upsert_activity(db_session, first_user.id, _activity_payload())
+    first_report = save_ai_report(
+        db_session,
+        first_user.id,
+        idempotency_key="activity:123:first-owner",
+        report_scope="activity",
+        report_text="first owner report",
+        input_json={"activity_id": 123},
+        activity_id=activity.id,
+    )
+    first_notification = prepare_activity_notification(
+        db_session,
+        garmin_activity_id=123,
+        ai_report_id=first_report.id,
+        rendered_messages=["first owner payload"],
+    )
+
+    reassigned_activity = upsert_activity(
+        db_session,
+        second_user.id,
+        _activity_payload(),
+    )
+    second_report = save_ai_report(
+        db_session,
+        second_user.id,
+        idempotency_key="activity:123:second-owner",
+        report_scope="activity",
+        report_text="second owner report",
+        input_json={"activity_id": 123},
+        activity_id=reassigned_activity.id,
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        prepare_activity_notification(
+            db_session,
+            garmin_activity_id=123,
+            ai_report_id=second_report.id,
+            rendered_messages=["second owner payload"],
+        )
+
+    db_session.refresh(first_notification)
+    assert reassigned_activity.id == activity.id
+    assert first_notification.ai_report_id == first_report.id
+    assert first_notification.rendered_messages == ["first owner payload"]
+
+
+def test_activity_notification_rejects_ai_report_for_another_activity(db_session):
+    user = get_or_create_default_user(db_session)
+    other_activity = upsert_activity(
+        db_session,
+        user.id,
+        _activity_payload(activity_id=999),
+    )
+    report = save_ai_report(
+        db_session,
+        user.id,
+        idempotency_key="activity:999:notification-subject",
+        report_scope="activity",
+        report_text="other activity",
+        input_json={"activity_id": 999},
+        activity_id=other_activity.id,
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        prepare_activity_notification(
+            db_session,
+            garmin_activity_id=123,
+            ai_report_id=report.id,
+            rendered_messages=["wrong subject"],
+        )
+
+
+def test_weekly_notification_rejects_ai_report_for_another_summary(db_session):
+    user = get_or_create_default_user(db_session)
+    first_summary = save_weekly_summary(
+        db_session,
+        user.id,
+        week_start=date(2026, 8, 3),
+        week_end=date(2026, 8, 9),
+        summary_version="weekly:v1",
+        summary_json={"week_start": "2026-08-03"},
+    )
+    second_summary = save_weekly_summary(
+        db_session,
+        user.id,
+        week_start=date(2026, 8, 10),
+        week_end=date(2026, 8, 16),
+        summary_version="weekly:v1",
+        summary_json={"week_start": "2026-08-10"},
+    )
+    report = save_ai_report(
+        db_session,
+        user.id,
+        idempotency_key="weekly:2026-08-03:notification-subject",
+        report_scope="weekly",
+        report_text="first week",
+        input_json={"week_start": "2026-08-03"},
+        weekly_summary_id=first_summary.id,
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        prepare_weekly_notification(
+            db_session,
+            weekly_summary_id=second_summary.id,
+            ai_report_id=report.id,
+            rendered_messages=["wrong week"],
+        )
+
+
+def test_weekly_notification_conflict_rejects_stale_owner_payload(db_session):
+    first_user = get_or_create_default_user(db_session)
+    second_user = upsert_user(
+        db_session,
+        external_source="local",
+        external_user_id="weekly-reassigned-athlete",
+    )
+    summary = save_weekly_summary(
+        db_session,
+        first_user.id,
+        week_start=date(2026, 8, 3),
+        week_end=date(2026, 8, 9),
+        summary_version="weekly:v1",
+        summary_json={"workout_count": 3},
+    )
+    first_report = save_ai_report(
+        db_session,
+        first_user.id,
+        idempotency_key="weekly:2026-08-03:first-owner",
+        report_scope="weekly",
+        report_text="first owner report",
+        input_json={"workout_count": 3},
+        weekly_summary_id=summary.id,
+    )
+    first_notification = prepare_weekly_notification(
+        db_session,
+        weekly_summary_id=summary.id,
+        ai_report_id=first_report.id,
+        rendered_messages=["first owner weekly payload"],
+    )
+
+    summary.user_id = second_user.id
+    db_session.flush()
+    second_report = save_ai_report(
+        db_session,
+        second_user.id,
+        idempotency_key="weekly:2026-08-03:second-owner",
+        report_scope="weekly",
+        report_text="second owner report",
+        input_json={"workout_count": 3},
+        weekly_summary_id=summary.id,
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        prepare_weekly_notification(
+            db_session,
+            weekly_summary_id=summary.id,
+            ai_report_id=second_report.id,
+            rendered_messages=["second owner weekly payload"],
+        )
+
+    db_session.refresh(first_notification)
+    assert first_notification.ai_report_id == first_report.id
+    assert first_notification.rendered_messages == ["first owner weekly payload"]
+
+
+def test_weekly_notification_does_not_initialize_activity_baseline(db_session):
+    user = get_or_create_default_user(db_session)
+    summary = save_weekly_summary(
+        db_session,
+        user.id,
+        week_start=date(2026, 8, 3),
+        week_end=date(2026, 8, 9),
+        summary_version="weekly:v1",
+        summary_json={"week_start": "2026-08-03"},
+    )
+    report = save_ai_report(
+        db_session,
+        user.id,
+        idempotency_key="weekly:2026-08-03:coach-v1:input-a",
+        report_scope="weekly",
+        report_text="weekly report",
+        input_json={"week_start": "2026-08-03"},
+        weekly_summary_id=summary.id,
+    )
+
+    notification = prepare_weekly_notification(
+        db_session,
+        weekly_summary_id=summary.id,
+        ai_report_id=report.id,
+        rendered_messages=["weekly page"],
+    )
+
+    assert notification.garmin_activity_id is None
+    assert [row.id for row in list_pending_weekly_notifications(db_session)] == [
+        notification.id
+    ]
+    assert is_notification_system_initialized(db_session) is False
+    assert get_notified_activity_ids(db_session) == set()
+
+
+def test_weekly_summary_recomputes_without_mutating_sent_notification(db_session):
+    user = get_or_create_default_user(db_session)
+    summary = save_weekly_summary(
+        db_session,
+        user.id,
+        week_start=date(2026, 8, 3),
+        week_end=date(2026, 8, 9),
+        summary_version="weekly:v1",
+        summary_json={"workout_count": 3},
+        workout_count=3,
+        total_distance_km=21.0,
+    )
+    report = save_ai_report(
+        db_session,
+        user.id,
+        idempotency_key="weekly:2026-08-03:immutable-delivery",
+        report_scope="weekly",
+        report_text="original weekly analysis",
+        input_json={"workout_count": 3},
+        weekly_summary_id=summary.id,
+    )
+    notification = prepare_weekly_notification(
+        db_session,
+        weekly_summary_id=summary.id,
+        ai_report_id=report.id,
+        rendered_messages=["original weekly payload"],
+    )
+    sent_at = datetime(2026, 8, 10, 0, 0, tzinfo=timezone.utc)
+    mark_notification_sent(db_session, notification.id, sent_at=sent_at)
+
+    recomputed = save_weekly_summary(
+        db_session,
+        user.id,
+        week_start=date(2026, 8, 3),
+        week_end=date(2026, 8, 9),
+        summary_version="weekly:v1",
+        summary_json={"workout_count": 4},
+        workout_count=4,
+        total_distance_km=28.0,
+    )
+    db_session.refresh(notification)
+
+    assert recomputed.id == summary.id
+    assert recomputed.workout_count == 4
+    assert float(recomputed.total_distance_km) == 28.0
+    assert notification.ai_report_id == report.id
+    assert notification.rendered_messages == ["original weekly payload"]
+    assert notification.sent_at == sent_at
 
 
 def test_line_notification_repository_empty_context_seeding_and_record(db_session):
@@ -649,8 +1173,11 @@ def test_line_notification_repository_empty_context_seeding_and_record(db_sessio
     recorded = record_notification(db_session, 1001)
     assert recorded is True
     assert 1001 in get_notified_activity_ids(db_session)
+    sent_row = db_session.scalar(
+        select(LineNotification).where(LineNotification.garmin_activity_id == 1001)
+    )
+    assert sent_row.sent_at is not None
 
     # 再次記錄同筆活動 1001，ON CONFLICT DO NOTHING 不重複寫入
     recorded_again = record_notification(db_session, 1001)
     assert recorded_again is False
-
