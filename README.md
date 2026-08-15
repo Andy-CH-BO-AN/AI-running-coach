@@ -21,7 +21,7 @@
 - 計算週訓練量、training load、心率 / 功率 Z1-Z5、跑姿、配速與交叉訓練摘要。
 - 產生 deterministic `coach_context`，再交給 Gemini 產生 AI coach JSON report。
 - Dashboard 顯示訓練回顧、週期化脈絡、四週訓練、強度分佈、下週課表與 evidence。
-- 新活動可推送到 LINE，支援 persistent dedup、baseline seed、advisory lock 與 stateless fallback。
+- 新活動可推送 deterministic 數據與 AI 教練分析至 LINE；payload 先持久化，支援 baseline seed、advisory lock 與 immutable retry。
 - PostgreSQL / Neon persistence 支援 idempotent import、local → mirror → cloud 切換與 parity validation。
 - Cloud Daily Run 在 Neon migration 或 runtime persistence loss 時有明確降級政策。
 
@@ -60,8 +60,8 @@ DATABASE_MODE=cloud python -m src.scripts.run_daily_pipeline
 | State | 進入條件 | Activity window | Neon | LINE |
 | --- | --- | ---: | --- | --- |
 | **Normal** | migration 在 3 次內成功 | 75 | 可使用 | persistent dedup，既有 normal cap |
-| **Degraded** | 3 次 migration 都是 transient connection failure | 10 | 整個 run 禁止 | stateless，最多 3 筆 |
-| **Persistence-loss** | Normal 啟動後發生 transient Neon loss | 保留 75 | 當次 run 永久 revoke | stateless loss budget 3 |
+| **Degraded** | 3 次 migration 都是 transient connection failure | 10 | 整個 run 禁止 | defer，不送 LINE |
+| **Persistence-loss** | Normal 啟動後發生 transient Neon loss | 保留 75 | 當次 run 永久 revoke | defer，不送 LINE |
 
 重要 invariant：
 
@@ -72,7 +72,7 @@ DATABASE_MODE=cloud python -m src.scripts.run_daily_pipeline
 - Persistence-loss 只禁止後續 Neon I/O；已成功 materialize 到 memory 的資料可以繼續使用。
 - 如果 Garmin incremental fetch 已完成、DB sync 才失敗，會用既有 materialized window + 已抓到的 Garmin updates 在 memory merge，不會再讀 Neon，也不會再打一次 Garmin。
 
-詳細決策見 [`docs/adr/0001-neon-degraded-daily-pipeline.md`](docs/adr/0001-neon-degraded-daily-pipeline.md)。
+詳細決策見 [`docs/adr/0001-neon-degraded-daily-pipeline.md`](docs/adr/0001-neon-degraded-daily-pipeline.md) 與 [`docs/adr/0002-persistent-activity-line-delivery.md`](docs/adr/0002-persistent-activity-line-delivery.md)。
 
 ## 快速開始
 
@@ -267,23 +267,21 @@ DB schema 採 hybrid design：常查詢欄位用 SQL columns，Garmin 易變 met
 Cloud Daily Run 的 notification lifecycle：
 
 ```text
-persistent dedup
+persistent baseline / pending retry
     ↓
-advisory lock
+產生並保存 canonical AI report + LINE payload
     ↓
-format / send LINE
+advisory lock 下重讀 payload / send LINE
     ↓
-record notification
+mark sent
 ```
 
 如果 runtime persistence loss：
 
 - Neon gate 立即 revoke。
 - 同一個 run 不 reconnect。
-- 已成功送出但 record 失敗的 activity 不會在同一 run 重送。
-- 該 activity 會消耗一個 stateless loss slot。
-- 後續 stateless delivery 受 loss budget 限制。
-- 未來 run 在 persistence 仍不可用時，仍可能重複通知；這是目前接受的 tradeoff。
+- 不產生 AI 分析、不送 LINE；已保存的 payload 保持 pending，等待之後有 persistence 的 run 重試。
+- 已成功送出但 `sent_at` acknowledgement 未寫入時，會重用相同 immutable payload 與 LINE retry key。
 
 ## 本機 replay / raw-only fetch
 
@@ -361,7 +359,7 @@ docker compose --profile test up \
 - 一般 unit tests 不呼叫真實 Garmin API。
 - Core regression 會以 jsdom 執行 Dashboard DOM behavior tests。
 - test DB guard 會拒絕 primary DB / 非 test database。
-- Cloud Daily Run tests 驗 migration retry、state transition、Neon revoke、75/10 activity window、stateless notification 與 secret-safe errors。
+- Cloud Daily Run tests 驗 migration retry、state transition、Neon revoke、75/10 activity window、persistent notification defer 與 secret-safe errors。
 - CI 使用 PostgreSQL service 跑 migration + core + DB tests。
 
 真實 Garmin smoke test：
@@ -429,7 +427,7 @@ Canonical workflow / reviewer / QA / security / skills 都維護在 `ai/`，不�
 - Garmin API 是非官方 integration surface，登入、MFA 與 rate limit 可能改變。
 - 部分 Garmin 指標依裝置 / activity type 而異，歷史活動可能缺欄位。
 - Dashboard 目前是 read-only report viewer。
-- Stateless notification 無 durable dedup，因此未來 run 可能重複發送。
+- LINE 已受理但 DB acknowledgement 遺失時，LINE retry key 的 24 小時窗口後仍無法絕對保證 external exactly-once delivery。
 - 專案以單一跑者 / self-hosted workflow 為主，不提供 multi-tenant auth 或 public SaaS API。
 
 ## License

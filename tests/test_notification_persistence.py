@@ -12,13 +12,19 @@ from sqlalchemy.orm import Session
 
 import src.notifications.notifier as notifier
 from src.db.models import LineNotification
-from src.db.repositories import SYSTEM_INITIALIZED_MARKER_ID, get_notified_activity_ids
+from src.db.repositories import (
+    SYSTEM_INITIALIZED_MARKER_ID,
+    get_notified_activity_ids,
+    get_or_create_default_user,
+    upsert_activity,
+)
 from src.notifications.line_client import LineSendResult
 from src.notifications.notifier import (
     NotificationDatabaseAccess,
     _NotificationProfile,
     _NotificationRun,
 )
+from src.services.ai_report_resolution import AIReportDraft
 from tests.db_test_utils import isolated_db_session
 
 
@@ -124,11 +130,28 @@ def _execute(
 def _install_activity_marker(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         notifier,
-        "format_activity_messages",
-        lambda activity, _week: [
+        "format_activity_coach_messages",
+        lambda activity, _week, *, analysis: [
             f"{ACTIVITY_MARKER_PREFIX}{activity['activity_id']}"
         ],
     )
+    monkeypatch.setattr(
+        notifier,
+        "generate_activity_report",
+        lambda _spec: AIReportDraft(
+            report_text="已驗證的單次訓練分析。" * 8,
+            model_name="test-model",
+            report_json={"analysis": "test"},
+        ),
+    )
+
+
+def _persist_context_activities(db_session: Session, context: dict[str, Any]) -> None:
+    user = get_or_create_default_user(db_session)
+    for week in context["weekly_analysis"]:
+        for activity in week["sessions"]:
+            upsert_activity(db_session, user.id, activity)
+    db_session.commit()
 
 
 def test_real_seed_dedup_and_record_roundtrip(
@@ -144,6 +167,7 @@ def test_real_seed_dedup_and_record_roundtrip(
         _activity(101, "2026-07-01"),
         _activity(102, "2026-07-02"),
     )
+    _persist_context_activities(db_session, baseline)
 
     seeded = _execute(baseline, database=database, transport=transport)
 
@@ -167,6 +191,7 @@ def test_real_seed_dedup_and_record_roundtrip(
         _activity(102, "2026-07-02"),
         _activity(103, "2026-07-03"),
     )
+    _persist_context_activities(db_session, with_new_activity)
     delivered = _execute(with_new_activity, database=database, transport=transport)
     rerun = _execute(with_new_activity, database=database, transport=transport)
 
@@ -195,6 +220,8 @@ def test_real_empty_baseline_then_first_activity_sends_once(
     database = _database_access(db_session)
     transport = _FakeTransport()
 
+    _persist_context_activities(db_session, _context())
+
     initialized = _execute(
         _context(),
         database=database,
@@ -212,6 +239,7 @@ def test_real_empty_baseline_then_first_activity_sends_once(
     assert marker.is_seed is True
 
     with_first_activity = _context(_activity(201, "2026-07-04"))
+    _persist_context_activities(db_session, with_first_activity)
     delivered = _execute(
         with_first_activity,
         database=database,

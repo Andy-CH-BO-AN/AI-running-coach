@@ -197,6 +197,16 @@ def find_activity_by_garmin_id(
     ).first()
 
 
+def get_activity_by_garmin_id(
+    session: Session,
+    garmin_activity_id: int,
+) -> Activity | None:
+    """Return the globally unique Garmin Activity notification subject."""
+    return session.scalars(
+        select(Activity).where(Activity.garmin_activity_id == garmin_activity_id)
+    ).one_or_none()
+
+
 def upsert_activity_splits(
     session: Session,
     activity_id: uuid.UUID,
