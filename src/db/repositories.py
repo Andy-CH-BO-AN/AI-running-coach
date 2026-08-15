@@ -546,6 +546,35 @@ def get_prepared_activity_notification(
     return notification
 
 
+def get_prepared_weekly_notification(
+    session: Session,
+    weekly_summary_id: uuid.UUID,
+) -> LineNotification | None:
+    """Return one validated prepared weekly delivery, if it exists.
+
+    A weekly summary itself remains recomputable.  The notification payload is
+    deliberately a separate immutable snapshot so a failed LINE delivery can
+    be retried without rebuilding facts or asking the model again.
+    """
+    notification = get_weekly_notification(session, weekly_summary_id)
+    if notification is None:
+        return None
+    session.refresh(notification)
+    if (
+        notification.is_seed
+        or notification.ai_report_id is None
+        or notification.rendered_messages is None
+    ):
+        return None
+    _validate_rendered_messages(notification.rendered_messages)
+    _validate_weekly_report_subject(
+        session,
+        ai_report_id=notification.ai_report_id,
+        weekly_summary_id=weekly_summary_id,
+    )
+    return notification
+
+
 def _validate_weekly_report_subject(
     session: Session,
     *,
@@ -701,6 +730,7 @@ def list_pending_activity_notifications(
 def list_pending_weekly_notifications(
     session: Session,
     *,
+    user_id: uuid.UUID | None = None,
     limit: int | None = None,
 ) -> list[LineNotification]:
     stmt = (
@@ -713,6 +743,11 @@ def list_pending_weekly_notifications(
         )
         .order_by(LineNotification.recorded_at, LineNotification.id)
     )
+    if user_id is not None:
+        stmt = stmt.join(
+            WeeklySummary,
+            LineNotification.weekly_summary_id == WeeklySummary.id,
+        ).where(WeeklySummary.user_id == user_id)
     if limit is not None:
         if limit < 1:
             raise ValueError("limit must be positive")

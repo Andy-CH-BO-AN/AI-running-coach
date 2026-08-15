@@ -19,7 +19,11 @@ import re
 import pytest
 
 from src.notifications.constants import LINE_SAFE_TEXT_LENGTH
-from src.notifications.formatter import format_activity_message, format_activity_messages
+from src.notifications.formatter import (
+    format_activity_message,
+    format_activity_messages,
+    format_weekly_report_messages,
+)
 from src.notifications.text_utils import utf16_length
 
 
@@ -655,3 +659,48 @@ class TestGarminActivityLink:
         session = _make_easy_running_session(activity_id=False)
         msg = format_activity_message(session, None)
         assert _GARMIN_BASE not in msg
+
+
+def test_weekly_report_formats_deterministic_facts_and_seeded_plan_dates():
+    summary = {
+        "week_start": "2026-08-03",
+        "week_end": "2026-08-09",
+        "totals": {"workout_count": 3, "distance_km": 42.0, "duration_min": 190.0},
+        "sports": [
+            {"display_name": "跑步", "count": 1, "distance_km": 10.0, "duration_min": 55.0},
+            {"display_name": "游泳", "count": 1, "distance_km": 2.0, "duration_min": 45.0},
+        ],
+        "training_load": {
+            "garmin_weekly_load": 120.0,
+            "chronic_load": 80.0,
+            "acute_chronic_ratio": 1.5,
+        },
+        "next_week_plan_seed": {
+            "days": [
+                {"day_of_week": day, "date": f"2026-08-{10 + index:02d}"}
+                for index, day in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+            ]
+        },
+    }
+    report_json = {
+        "analysis": "這是依 Garmin 本週負荷撰寫的訓練分析。",
+        "recommendation": "維持恢復品質。",
+        "next_week_plan": [
+            {"session": "跑步", "description": f"建議課表 {index}"}
+            for index in range(1, 8)
+        ],
+    }
+
+    messages = format_weekly_report_messages(
+        summary,
+        report_text="persisted report text",
+        report_json=report_json,
+    )
+    rendered = "\n".join(messages)
+
+    assert "📊 週訓練報告｜2026-08-03～2026-08-09" in rendered
+    assert "• 跑步：1 次｜10 km｜55 分" in rendered
+    assert "• 本週負荷：120" in rendered
+    assert "🤖 AI 教練" in rendered
+    assert "📅 下一週課表" in rendered
+    assert "• Mon 2026-08-10｜跑步：建議課表 1" in rendered

@@ -1,0 +1,38 @@
+name: Weekly Training Report Delivery Retry
+
+on:
+  schedule:
+    # Reuse an accepted LINE payload within its 24-hour retry-key window.
+    - cron: '0 */6 * * *'
+
+concurrency:
+  # Also serialize against Garmin sync and the weekly report workflow.
+  group: daily-pipeline
+  cancel-in-progress: false
+
+jobs:
+  retry-weekly-deliveries:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Retry prepared weekly reports
+        env:
+          DATABASE_MODE: cloud
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          NEON_DATABASE_DIRECT_URL: ${{ secrets.NEON_DATABASE_DIRECT_URL }}
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_GROUP_ID: ${{ secrets.LINE_GROUP_ID }}
+        run: python -m src.scripts.run_weekly_training_report --retry-only

@@ -18,12 +18,15 @@ fi
   tests/test_activity_notification.py \
   tests/test_notifier.py \
   tests/test_line_client.py \
+  tests/test_formatter.py \
   tests/test_daily_run.py \
   tests/test_run_daily_pipeline.py \
+  tests/test_run_weekly_training_report.py \
   tests/test_runner.py \
   tests/test_activity_payload_provider.py \
   tests/test_ai_report_resolution.py \
   tests/test_coach.py \
+  tests/test_weekly_coach.py \
   tests/test_coach_context.py \
   tests/test_db_session.py \
   tests/test_dashboard_adapter.py \

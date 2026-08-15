@@ -10,7 +10,7 @@ TODO: 未來 coach_context 加入 start_time_local / end_time_local 後，
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 from src.notifications.constants import LINE_SAFE_TEXT_LENGTH
 from src.notifications.text_utils import utf16_length
@@ -513,3 +513,105 @@ def format_activity_message(
     """Backward-compatible single-string formatter interface."""
     messages = format_activity_messages(activity, week)
     return "\n".join(messages)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 每週訓練報告
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _weekly_number(value: Any, *, digits: int = 1) -> str | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f"{number:.{digits}f}".rstrip("0").rstrip(".")
+
+
+def _weekly_plan_lines(
+    seed: Mapping[str, Any],
+    plan: Sequence[Any],
+) -> list[str]:
+    days = seed.get("days")
+    if not isinstance(days, list) or len(days) != 7 or len(plan) != 7:
+        raise ValueError("Weekly report requires a seven-day deterministic plan")
+    lines: list[str] = []
+    for day, suggestion in zip(days, plan, strict=True):
+        if not isinstance(day, Mapping) or not isinstance(suggestion, Mapping):
+            raise ValueError("Weekly report plan entries must be objects")
+        day_of_week = day.get("day_of_week")
+        date_value = day.get("date")
+        session = suggestion.get("session")
+        description = suggestion.get("description")
+        if not all(isinstance(value, str) and value.strip() for value in (day_of_week, date_value, session, description)):
+            raise ValueError("Weekly report plan is incomplete")
+        lines.append(f"• {day_of_week} {date_value}｜{session}：{description}")
+    return lines
+
+
+def format_weekly_report_messages(
+    summary_json: Mapping[str, Any],
+    *,
+    report_text: str,
+    report_json: Mapping[str, Any] | None,
+) -> list[str]:
+    """Format deterministic weekly facts plus a persisted AI interpretation.
+
+    Dates, aggregates and training load are always read from ``summary_json``.
+    The model can contribute only the analysis, recommendation and per-day plan
+    wording.  Pagination keeps every persisted LINE page below the safe limit.
+    """
+    if not isinstance(report_json, Mapping):
+        raise ValueError("Weekly AI report is missing its structured output")
+    week_start = summary_json.get("week_start")
+    week_end = summary_json.get("week_end")
+    totals = summary_json.get("totals")
+    sports = summary_json.get("sports")
+    load = summary_json.get("training_load")
+    plan_seed = summary_json.get("next_week_plan_seed")
+    analysis = report_json.get("analysis")
+    recommendation = report_json.get("recommendation")
+    plan = report_json.get("next_week_plan")
+    if not all(isinstance(value, str) and value.strip() for value in (week_start, week_end, analysis, recommendation, report_text)):
+        raise ValueError("Weekly report is missing required text")
+    if not isinstance(totals, Mapping) or not isinstance(sports, list) or not isinstance(load, Mapping) or not isinstance(plan_seed, Mapping) or not isinstance(plan, list):
+        raise ValueError("Weekly report is missing deterministic facts")
+
+    lines = [f"📊 週訓練報告｜{week_start}～{week_end}", "", "訓練總覽"]
+    workout_count = totals.get("workout_count")
+    distance = _weekly_number(totals.get("distance_km"), digits=2)
+    duration = _weekly_number(totals.get("duration_min"))
+    overview = [
+        f"{workout_count} 次" if isinstance(workout_count, int) else None,
+        f"{distance} km" if distance is not None else None,
+        f"{duration} 分" if duration is not None else None,
+    ]
+    lines.append(f"• 總計：{'｜'.join(item for item in overview if item)}")
+    for sport in sports:
+        if not isinstance(sport, Mapping):
+            continue
+        name = sport.get("display_name")
+        count = sport.get("count")
+        distance = _weekly_number(sport.get("distance_km"), digits=2)
+        duration = _weekly_number(sport.get("duration_min"))
+        if isinstance(name, str) and isinstance(count, int):
+            details = [f"{count} 次"]
+            if distance is not None:
+                details.append(f"{distance} km")
+            if duration is not None:
+                details.append(f"{duration} 分")
+            lines.append(f"• {name}：{'｜'.join(details)}")
+
+    lines.extend(["", "Garmin 訓練負荷"])
+    weekly_load = _weekly_number(load.get("garmin_weekly_load"))
+    if weekly_load is not None:
+        lines.append(f"• 本週負荷：{weekly_load}")
+    chronic_load = _weekly_number(load.get("chronic_load"))
+    if chronic_load is not None:
+        lines.append(f"• 近期基準：{chronic_load}")
+    ratio = _weekly_number(load.get("acute_chronic_ratio"), digits=2)
+    if ratio is not None:
+        lines.append(f"• 急慢性負荷比：{ratio}")
+
+    lines.extend(["", "🤖 AI 教練", analysis.strip(), "", f"建議：{recommendation.strip()}", "", "📅 下一週課表"])
+    lines.extend(_weekly_plan_lines(plan_seed, plan))
+    return _paginate_complete_lines(lines)
