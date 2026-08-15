@@ -15,6 +15,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 import src.notifications.notifier as notifier
+import src.services.ai_report_resolution as resolution
 from src.agents.activity_coach import ActivityCoachError
 from src.db.models import Activity, LineNotification
 from src.notifications.line_client import LineSendResult
@@ -344,6 +345,85 @@ def test_unpersisted_activity_subject_defers_without_ai_or_line_send(
         result = run_line_notification(str(path))
 
     assert (result.status, result.sent, result.failed) == ("persistence_unavailable", 0, 1)
+
+
+def test_daily_lookup_teardown_revocation_skips_ai_and_line_send(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    activity = Activity(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        garmin_activity_id=791,
+    )
+    available = True
+    session_count = 0
+
+    @dataclass
+    class _SubjectSession(_FakeSession):
+        def get(self, model: type[Any], key: uuid.UUID) -> Activity | None:
+            if model is Activity and key == activity.id:
+                return activity
+            return None
+
+    @contextmanager
+    def session_factory() -> Iterator[_SubjectSession]:
+        nonlocal session_count
+        session_count += 1
+        yield _SubjectSession()
+        if session_count == 4:
+            revoke(OperationalError("SELECT", {}, ConnectionError("connection refused")))
+
+    @contextmanager
+    def lock_factory() -> Iterator[object]:
+        yield object()
+
+    def revoke(_error: BaseException) -> None:
+        nonlocal available
+        available = False
+
+    database = NotificationDatabaseAccess(
+        is_available=lambda: available,
+        session=session_factory,
+        lock_connection=lock_factory,
+        revoke=revoke,
+    )
+    monkeypatch.setattr(notifier, "_acquire_advisory_lock", lambda _connection: True)
+    monkeypatch.setattr(notifier, "_release_advisory_lock", lambda _connection: None)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {-1})
+    monkeypatch.setattr(notifier, "list_pending_activity_notifications", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(notifier, "get_activity_by_garmin_id", lambda *_args: activity)
+    monkeypatch.setattr(
+        resolution,
+        "get_prepared_activity_notification",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        resolution,
+        "get_ai_report_by_idempotency_key",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        notifier,
+        "generate_activity_report",
+        lambda *_args: pytest.fail("revoked persistence must skip Gemini"),
+    )
+    monkeypatch.setattr(
+        notifier,
+        "send_push_messages",
+        lambda *_args: pytest.fail("revoked persistence must skip LINE"),
+    )
+
+    path = _write_context(tmp_path, _context(791))
+    with patch.dict(
+        os.environ,
+        {"LINE_CHANNEL_ACCESS_TOKEN": "test-token", "LINE_GROUP_ID": "test-group"},
+        clear=True,
+    ):
+        result = run_daily_line_notification(str(path), database=database)
+
+    assert (result.status, result.sent, result.failed) == ("persistence_unavailable", 0, 1)
+    assert session_count == 4
 
 
 def test_daily_database_unavailable_defers_without_stateless_line_send(

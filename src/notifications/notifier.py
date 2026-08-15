@@ -35,6 +35,7 @@ from src.notifications.constants import (
 from src.notifications.formatter import format_activity_coach_messages
 from src.notifications.line_client import LineSendResult, send_push_messages
 from src.services.ai_report_resolution import (
+    ActivityPersistenceUnavailable,
     AIReportSpec,
     ActivityAINotificationPreparer,
     PreparedLineDelivery,
@@ -262,6 +263,12 @@ class _NotificationRun:
                 failed += 1
                 ai_failed = True
                 continue
+            except ActivityPersistenceUnavailable:
+                return NotificationResult(
+                    status="persistence_unavailable",
+                    sent=sent,
+                    failed=failed + 1,
+                )
             except LookupError:
                 logger.warning(
                     "LINE notification: Activity subject is not persisted; delivery deferred"
@@ -361,6 +368,7 @@ class _NotificationRun:
                 candidate.week,
                 analysis=report.report_text,
             ),
+            persistence_available=lambda: not self._daily_persistence_unavailable(),
         ).prepare(spec=spec, garmin_activity_id=garmin_activity_id)
 
     def _build_activity_spec(

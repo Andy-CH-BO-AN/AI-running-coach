@@ -14,6 +14,7 @@ from src.services.ai_report_resolution import (
     AIReportDraft,
     AIReportSpec,
     ActivityAINotificationPreparer,
+    ActivityPersistenceUnavailable,
 )
 
 
@@ -433,6 +434,54 @@ def test_existing_report_with_mismatched_identity_fails_closed(
             generate=lambda _spec: pytest.fail("existing report skips generation"),
             render=lambda _report: pytest.fail("mismatch must not render"),
         ).prepare(spec=spec, garmin_activity_id=123)
+
+
+def test_report_commit_teardown_revocation_skips_renderer_and_notification_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = _report(
+        report_id=uuid.uuid4(),
+        text="canonical report",
+        model="model",
+    )
+    available = True
+    session_count = 0
+    events: list[str] = []
+
+    @contextmanager
+    def session_factory():
+        nonlocal available, session_count
+        session_count += 1
+        session = _FakeSession(events, f"session-{session_count}", _activity(report))
+        yield session
+        if session_count == 3:
+            available = False
+
+    monkeypatch.setattr(
+        resolution,
+        "get_prepared_activity_notification",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        resolution,
+        "get_ai_report_by_idempotency_key",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(resolution, "save_ai_report", lambda *_args, **_kwargs: report)
+
+    with pytest.raises(ActivityPersistenceUnavailable):
+        ActivityAINotificationPreparer(
+            session_factory=session_factory,
+            notification_lock=lambda: pytest.fail("revoked persistence must skip lock"),
+            generate=lambda _spec: (
+                events.append("external-ai")
+                or AIReportDraft(report_text="draft", model_name="model")
+            ),
+            render=lambda _report: pytest.fail("revoked persistence must skip renderer"),
+            persistence_available=lambda: available,
+        ).prepare(spec=_spec(report), garmin_activity_id=123)
+
+    assert events == ["external-ai", "commit:session-3"]
 
 
 def test_generator_and_identity_use_json_normalized_input(
