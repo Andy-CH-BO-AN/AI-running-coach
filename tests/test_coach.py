@@ -277,6 +277,21 @@ class CoachTests(unittest.TestCase):
             http_options={"api_version": "v1"},
         )
 
+    def test_client_construction_is_deferred_until_a_model_request(self):
+        generated = Mock(return_value=types.SimpleNamespace(text='{"headline": "report"}'))
+        fake_client = types.SimpleNamespace(
+            models=types.SimpleNamespace(generate_content=generated)
+        )
+
+        with patch.object(coach, "client", None), patch.object(
+            coach, "_build_genai_client", return_value=fake_client
+        ) as build_client:
+            report = coach._generate_content_with_retries("test-model", "prompt")
+
+        self.assertEqual(report, {"headline": "report"})
+        build_client.assert_called_once_with()
+        generated.assert_called_once()
+
     def test_build_genai_client_uses_legacy_gemini_key_without_vertexai_flag(self):
         fake_client = object()
 

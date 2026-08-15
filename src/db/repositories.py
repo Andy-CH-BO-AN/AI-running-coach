@@ -425,6 +425,34 @@ def get_recent_activities(session: Session, user_id: uuid.UUID, limit: int = 20)
     )
 
 
+def get_activities_in_time_window(
+    session: Session,
+    user_id: uuid.UUID,
+    *,
+    started_at_on_or_after: datetime,
+    started_at_before: datetime,
+) -> list[Activity]:
+    """Return every activity in a required deterministic time window."""
+    if (
+        started_at_on_or_after.tzinfo is None
+        or started_at_before.tzinfo is None
+    ):
+        raise ValueError("activity time-window bounds must be timezone-aware")
+    if started_at_before <= started_at_on_or_after:
+        raise ValueError("started_at_before must be after started_at_on_or_after")
+    return list(
+        session.scalars(
+            select(Activity)
+            .where(
+                Activity.user_id == user_id,
+                Activity.started_at >= started_at_on_or_after,
+                Activity.started_at < started_at_before,
+            )
+            .order_by(desc(Activity.started_at), desc(Activity.garmin_activity_id))
+        )
+    )
+
+
 def get_activity_with_splits(session: Session, activity_id: uuid.UUID) -> Activity | None:
     return session.scalars(
         select(Activity)
@@ -542,6 +570,35 @@ def get_prepared_activity_notification(
         session,
         ai_report_id=notification.ai_report_id,
         garmin_activity_id=garmin_activity_id,
+    )
+    return notification
+
+
+def get_prepared_weekly_notification(
+    session: Session,
+    weekly_summary_id: uuid.UUID,
+) -> LineNotification | None:
+    """Return one validated prepared weekly delivery, if it exists.
+
+    A weekly summary itself remains recomputable.  The notification payload is
+    deliberately a separate immutable snapshot so a failed LINE delivery can
+    be retried without rebuilding facts or asking the model again.
+    """
+    notification = get_weekly_notification(session, weekly_summary_id)
+    if notification is None:
+        return None
+    session.refresh(notification)
+    if (
+        notification.is_seed
+        or notification.ai_report_id is None
+        or notification.rendered_messages is None
+    ):
+        return None
+    _validate_rendered_messages(notification.rendered_messages)
+    _validate_weekly_report_subject(
+        session,
+        ai_report_id=notification.ai_report_id,
+        weekly_summary_id=weekly_summary_id,
     )
     return notification
 
@@ -701,6 +758,7 @@ def list_pending_activity_notifications(
 def list_pending_weekly_notifications(
     session: Session,
     *,
+    user_id: uuid.UUID | None = None,
     limit: int | None = None,
 ) -> list[LineNotification]:
     stmt = (
@@ -713,6 +771,11 @@ def list_pending_weekly_notifications(
         )
         .order_by(LineNotification.recorded_at, LineNotification.id)
     )
+    if user_id is not None:
+        stmt = stmt.join(
+            WeeklySummary,
+            LineNotification.weekly_summary_id == WeeklySummary.id,
+        ).where(WeeklySummary.user_id == user_id)
     if limit is not None:
         if limit < 1:
             raise ValueError("limit must be positive")

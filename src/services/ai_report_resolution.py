@@ -5,6 +5,7 @@ from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -90,6 +91,7 @@ class PreparedLineDelivery:
     notification_id: uuid.UUID
     ai_report_id: uuid.UUID
     rendered_messages: tuple[str, ...]
+    recorded_at: datetime
     already_sent: bool
 
     @classmethod
@@ -107,6 +109,7 @@ class PreparedLineDelivery:
             notification_id=notification.id,
             ai_report_id=notification.ai_report_id,
             rendered_messages=tuple(payload),
+            recorded_at=notification.recorded_at,
             already_sent=notification.sent_at is not None,
         )
 

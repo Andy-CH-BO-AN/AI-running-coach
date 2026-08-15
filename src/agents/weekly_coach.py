@@ -1,0 +1,171 @@
+"""Gemini adapter for the concise weekly coaching report."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from src.agents import coach as coach_agent
+from src.notifications.text_utils import utf16_length
+from src.services.ai_report_resolution import AIReportDraft, AIReportSpec
+
+WEEKLY_PROMPT_PATH = Path("prompts/weekly_coach.md")
+WEEKLY_PROMPT_VERSION = "weekly-coach:v1"
+MIN_ANALYSIS_UTF16_LENGTH = 140
+MAX_ANALYSIS_UTF16_LENGTH = 320
+MAX_RECOMMENDATION_UTF16_LENGTH = 320
+MAX_PLAN_SESSION_UTF16_LENGTH = 100
+MAX_PLAN_DESCRIPTION_UTF16_LENGTH = 360
+_UNAVAILABLE_DAY_PLAN = {
+    "session": "休息／恢復",
+    "description": "此日不可訓練；安排休息或低強度恢復。",
+}
+
+
+class WeeklyCoachError(RuntimeError):
+    """The provider did not return a usable weekly coaching payload."""
+
+
+def _text(
+    value: Any,
+    *,
+    field: str,
+    maximum_utf16_length: int,
+    minimum_utf16_length: int = 1,
+) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise WeeklyCoachError(f"Weekly AI response is missing {field}")
+    normalized = value.strip()
+    length = utf16_length(normalized)
+    if not minimum_utf16_length <= length <= maximum_utf16_length:
+        raise WeeklyCoachError(f"Weekly AI response has an invalid {field} length")
+    return normalized
+
+
+def _unavailable_plan_indexes(input_json: dict[str, Any]) -> frozenset[int]:
+    seed = input_json.get("next_week_plan_seed")
+    if not isinstance(seed, dict):
+        return frozenset()
+    days = seed.get("days")
+    if not isinstance(days, list):
+        return frozenset()
+    return frozenset(
+        index
+        for index, day in enumerate(days)
+        if isinstance(day, dict) and day.get("available_for_training") is False
+    )
+
+
+def _normalize_plan(
+    payload: dict[str, Any],
+    *,
+    unavailable_indexes: frozenset[int],
+) -> list[dict[str, str]]:
+    plan = payload.get("next_week_plan")
+    if not isinstance(plan, list) or len(plan) != 7:
+        raise WeeklyCoachError("Weekly AI response must contain a seven-day plan")
+    normalized: list[dict[str, str]] = []
+    for index, entry in enumerate(plan):
+        if not isinstance(entry, dict):
+            raise WeeklyCoachError("Weekly AI plan entries must be objects")
+        if index in unavailable_indexes:
+            normalized.append(dict(_UNAVAILABLE_DAY_PLAN))
+            continue
+        normalized.append(
+            {
+                "session": _text(
+                    entry.get("session"),
+                    field="next_week_plan.session",
+                    maximum_utf16_length=MAX_PLAN_SESSION_UTF16_LENGTH,
+                ),
+                "description": _text(
+                    entry.get("description"),
+                    field="next_week_plan.description",
+                    maximum_utf16_length=MAX_PLAN_DESCRIPTION_UTF16_LENGTH,
+                ),
+            }
+        )
+    return normalized
+
+
+def _normalize_payload(
+    payload: dict[str, Any],
+    *,
+    unavailable_indexes: frozenset[int],
+) -> dict[str, Any]:
+    return {
+        "analysis": _text(
+            payload.get("analysis"),
+            field="analysis",
+            minimum_utf16_length=MIN_ANALYSIS_UTF16_LENGTH,
+            maximum_utf16_length=MAX_ANALYSIS_UTF16_LENGTH,
+        ),
+        "recommendation": _text(
+            payload.get("recommendation"),
+            field="recommendation",
+            maximum_utf16_length=MAX_RECOMMENDATION_UTF16_LENGTH,
+        ),
+        "next_week_plan": _normalize_plan(
+            payload,
+            unavailable_indexes=unavailable_indexes,
+        ),
+    }
+
+
+def _generate_payload(
+    full_prompt: str,
+    *,
+    unavailable_indexes: frozenset[int],
+) -> tuple[str, dict[str, Any]]:
+    """Reuse the established model fallback and retry policy for weekly output."""
+    switched_to_vertexai = False
+    last_error: Exception | None = None
+    for model_name in coach_agent.MODEL_FALLBACKS:
+        try:
+            return model_name, _normalize_payload(
+                coach_agent._generate_content_with_retries(model_name, full_prompt),
+                unavailable_indexes=unavailable_indexes,
+            )
+        except Exception as exc:
+            last_error = exc
+            if (
+                not switched_to_vertexai
+                and not getattr(coach_agent.client, "vertexai", False)
+                and coach_agent._is_vertexai_payload_mismatch(exc)
+            ):
+                coach_agent.client = coach_agent._build_genai_client(vertexai=True)
+                switched_to_vertexai = True
+                try:
+                    return model_name, _normalize_payload(
+                        coach_agent._generate_content_with_retries(model_name, full_prompt),
+                        unavailable_indexes=unavailable_indexes,
+                    )
+                except Exception as vertex_error:
+                    last_error = vertex_error
+            continue
+    raise WeeklyCoachError("Weekly AI coach is unavailable") from last_error
+
+
+def generate_weekly_report(spec: AIReportSpec) -> AIReportDraft:
+    """Generate one validated coaching draft from deterministic weekly facts."""
+    if spec.report_scope != "weekly" or spec.weekly_summary_id is None:
+        raise ValueError("Weekly generation requires a weekly AI report spec")
+    try:
+        system_prompt = WEEKLY_PROMPT_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise WeeklyCoachError("Weekly AI prompt could not be read") from exc
+    full_prompt = (
+        f"{system_prompt}\n\n"
+        "### Deterministic weekly facts (source of truth)\n"
+        f"{json.dumps(spec.input_json, ensure_ascii=False, indent=2)}"
+    )
+    model_name, payload = _generate_payload(
+        full_prompt,
+        unavailable_indexes=_unavailable_plan_indexes(spec.input_json),
+    )
+    report_text = f"{payload['analysis']}\n\n建議：{payload['recommendation']}"
+    return AIReportDraft(
+        report_text=report_text,
+        model_name=model_name,
+        report_json=payload,
+    )

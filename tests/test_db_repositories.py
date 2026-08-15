@@ -29,6 +29,7 @@ from src.db.models import (
 from src.db.repositories import (
     SYSTEM_INITIALIZED_MARKER_ID,
     get_activity_with_splits,
+    get_activities_in_time_window,
     get_ai_report_by_idempotency_key,
     get_prepared_activity_notification,
     get_latest_resting_heart_rate,
@@ -300,6 +301,70 @@ def test_get_recent_activities_returns_multiple_records_sorted_newest_first(db_s
     activities = get_recent_activities(db_session, user.id, limit=2)
 
     assert [activity.garmin_activity_id for activity in activities] == [502, 503]
+
+
+def test_get_activities_in_time_window_returns_all_and_only_matching_activities(db_session):
+    user = get_or_create_default_user(db_session)
+    other_user = upsert_user(
+        db_session,
+        external_source="local",
+        external_user_id="window-isolation-athlete",
+    )
+    for activity_id in range(600, 676):
+        upsert_activity(
+            db_session,
+            user.id,
+            {
+                **_activity_payload(activity_id=activity_id),
+                "started_at": f"2026-05-10T{activity_id % 24:02d}:00:00+00:00",
+                "date": "2026-05-10",
+            },
+        )
+    upsert_activity(
+        db_session,
+        user.id,
+        {
+            **_activity_payload(activity_id=599),
+            "started_at": "2026-05-09T23:59:59+00:00",
+            "date": "2026-05-09",
+        },
+    )
+    upsert_activity(
+        db_session,
+        user.id,
+        {
+            **_activity_payload(activity_id=676),
+            "started_at": "2026-05-11T00:00:00+00:00",
+            "date": "2026-05-11",
+        },
+    )
+    upsert_activity(
+        db_session,
+        other_user.id,
+        {
+            **_activity_payload(activity_id=677),
+            "started_at": "2026-05-10T12:00:00+00:00",
+            "date": "2026-05-10",
+        },
+    )
+
+    activities = get_activities_in_time_window(
+        db_session,
+        user.id,
+        started_at_on_or_after=datetime(2026, 5, 10, tzinfo=timezone.utc),
+        started_at_before=datetime(2026, 5, 11, tzinfo=timezone.utc),
+    )
+
+    assert len(activities) == 76
+    assert {599, 676, 677}.isdisjoint(
+        {activity.garmin_activity_id for activity in activities}
+    )
+    assert all(
+        datetime(2026, 5, 10, tzinfo=timezone.utc)
+        <= activity.started_at
+        < datetime(2026, 5, 11, tzinfo=timezone.utc)
+        for activity in activities
+    )
 
 
 def test_activity_splits_and_swimming_lengths_are_idempotent(db_session):
