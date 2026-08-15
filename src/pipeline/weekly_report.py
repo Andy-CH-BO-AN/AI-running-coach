@@ -2,16 +2,17 @@
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
 from src.agents.weekly_coach import generate_weekly_report
 from src.db.repositories import (
+    get_activities_in_time_window,
     get_latest_user_profile,
     get_or_create_default_user,
-    get_recent_activities,
 )
 from src.db.session import SessionLocal
 from src.preprocessing.activity_window import normalize_activity_window
@@ -21,7 +22,32 @@ from src.services.weekly_training_report import (
     WeeklyTrainingReportRunner,
 )
 
-WEEKLY_ACTIVITY_WINDOW = 75
+WEEKLY_REPORT_TIMEZONE = ZoneInfo("Asia/Taipei")
+# Current week + completed report week + three chronic-baseline weeks.
+WEEKLY_ANALYSIS_WEEKS = 5
+
+
+def _default_weekly_report_date(now: datetime | None = None) -> date:
+    """Resolve manual and scheduled runs against the report's local calendar."""
+    instant = now or datetime.now(timezone.utc)
+    if instant.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    return instant.astimezone(WEEKLY_REPORT_TIMEZONE).date()
+
+
+def _weekly_activity_window(today: date) -> tuple[datetime, datetime]:
+    """Return the complete local-calendar window needed for a weekly report."""
+    current_week_start = today - timedelta(days=today.weekday())
+    earliest_week_start = current_week_start - timedelta(
+        days=7 * (WEEKLY_ANALYSIS_WEEKS - 1)
+    )
+    window_start = datetime.combine(
+        earliest_week_start, time.min, tzinfo=WEEKLY_REPORT_TIMEZONE
+    ).astimezone(timezone.utc)
+    window_end = datetime.combine(
+        today + timedelta(days=1), time.min, tzinfo=WEEKLY_REPORT_TIMEZONE
+    ).astimezone(timezone.utc)
+    return window_start, window_end
 
 
 def _required_env(name: str) -> str:
@@ -37,12 +63,14 @@ def _build_context_from_database(
     today: date,
 ) -> tuple[Any, dict[str, Any]]:
     user = get_or_create_default_user(session)
+    window_start, window_end = _weekly_activity_window(today)
     raw_activities = [
         dict(activity.raw_json)
-        for activity in get_recent_activities(
+        for activity in get_activities_in_time_window(
             session,
             user.id,
-            limit=WEEKLY_ACTIVITY_WINDOW,
+            started_at_on_or_after=window_start,
+            started_at_before=window_end,
         )
     ]
     profile = get_latest_user_profile(session, user.id)
@@ -51,6 +79,7 @@ def _build_context_from_database(
         normalize_activity_window(raw_activities),
         user_data=user_data,
         today=today,
+        weekly_analysis_weeks=WEEKLY_ANALYSIS_WEEKS,
     )
     return user, context
 
@@ -68,7 +97,7 @@ def execute_weekly_training_report(
     this workflow does not offer stateless LINE delivery when persistence is
     unavailable.
     """
-    resolved_today = today or date.today()
+    resolved_today = today or _default_weekly_report_date()
     runner = runner_factory(
         session_factory=session_factory,
         generate=generate_weekly_report,

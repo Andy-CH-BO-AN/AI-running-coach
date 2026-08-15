@@ -215,6 +215,24 @@ def test_builds_monday_week_buckets_and_derived_weekly_metrics():
     assert current_week["sessions"][0]["segments"][0]["stride_length_m"] == 1.12
 
 
+def test_context_can_include_five_weekly_buckets_for_weekly_chronic_baseline():
+    context = build_deterministic_coach_context(
+        normalize_activity_window([]),
+        user_data={},
+        today="2026-08-10",
+        weekly_analysis_weeks=5,
+    )
+
+    assert context["meta"]["analysis_period_weeks"] == 5
+    assert [week["week_start"] for week in context["weekly_analysis"]] == [
+        "2026-08-10",
+        "2026-08-03",
+        "2026-07-27",
+        "2026-07-20",
+        "2026-07-13",
+    ]
+
+
 def test_distance_rounding_matches_processed_projection_before_aggregation():
     activity_window = normalize_activity_window(
         [

@@ -425,6 +425,34 @@ def get_recent_activities(session: Session, user_id: uuid.UUID, limit: int = 20)
     )
 
 
+def get_activities_in_time_window(
+    session: Session,
+    user_id: uuid.UUID,
+    *,
+    started_at_on_or_after: datetime,
+    started_at_before: datetime,
+) -> list[Activity]:
+    """Return every activity in a required deterministic time window."""
+    if (
+        started_at_on_or_after.tzinfo is None
+        or started_at_before.tzinfo is None
+    ):
+        raise ValueError("activity time-window bounds must be timezone-aware")
+    if started_at_before <= started_at_on_or_after:
+        raise ValueError("started_at_before must be after started_at_on_or_after")
+    return list(
+        session.scalars(
+            select(Activity)
+            .where(
+                Activity.user_id == user_id,
+                Activity.started_at >= started_at_on_or_after,
+                Activity.started_at < started_at_before,
+            )
+            .order_by(desc(Activity.started_at), desc(Activity.garmin_activity_id))
+        )
+    )
+
+
 def get_activity_with_splits(session: Session, activity_id: uuid.UUID) -> Activity | None:
     return session.scalars(
         select(Activity)

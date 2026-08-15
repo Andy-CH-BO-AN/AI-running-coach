@@ -89,6 +89,7 @@ def build_deterministic_coach_context(
     activity_window: ActivityWindow,
     user_data: Optional[Dict[str, Any]] = None,
     today: Any = None,
+    weekly_analysis_weeks: int = 4,
 ) -> DeterministicCoachContext:
     """Build deterministic coach context from one normalized Activity window."""
 
@@ -99,7 +100,11 @@ def build_deterministic_coach_context(
     )
 
     sessions = build_session_facts(activity_window).context_payloads()
-    weekly_analysis = _build_weekly_analysis(sessions, today=resolved_today)
+    weekly_analysis = _build_weekly_analysis(
+        sessions,
+        today=resolved_today,
+        weeks=weekly_analysis_weeks,
+    )
     four_week_activities = _activities_in_analysis_weeks(
         activity_window.activities,
         weekly_analysis,
@@ -112,7 +117,7 @@ def build_deterministic_coach_context(
         "meta": {
             "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "today": resolved_today.isoformat(),
-            "analysis_period_weeks": 4,
+            "analysis_period_weeks": weekly_analysis_weeks,
             "source": "deterministic_coach_context:v1",
         },
         "deterministic_fields": [

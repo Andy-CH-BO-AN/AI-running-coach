@@ -202,6 +202,18 @@ def test_completed_week_summary_combines_swimming_aliases_and_rest_days_for_load
     assert summary.metrics["strain"] == pytest.approx(43.4)
 
 
+def test_completed_week_summary_uses_three_prior_weeks_for_chronic_load():
+    context = _context()
+    context["weekly_analysis"].append(
+        _week("2026-07-13", "2026-07-19", [], 50.0)
+    )
+
+    summary = build_completed_week_summary(context, today=date(2026, 8, 10))
+
+    assert summary.metrics["chronic_load"] == 70.0
+    assert summary.metrics["acute_chronic_ratio"] == pytest.approx(1.71)
+
+
 def test_weekly_runner_persists_then_sends_once_and_recomputes_sent_summary(db_session: Session):
     user = get_or_create_default_user(db_session)
     transport = _Transport()

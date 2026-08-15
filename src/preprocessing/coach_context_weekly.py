@@ -84,10 +84,14 @@ def _build_12week_summary(
 def _build_weekly_analysis(
     sessions: Sequence[CoachSession],
     today: date,
+    *,
+    weeks: int = 4,
 ) -> List[CoachWeek]:
+    if weeks < 1:
+        raise ValueError("weeks must be positive")
     current_week_start = _week_start_for(today)
     buckets: List[CoachWeek] = []
-    for offset in range(4):
+    for offset in range(weeks):
         week_start = current_week_start - timedelta(days=offset * 7)
         week_end = week_start + timedelta(days=6)
         week_sessions = [
