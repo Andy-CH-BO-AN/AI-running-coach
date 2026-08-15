@@ -122,6 +122,15 @@ SessionContextFactory = Callable[[], AbstractContextManager[Session]]
 NotificationLockFactory = Callable[[], AbstractContextManager[Any]]
 AIReportGenerator = Callable[[AIReportSpec], AIReportDraft]
 AIReportRenderer = Callable[[PersistedAIReport], Sequence[str]]
+PersistenceAvailable = Callable[[], bool]
+
+
+class ActivityPersistenceUnavailable(RuntimeError):
+    """Activity preparation stopped because its revocable persistence capability closed."""
+
+
+def _persistence_available() -> bool:
+    return True
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -137,6 +146,7 @@ class ActivityAINotificationPreparer:
     notification_lock: NotificationLockFactory
     generate: AIReportGenerator
     render: AIReportRenderer
+    persistence_available: PersistenceAvailable = _persistence_available
 
     def prepare(
         self,
@@ -144,6 +154,7 @@ class ActivityAINotificationPreparer:
         spec: AIReportSpec,
         garmin_activity_id: int,
     ) -> PreparedLineDelivery:
+        self._require_persistence()
         if (
             spec.report_scope != "activity"
             or spec.activity_id is None
@@ -171,6 +182,7 @@ class ActivityAINotificationPreparer:
             garmin_activity_id=garmin_activity_id,
         )
         rendered_messages = self.render(canonical_report)
+        self._require_persistence()
 
         # This is the only advisory-lock scope owned by this module. Provider I/O
         # and rendering are deliberately complete before entry.
@@ -183,7 +195,9 @@ class ActivityAINotificationPreparer:
                     rendered_messages=rendered_messages,
                 )
                 session.commit()
-                return PreparedLineDelivery.from_model(canonical_notification)
+                delivery = PreparedLineDelivery.from_model(canonical_notification)
+            self._require_persistence()
+            return delivery
 
     def _existing_prepared_delivery(
         self,
@@ -202,8 +216,11 @@ class ActivityAINotificationPreparer:
                 garmin_activity_id,
             )
             if notification is None:
-                return None
-            return PreparedLineDelivery.from_model(notification)
+                delivery = None
+            else:
+                delivery = PreparedLineDelivery.from_model(notification)
+        self._require_persistence()
+        return delivery
 
     def _resolve_report(
         self,
@@ -211,6 +228,7 @@ class ActivityAINotificationPreparer:
         *,
         garmin_activity_id: int,
     ) -> PersistedAIReport:
+        canonical_report: PersistedAIReport | None = None
         with self.session_factory() as session:
             self._validate_activity_subject(
                 session,
@@ -224,7 +242,10 @@ class ActivityAINotificationPreparer:
             )
             if existing is not None:
                 self._validate_canonical_report(spec, existing)
-                return PersistedAIReport.from_model(existing)
+                canonical_report = PersistedAIReport.from_model(existing)
+        self._require_persistence()
+        if canonical_report is not None:
+            return canonical_report
 
         # No DB transaction/session and no LINE advisory lock spans provider I/O.
         draft = self.generate(
@@ -239,6 +260,7 @@ class ActivityAINotificationPreparer:
                 feature_version=spec.feature_version,
             )
         )
+        self._require_persistence()
 
         with self.session_factory() as session:
             canonical = save_ai_report(
@@ -259,7 +281,15 @@ class ActivityAINotificationPreparer:
             )
             self._validate_canonical_report(spec, canonical)
             session.commit()
-            return PersistedAIReport.from_model(canonical)
+            canonical_report = PersistedAIReport.from_model(canonical)
+        self._require_persistence()
+        return canonical_report
+
+    def _require_persistence(self) -> None:
+        if not self.persistence_available():
+            raise ActivityPersistenceUnavailable(
+                "Activity persistence became unavailable during preparation"
+            )
 
     @staticmethod
     def _validate_activity_subject(

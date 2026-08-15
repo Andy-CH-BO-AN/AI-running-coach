@@ -25,6 +25,7 @@ fi
   tests/test_runner.py \
   tests/test_activity_payload_provider.py \
   tests/test_ai_report_resolution.py \
+  tests/test_activity_coach.py \
   tests/test_coach.py \
   tests/test_weekly_coach.py \
   tests/test_coach_context.py \

@@ -506,6 +506,21 @@ def format_activity_messages(
     return _paginate_complete_lines(legacy_message.split("\n"))
 
 
+def format_activity_coach_messages(
+    activity: dict[str, Any],
+    week: dict[str, Any] | None,
+    *,
+    analysis: str,
+) -> list[str]:
+    """Append persisted AI coaching without changing deterministic activity pages."""
+    if not isinstance(analysis, str) or not analysis.strip():
+        raise ValueError("Activity AI analysis is required")
+    coach_message = f"🤖 AI 教練\n\n{analysis.strip()}"
+    if utf16_length(coach_message) > LINE_SAFE_TEXT_LENGTH:
+        raise ValueError("Activity AI analysis exceeds the safe LINE length limit")
+    return [*format_activity_messages(activity, week), coach_message]
+
+
 def format_activity_message(
     activity: dict[str, Any],
     week: dict[str, Any] | None,

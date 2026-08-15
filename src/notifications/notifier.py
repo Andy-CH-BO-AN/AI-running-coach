@@ -1,32 +1,49 @@
-"""LINE notification coordinator with persistent and stateless delivery."""
+"""Persistent Activity LINE notifications with concise AI coaching."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Any, Callable, ContextManager, Generator, Protocol, Sequence
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from src.agents.activity_coach import (
+    ACTIVITY_PROMPT_VERSION,
+    ActivityCoachError,
+    generate_activity_report,
+)
+from src.db.mappers import jsonable
 from src.db.repositories import (
+    get_activity_by_garmin_id,
     get_notified_activity_ids,
-    record_notification,
+    get_prepared_activity_notification,
+    list_pending_activity_notifications,
+    mark_notification_sent,
     seed_baseline_notifications,
 )
 from src.db.settings import is_database_connection_error
 from src.notifications.constants import (
     LINE_NOTIFICATION_LOCK_KEY,
-    MAX_DEGRADED_LINE_NOTIFICATIONS_PER_RUN,
     MAX_LINE_NOTIFICATIONS_PER_RUN,
 )
-from src.notifications.formatter import format_activity_messages
+from src.notifications.formatter import format_activity_coach_messages
 from src.notifications.line_client import LineSendResult, send_push_messages
+from src.services.ai_report_resolution import (
+    ActivityPersistenceUnavailable,
+    AIReportSpec,
+    ActivityAINotificationPreparer,
+    PreparedLineDelivery,
+)
 
 logger = logging.getLogger(__name__)
+
+ACTIVITY_CONTEXT_VERSION = "activity-context:v1"
 
 
 @dataclass
@@ -43,7 +60,7 @@ class NotificationResult:
 
 @dataclass(frozen=True, slots=True)
 class NotificationDatabaseAccess:
-    """Internal adapter used by the Cloud Daily Run's revocable Neon gate."""
+    """Cloud Daily Run's revocable persistence capability."""
 
     is_available: Callable[[], bool]
     session: Callable[[], ContextManager[Session]]
@@ -52,10 +69,12 @@ class NotificationDatabaseAccess:
 
 
 class _NotificationProfile(Enum):
-    """Sealed differences between existing manual and Daily wrappers."""
-
     MANUAL = auto()
     DAILY = auto()
+
+
+class _NotificationLockUnavailable(RuntimeError):
+    """Another worker currently owns the Activity notification lock."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,9 +87,26 @@ class _ActivityCandidate:
         return self.activity["activity_id"]
 
 
-class _LineTransport(Protocol):
-    """Internal LINE transport seam; tests can provide a deterministic fake."""
+@dataclass(frozen=True, slots=True)
+class _PendingActivityDelivery:
+    garmin_activity_id: int
+    delivery: PreparedLineDelivery
 
+
+@dataclass(frozen=True, slots=True)
+class _NotificationWork:
+    pending: tuple[_PendingActivityDelivery, ...]
+    candidates: tuple[_ActivityCandidate, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _DeliveryOutcome:
+    status: str
+    sent: int = 0
+    failed: int = 0
+
+
+class _LineTransport(Protocol):
     def send(
         self,
         token: str,
@@ -81,94 +117,13 @@ class _LineTransport(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class _ProductionLineTransport:
-    """Adapter retaining line_client ownership of HTTP, retry, and backoff."""
-
     def send(
         self,
         token: str,
         group_id: str,
         messages: Sequence[str],
     ) -> LineSendResult:
-        # Resolve the module global at call time so existing monkeypatch seams remain valid.
         return send_push_messages(token, group_id, messages)
-
-
-class _ActivityDeliveryState(Enum):
-    READY = auto()
-    RENDERED = auto()
-    ALL_BATCHES_ACCEPTED = auto()
-    LINE_FAILED = auto()
-    STATELESS_COMPLETE = auto()
-    RECORDED = auto()
-    SENT_UNRECORDED = auto()
-
-
-@dataclass(frozen=True, slots=True)
-class _ActivityDeliveryOutcome:
-    state: _ActivityDeliveryState
-    send_result: LineSendResult
-    persistence_error: SQLAlchemyError | None = field(default=None, repr=False)
-
-
-@dataclass(slots=True, repr=False)
-class _ActivityDelivery:
-    """Own one Activity's render -> LINE acceptance -> record lifecycle."""
-
-    candidate: _ActivityCandidate
-    token: str
-    group_id: str
-    transport: _LineTransport
-    state: _ActivityDeliveryState = field(
-        default=_ActivityDeliveryState.READY,
-        init=False,
-    )
-
-    def run(self, db_session: Session | None) -> _ActivityDeliveryOutcome:
-        if self.state is not _ActivityDeliveryState.READY:
-            raise RuntimeError("Activity delivery can only run once")
-
-        messages = format_activity_messages(
-            self.candidate.activity,
-            self.candidate.week,
-        )
-        self.state = _ActivityDeliveryState.RENDERED
-        send_result = self.transport.send(self.token, self.group_id, messages)
-        if not send_result.success:
-            self.state = _ActivityDeliveryState.LINE_FAILED
-            return _ActivityDeliveryOutcome(self.state, send_result)
-
-        # A successful aggregate result means every <=5-message transport batch
-        # was accepted (including stable retry-key 409 acceptance).
-        self.state = _ActivityDeliveryState.ALL_BATCHES_ACCEPTED
-        if db_session is None:
-            self.state = _ActivityDeliveryState.STATELESS_COMPLETE
-            return _ActivityDeliveryOutcome(self.state, send_result)
-
-        try:
-            record_notification(db_session, self.candidate.activity_id)
-        except SQLAlchemyError as exc:
-            if not is_database_connection_error(exc):
-                raise
-            self.state = _ActivityDeliveryState.SENT_UNRECORDED
-            return _ActivityDeliveryOutcome(self.state, send_result, exc)
-
-        self.state = _ActivityDeliveryState.RECORDED
-        return _ActivityDeliveryOutcome(self.state, send_result)
-
-
-@dataclass
-class _RunProgress:
-    all_candidates: list[_ActivityCandidate] | None = None
-    fallback_candidates: list[_ActivityCandidate] | None = None
-    attempted_activity_ids: set[Any] = field(default_factory=set)
-    sent: int = 0
-    failed: int = 0
-    sent_unrecorded_activity_id: Any | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class _PersistenceLoss:
-    activity_id: Any
 
 
 @contextmanager
@@ -181,7 +136,6 @@ def _get_db_session() -> Generator[Session, None, None]:
 
 @contextmanager
 def _get_lock_connection() -> Generator[Any, None, None]:
-    """Use a dedicated DB connection for PostgreSQL advisory locking."""
     from src.db.session import get_engine
 
     with get_engine().connect() as conn:
@@ -220,9 +174,31 @@ def _activity_recency_key(candidate: _ActivityCandidate) -> tuple[str, int]:
     return (str(candidate.activity.get("date") or ""), activity_id)
 
 
+def _garmin_activity_id(candidate: _ActivityCandidate) -> int:
+    try:
+        return int(candidate.activity_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Activity notification requires an integer Garmin activity ID") from exc
+
+
+def _week_facts(week: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "week_start",
+        "week_end",
+        "derived_total_distance_km",
+        "derived_total_duration_min",
+        "derived_training_load",
+        "session_counts",
+        "risk_flags",
+        "intensity_focuses",
+        "cross_training_focus",
+    )
+    return {key: week[key] for key in keys if key in week}
+
+
 @dataclass(repr=False)
 class _NotificationRun:
-    """One notification run engine shared by manual and Cloud Daily wrappers."""
+    """Deep module owning Activity AI preparation and persistent delivery."""
 
     context: dict[str, Any]
     token: str
@@ -230,94 +206,306 @@ class _NotificationRun:
     profile: _NotificationProfile
     database: NotificationDatabaseAccess | None
     transport: _LineTransport
-    progress: _RunProgress = field(default_factory=_RunProgress)
 
     def execute(self) -> NotificationResult:
-        if self.profile is _NotificationProfile.DAILY and (
-            self.database is None or not self.database.is_available()
-        ):
-            return self._continue_stateless(
-                status="stateless_done",
-                budget=MAX_DEGRADED_LINE_NOTIFICATIONS_PER_RUN,
-            )
+        if self._daily_persistence_unavailable():
+            return self._persistence_unavailable()
 
         try:
-            result = self._run_persistent()
+            work = self._select_work()
+        except _NotificationLockUnavailable:
+            logger.info("LINE notification: skipped (advisory lock held by another process)")
+            return NotificationResult(status="skipped_locked")
         except SQLAlchemyError as exc:
             if not is_database_connection_error(exc):
                 raise
-            return self._handle_persistence_loss(exc)
+            self._revoke_database(exc)
+            return self._persistence_unavailable()
 
-        if isinstance(result, _PersistenceLoss):
-            return self._finish_daily_persistence_loss()
-        return result
+        if isinstance(work, NotificationResult):
+            return work
+        if self._daily_persistence_unavailable():
+            return self._persistence_unavailable()
 
-    def _result(self, status: str) -> NotificationResult:
-        return NotificationResult(
-            status=status,
-            sent=self.progress.sent,
-            failed=self.progress.failed,
+        sent = 0
+        failed = 0
+        skipped_locked = False
+        ai_failed = False
+        persistence_deferred = False
+
+        for pending in work.pending:
+            if self._daily_persistence_unavailable():
+                return NotificationResult(
+                    status="persistence_unavailable", sent=sent, failed=failed
+                )
+            outcome = self._send_prepared(
+                garmin_activity_id=pending.garmin_activity_id,
+                expected_delivery=pending.delivery,
+            )
+            sent += outcome.sent
+            failed += outcome.failed
+            skipped_locked = skipped_locked or outcome.status == "skipped_locked"
+            if outcome.status == "persistence_unavailable":
+                return NotificationResult(status=outcome.status, sent=sent, failed=failed)
+
+        for candidate in work.candidates:
+            if self._daily_persistence_unavailable():
+                return NotificationResult(
+                    status="persistence_unavailable", sent=sent, failed=failed
+                )
+            try:
+                delivery = self._prepare_candidate(candidate)
+            except _NotificationLockUnavailable:
+                skipped_locked = True
+                continue
+            except ActivityCoachError as exc:
+                logger.warning("Activity AI coach unavailable (%s)", type(exc).__name__)
+                failed += 1
+                ai_failed = True
+                continue
+            except ActivityPersistenceUnavailable:
+                return NotificationResult(
+                    status="persistence_unavailable",
+                    sent=sent,
+                    failed=failed + 1,
+                )
+            except LookupError:
+                logger.warning(
+                    "LINE notification: Activity subject is not persisted; delivery deferred"
+                )
+                failed += 1
+                persistence_deferred = True
+                continue
+            except SQLAlchemyError as exc:
+                if not is_database_connection_error(exc):
+                    raise
+                self._revoke_database(exc)
+                return NotificationResult(
+                    status="persistence_unavailable",
+                    sent=sent,
+                    failed=failed + 1,
+                )
+            if self._daily_persistence_unavailable():
+                return NotificationResult(
+                    status="persistence_unavailable", sent=sent, failed=failed
+                )
+
+            outcome = self._send_prepared(
+                garmin_activity_id=_garmin_activity_id(candidate),
+                expected_delivery=delivery,
+            )
+            sent += outcome.sent
+            failed += outcome.failed
+            skipped_locked = skipped_locked or outcome.status == "skipped_locked"
+            if outcome.status == "persistence_unavailable":
+                return NotificationResult(status=outcome.status, sent=sent, failed=failed)
+
+        if persistence_deferred:
+            return NotificationResult(
+                status="persistence_unavailable",
+                sent=sent,
+                failed=failed,
+            )
+        if ai_failed and not sent:
+            return NotificationResult(status="ai_failed", failed=failed)
+        if skipped_locked and not sent and not failed:
+            return NotificationResult(status="skipped_locked")
+        return NotificationResult(status="done", sent=sent, failed=failed)
+
+    def _select_work(self) -> _NotificationWork | NotificationResult:
+        with self._advisory_lock():
+            with self._db_session() as session:
+                notified_ids = get_notified_activity_ids(session)
+                all_candidates = self._all_candidates()
+                all_ids = [_garmin_activity_id(candidate) for candidate in all_candidates]
+                if not notified_ids:
+                    logger.info(
+                        "LINE notification: first run detected — seeding %d activities as baseline",
+                        len(all_ids),
+                    )
+                    seed_baseline_notifications(session, all_ids)
+                    return NotificationResult(status="seeded")
+
+                pending = tuple(
+                    _PendingActivityDelivery(
+                        garmin_activity_id=notification.garmin_activity_id,
+                        delivery=PreparedLineDelivery.from_model(notification),
+                    )
+                    for notification in list_pending_activity_notifications(
+                        session,
+                        limit=MAX_LINE_NOTIFICATIONS_PER_RUN,
+                    )
+                    if notification.garmin_activity_id is not None
+                )
+                available_slots = MAX_LINE_NOTIFICATIONS_PER_RUN - len(pending)
+                new_candidates = [
+                    candidate
+                    for candidate in all_candidates
+                    if _garmin_activity_id(candidate) not in notified_ids
+                ]
+                selected = tuple(new_candidates[:available_slots])
+                deferred = len(new_candidates) - len(selected)
+                if deferred:
+                    logger.warning(
+                        "LINE notification: capped at %d; deferring %d activities to later runs",
+                        MAX_LINE_NOTIFICATIONS_PER_RUN,
+                        deferred,
+                    )
+                if not pending and not selected:
+                    logger.info("LINE notification: no new activities to notify")
+                    return NotificationResult(status="no_new")
+                return _NotificationWork(pending=pending, candidates=selected)
+
+    def _prepare_candidate(self, candidate: _ActivityCandidate) -> PreparedLineDelivery:
+        garmin_activity_id = _garmin_activity_id(candidate)
+        spec = self._build_activity_spec(candidate, garmin_activity_id=garmin_activity_id)
+        return ActivityAINotificationPreparer(
+            session_factory=self._db_session,
+            notification_lock=self._advisory_lock,
+            generate=generate_activity_report,
+            render=lambda report: format_activity_coach_messages(
+                candidate.activity,
+                candidate.week,
+                analysis=report.report_text,
+            ),
+            persistence_available=lambda: not self._daily_persistence_unavailable(),
+        ).prepare(spec=spec, garmin_activity_id=garmin_activity_id)
+
+    def _build_activity_spec(
+        self,
+        candidate: _ActivityCandidate,
+        *,
+        garmin_activity_id: int,
+    ) -> AIReportSpec:
+        input_json = jsonable(
+            {
+                "activity": candidate.activity,
+                "activity_week": _week_facts(candidate.week),
+                "recent_training_weeks": [
+                    _week_facts(week)
+                    for week in self.context.get("weekly_analysis", [])
+                    if isinstance(week, dict)
+                ],
+            }
         )
+        canonical_input = json.dumps(
+            input_json,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(canonical_input.encode("utf-8")).hexdigest()[:16]
+        with self._db_session() as session:
+            activity = get_activity_by_garmin_id(session, garmin_activity_id)
+            if activity is None:
+                raise LookupError("Activity notification subject was not persisted")
+            return AIReportSpec(
+                idempotency_key=(
+                    f"activity:{garmin_activity_id}:{ACTIVITY_PROMPT_VERSION}:{digest}"
+                ),
+                user_id=activity.user_id,
+                report_scope="activity",
+                input_json=input_json,
+                prompt_version=ACTIVITY_PROMPT_VERSION,
+                activity_id=activity.id,
+                feature_version=ACTIVITY_CONTEXT_VERSION,
+            )
+
+    def _send_prepared(
+        self,
+        *,
+        garmin_activity_id: int,
+        expected_delivery: PreparedLineDelivery,
+    ) -> _DeliveryOutcome:
+        try:
+            with self._advisory_lock():
+                with self._db_session() as session:
+                    notification = get_prepared_activity_notification(
+                        session,
+                        garmin_activity_id,
+                    )
+                    if notification is None:
+                        raise RuntimeError("Prepared Activity delivery disappeared")
+                    delivery = PreparedLineDelivery.from_model(notification)
+                    if delivery.notification_id != expected_delivery.notification_id:
+                        raise RuntimeError("Prepared Activity delivery changed unexpectedly")
+                    if not delivery.should_send:
+                        return _DeliveryOutcome(status="already_sent")
+
+                    result = self.transport.send(
+                        self.token,
+                        self.group_id,
+                        delivery.rendered_messages,
+                    )
+                    if not result.success:
+                        self._log_send_failure(garmin_activity_id, result)
+                        return _DeliveryOutcome(status="line_failed", failed=1)
+
+                    try:
+                        mark_notification_sent(session, delivery.notification_id)
+                        session.commit()
+                    except SQLAlchemyError as exc:
+                        if not is_database_connection_error(exc):
+                            raise
+                        self._revoke_database(exc)
+                        logger.error(
+                            "LINE notification: accepted Activity %s but acknowledgement was not persisted (%s)",
+                            garmin_activity_id,
+                            type(exc).__name__,
+                        )
+                        return _DeliveryOutcome(
+                            status="persistence_unavailable",
+                            sent=1,
+                            failed=1,
+                        )
+                    return _DeliveryOutcome(status="sent", sent=1)
+        except _NotificationLockUnavailable:
+            return _DeliveryOutcome(status="skipped_locked")
+        except SQLAlchemyError as exc:
+            if not is_database_connection_error(exc):
+                raise
+            self._revoke_database(exc)
+            return _DeliveryOutcome(status="persistence_unavailable", failed=1)
 
     def _all_candidates(self) -> list[_ActivityCandidate]:
-        if self.progress.all_candidates is None:
-            candidates: list[_ActivityCandidate] = []
-            for week in self.context.get("weekly_analysis", []):
-                for activity in week.get("sessions", []):
-                    if activity.get("activity_id") is not None:
-                        candidates.append(_ActivityCandidate(activity, week))
-            candidates.sort(key=_activity_recency_key, reverse=True)
-            seen_activity_ids: set[Any] = set()
-            deduplicated: list[_ActivityCandidate] = []
-            for candidate in candidates:
-                if candidate.activity_id in seen_activity_ids:
-                    continue
-                seen_activity_ids.add(candidate.activity_id)
-                deduplicated.append(candidate)
-            self.progress.all_candidates = deduplicated
-        return self.progress.all_candidates
+        candidates: list[_ActivityCandidate] = []
+        for week in self.context.get("weekly_analysis", []):
+            if not isinstance(week, dict):
+                continue
+            for activity in week.get("sessions", []):
+                if isinstance(activity, dict) and activity.get("activity_id") is not None:
+                    candidates.append(_ActivityCandidate(activity, week))
+        candidates.sort(key=_activity_recency_key, reverse=True)
+        deduplicated: list[_ActivityCandidate] = []
+        seen_activity_ids: set[Any] = set()
+        for candidate in candidates:
+            if candidate.activity_id in seen_activity_ids:
+                continue
+            seen_activity_ids.add(candidate.activity_id)
+            deduplicated.append(candidate)
+        return deduplicated
 
-    def _lock_connection(self) -> ContextManager[Any]:
-        if self.profile is _NotificationProfile.MANUAL:
-            return _get_lock_connection()
-        if self.database is None:
-            raise AssertionError("Daily persistent notification requires database access")
-        return self.database.lock_connection()
-
-    def _db_session(self) -> ContextManager[Session]:
-        if self.profile is _NotificationProfile.MANUAL:
-            return _get_db_session()
-        if self.database is None:
-            raise AssertionError("Daily persistent notification requires database access")
-        return self.database.session()
-
-    def _run_persistent(self) -> NotificationResult | _PersistenceLoss:
-        with self._lock_connection() as lock_conn:
-            lock_acquired = False
+    @contextmanager
+    def _advisory_lock(self) -> Generator[None, None, None]:
+        with self._lock_connection() as connection:
+            if not _acquire_advisory_lock(connection):
+                raise _NotificationLockUnavailable()
             try:
-                lock_acquired = _acquire_advisory_lock(lock_conn)
-                if not lock_acquired:
-                    logger.info(
-                        "LINE notification: skipped (advisory lock held by another process)"
-                    )
-                    return NotificationResult(status="skipped_locked")
-
-                with self._db_session() as db_session:
-                    return self._run_under_lock(db_session)
+                yield
             finally:
-                if lock_acquired:
-                    self._release_lock(lock_conn)
+                self._release_lock(connection)
 
-    def _release_lock(self, lock_conn: Any) -> None:
+    def _release_lock(self, connection: Any) -> None:
+        """Release when safe; a revoked Daily Neon capability must stay untouched."""
         if self.profile is _NotificationProfile.DAILY:
             if self.database is None or not self.database.is_available():
                 return
             try:
-                _release_advisory_lock(lock_conn)
+                _release_advisory_lock(connection)
             except SQLAlchemyError as exc:
                 if not is_database_connection_error(exc):
                     raise
-                self.database.revoke(exc)
+                self._revoke_database(exc)
                 logger.warning(
                     "LINE notification: persistence lost while releasing advisory lock (%s)",
                     type(exc).__name__,
@@ -325,7 +513,7 @@ class _NotificationRun:
             return
 
         try:
-            _release_advisory_lock(lock_conn)
+            _release_advisory_lock(connection)
         except SQLAlchemyError as exc:
             if not is_database_connection_error(exc):
                 raise
@@ -334,222 +522,43 @@ class _NotificationRun:
                 type(exc).__name__,
             )
 
-    def _run_under_lock(
-        self,
-        db_session: Session,
-    ) -> NotificationResult | _PersistenceLoss:
-        notified_ids = get_notified_activity_ids(db_session)
-        all_candidates = self._all_candidates()
-        all_ids = [candidate.activity_id for candidate in all_candidates]
-
-        if not notified_ids:
-            logger.info(
-                "LINE notification: first run detected — seeding %d activities as baseline",
-                len(all_ids),
-            )
-            seed_baseline_notifications(db_session, all_ids)
-            return NotificationResult(status="seeded")
-
-        new_candidates = [
-            candidate
-            for candidate in all_candidates
-            if candidate.activity_id not in notified_ids
-        ]
-        if not new_candidates:
-            logger.info("LINE notification: no new activities to notify")
-            return NotificationResult(status="no_new")
-
-        selected = new_candidates[:MAX_LINE_NOTIFICATIONS_PER_RUN]
-        self.progress.fallback_candidates = selected
-        deferred = len(new_candidates) - len(selected)
-        if self.profile is _NotificationProfile.MANUAL:
-            logger.info("LINE notification: %d new activities to send", len(selected))
-        if deferred:
-            logger.warning(
-                "LINE notification: capped at %d; deferring %d activities to later runs",
-                MAX_LINE_NOTIFICATIONS_PER_RUN,
-                deferred,
-            )
-        return self._deliver_persistent(selected, db_session)
-
-    def _delivery(self, candidate: _ActivityCandidate) -> _ActivityDelivery:
-        return _ActivityDelivery(
-            candidate=candidate,
-            token=self.token,
-            group_id=self.group_id,
-            transport=self.transport,
+    def _daily_persistence_unavailable(self) -> bool:
+        return self.profile is _NotificationProfile.DAILY and (
+            self.database is None or not self.database.is_available()
         )
 
-    def _deliver_persistent(
-        self,
-        candidates: list[_ActivityCandidate],
-        db_session: Session,
-    ) -> NotificationResult | _PersistenceLoss:
-        for index, candidate in enumerate(candidates):
-            activity_id = candidate.activity_id
-            self.progress.attempted_activity_ids.add(activity_id)
-            outcome = self._delivery(candidate).run(db_session)
-
-            if outcome.state is _ActivityDeliveryState.LINE_FAILED:
-                self._log_send_failure(activity_id, outcome.send_result, stateless=False)
-                self.progress.failed += 1
-                continue
-
-            if outcome.state is _ActivityDeliveryState.RECORDED:
-                self.progress.sent += 1
-                self.progress.sent_unrecorded_activity_id = None
-                logger.info(
-                    "LINE notification: sent and recorded activity %s",
-                    activity_id,
-                )
-                continue
-
-            if outcome.state is not _ActivityDeliveryState.SENT_UNRECORDED:
-                raise AssertionError("Persistent Activity delivery returned invalid state")
-
-            self.progress.sent_unrecorded_activity_id = activity_id
-            persistence_error = outcome.persistence_error
-            if persistence_error is None:
-                raise AssertionError("Sent-unrecorded outcome requires persistence error")
-
-            if self.profile is _NotificationProfile.DAILY:
-                self.progress.sent += 1
-                if self.database is None:
-                    raise AssertionError("Daily persistence loss requires database access")
-                self.database.revoke(persistence_error)
-                return _PersistenceLoss(activity_id)
-
-            logger.warning(
-                "LINE notification: DB recording failed for activity %s (%s); "
-                "this activity may be sent again",
-                activity_id,
-                type(persistence_error).__name__,
-            )
-            try:
-                db_session.rollback()
-            except SQLAlchemyError as rollback_exc:
-                if not is_database_connection_error(rollback_exc):
-                    raise
-                logger.warning(
-                    "LINE notification: DB rollback failed after recording error (%s)",
-                    type(rollback_exc).__name__,
-                )
-            self.progress.failed += 1
-            remaining = len(candidates) - index - 1
-            logger.warning(
-                "LINE notification: persistence unavailable; stopping delivery with "
-                "%d activities not sent this run",
-                remaining,
-            )
-            return self._result("done")
-
-        return self._result("done")
-
-    def _handle_persistence_loss(self, exc: SQLAlchemyError) -> NotificationResult:
+    def _lock_connection(self) -> ContextManager[Any]:
         if self.profile is _NotificationProfile.MANUAL:
-            logger.warning(
-                "LINE notification: DB access failed (%s); continuing with stateless notification",
-                type(exc).__name__,
-            )
-            return self._continue_stateless(
-                status="stateless_done",
-                budget=MAX_DEGRADED_LINE_NOTIFICATIONS_PER_RUN,
-            )
-
+            return _get_lock_connection()
         if self.database is None:
-            raise AssertionError("Daily persistence loss requires database access")
-        self.database.revoke(exc)
-        return self._finish_daily_persistence_loss()
+            raise RuntimeError("Daily Activity notification requires persistence")
+        return self.database.lock_connection()
 
-    def _finish_daily_persistence_loss(self) -> NotificationResult:
-        sent_but_unrecorded = self.progress.sent_unrecorded_activity_id is not None
-        budget = MAX_DEGRADED_LINE_NOTIFICATIONS_PER_RUN - int(sent_but_unrecorded)
-        if sent_but_unrecorded:
-            logger.warning(
-                "LINE notification: activity %s was sent but not recorded; "
-                "it consumes one stateless notification slot and will not be resent this run",
-                self.progress.sent_unrecorded_activity_id,
-            )
-        return self._continue_stateless(
-            status="persistence_loss_done",
-            budget=budget,
-        )
-
-    def _continue_stateless(self, *, status: str, budget: int) -> NotificationResult:
-        candidates = self.progress.fallback_candidates or self._all_candidates()
-        remaining = [
-            candidate
-            for candidate in candidates
-            if candidate.activity_id not in self.progress.attempted_activity_ids
-        ]
-        selected = remaining[:max(budget, 0)]
-        deferred = len(remaining) - len(selected)
-
+    def _db_session(self) -> ContextManager[Session]:
         if self.profile is _NotificationProfile.MANUAL:
-            logger.warning(
-                "LINE notification: stateless fallback; sending up to %d activities "
-                "without DB deduplication. Repeated notifications are possible while "
-                "Neon is unavailable.",
-                max(budget, 0),
-            )
-            if deferred:
-                logger.warning(
-                    "LINE notification: stateless fallback capped at %d; "
-                    "%d activities not sent this run",
-                    max(budget, 0),
-                    deferred,
-                )
-        else:
-            logger.warning(
-                "LINE notification: persistence unavailable; sending up to %d remaining "
-                "activities statelessly. Repeated notifications are possible on a later run.",
-                max(budget, 0),
-            )
-            if deferred:
-                logger.warning(
-                    "LINE notification: stateless notification capped; "
-                    "%d activities not sent this run",
-                    deferred,
-                )
+            return _get_db_session()
+        if self.database is None:
+            raise RuntimeError("Daily Activity notification requires persistence")
+        return self.database.session()
 
-        self._deliver_stateless(selected)
-        return self._result(status)
-
-    def _deliver_stateless(self, candidates: list[_ActivityCandidate]) -> None:
-        for candidate in candidates:
-            activity_id = candidate.activity_id
-            self.progress.attempted_activity_ids.add(activity_id)
-            outcome = self._delivery(candidate).run(None)
-            if outcome.state is _ActivityDeliveryState.LINE_FAILED:
-                self._log_send_failure(
-                    activity_id,
-                    outcome.send_result,
-                    stateless=self.profile is _NotificationProfile.DAILY,
-                )
-                self.progress.failed += 1
-                continue
-            if outcome.state is not _ActivityDeliveryState.STATELESS_COMPLETE:
-                raise AssertionError("Stateless Activity delivery returned invalid state")
-            self.progress.sent += 1
-            logger.info("LINE notification: sent stateless activity %s", activity_id)
+    def _revoke_database(self, exc: BaseException) -> None:
+        if self.profile is _NotificationProfile.DAILY and self.database is not None:
+            self.database.revoke(exc)
 
     @staticmethod
-    def _log_send_failure(
-        activity_id: Any,
-        result: LineSendResult,
-        *,
-        stateless: bool,
-    ) -> None:
-        qualifier = "stateless " if stateless else ""
+    def _log_send_failure(activity_id: int, result: LineSendResult) -> None:
         logger.error(
-            "LINE notification: %ssend FAILED for activity %s "
-            "(status=%s, attempts=%d, error=%s)",
-            qualifier,
+            "LINE notification: send FAILED for activity %s (status=%s, attempts=%d, error=%s)",
             activity_id,
             result.status_code,
             result.attempts,
             result.error_type,
         )
+
+    @staticmethod
+    def _persistence_unavailable() -> NotificationResult:
+        logger.warning("LINE notification: persistence unavailable; delivery deferred")
+        return NotificationResult(status="persistence_unavailable", failed=1)
 
 
 def _run_notification(
@@ -564,11 +573,8 @@ def _run_notification(
     if not token or not group_id:
         logger.info("LINE notification disabled: missing required environment variables")
         return NotificationResult(status="disabled")
-
-    # Context, formatter, and program errors deliberately propagate.
-    context = _load_coach_context(coach_context_path)
     return _NotificationRun(
-        context=context,
+        context=_load_coach_context(coach_context_path),
         token=token,
         group_id=group_id,
         profile=profile,
@@ -582,7 +588,7 @@ def run_daily_line_notification(
     *,
     database: NotificationDatabaseAccess | None,
 ) -> NotificationResult:
-    """Run LINE notification under the Cloud Daily Run's monotonic persistence policy."""
+    """Run Daily Activity notifications; DB unavailability defers LINE delivery."""
     return _run_notification(
         coach_context_path,
         profile=_NotificationProfile.DAILY,
@@ -592,7 +598,7 @@ def run_daily_line_notification(
 
 
 def run_line_notification(coach_context_path: str) -> NotificationResult:
-    """Send manual-flow activity notifications with stateless DB-loss fallback."""
+    """Run manual Activity notifications with the same persistent delivery contract."""
     return _run_notification(
         coach_context_path,
         profile=_NotificationProfile.MANUAL,

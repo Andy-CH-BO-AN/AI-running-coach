@@ -19,9 +19,8 @@ LINE_SAFE_TEXT_LENGTH: int = 4800
 # A Push Message request can carry up to five message objects.
 LINE_MAX_MESSAGES_PER_PUSH: int = 5
 
-# Per-run safety caps. Degraded mode has no persistent deduplication.
+# Per-run safety cap for persisted Activity notifications.
 MAX_LINE_NOTIFICATIONS_PER_RUN: int = 20
-MAX_DEGRADED_LINE_NOTIFICATIONS_PER_RUN: int = 3
 
 # 連線超時（秒）
 CONNECT_TIMEOUT_SEC: int = 5

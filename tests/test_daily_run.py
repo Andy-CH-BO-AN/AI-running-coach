@@ -549,7 +549,7 @@ def test_runtime_loss_after_garmin_fetch_reuses_payload_without_second_neon_read
     assert disposed == [True]
 
 
-def test_activity_persistence_loss_forces_later_notification_to_stay_stateless(
+def test_activity_persistence_loss_passes_no_database_to_notification(
     monkeypatch,
     tmp_path,
 ):
@@ -587,7 +587,7 @@ def test_activity_persistence_loss_forces_later_notification_to_stay_stateless(
 
     def notify(_path, *, database):
         notification_database.append(database)
-        return NotificationResult(status="stateless_done", sent=1)
+        return NotificationResult(status="persistence_unavailable", failed=1)
 
     monkeypatch.setattr(daily_run, "run_daily_line_notification", notify)
 
@@ -647,7 +647,7 @@ def test_final_result_exposes_notification_persistence_loss(monkeypatch, tmp_pat
 
     def notify(_path, *, database):
         database.revoke(_connection_error())
-        return NotificationResult(status="persistence_loss_done", sent=1)
+        return NotificationResult(status="persistence_unavailable", failed=1)
 
     monkeypatch.setattr(daily_run, "run_daily_line_notification", notify)
 
@@ -656,8 +656,8 @@ def test_final_result_exposes_notification_persistence_loss(monkeypatch, tmp_pat
     assert result.mode is daily_run.DailyRunMode.PERSISTENCE_LOSS
     assert result.report_path == report_path
     assert result.notification == NotificationResult(
-        status="persistence_loss_done",
-        sent=1,
+        status="persistence_unavailable",
+        failed=1,
     )
 
 

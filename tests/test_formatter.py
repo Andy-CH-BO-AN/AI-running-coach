@@ -20,6 +20,7 @@ import pytest
 
 from src.notifications.constants import LINE_SAFE_TEXT_LENGTH
 from src.notifications.formatter import (
+    format_activity_coach_messages,
     format_activity_message,
     format_activity_messages,
     format_weekly_report_messages,
@@ -704,3 +705,18 @@ def test_weekly_report_formats_deterministic_facts_and_seeded_plan_dates():
     assert "🤖 AI 教練" in rendered
     assert "📅 下一週課表" in rendered
     assert "• Mon 2026-08-10｜跑步：建議課表 1" in rendered
+
+
+def test_activity_coach_messages_preserve_deterministic_pages_and_append_analysis():
+    activity = _make_easy_running_session()
+    week = _make_week()
+
+    messages = format_activity_coach_messages(
+        activity,
+        week,
+        analysis="本次課表完成度穩定，心率與負荷可作為本週安排的參考。後續優先補足恢復與睡眠，再依體感安排下一次品質訓練。",
+    )
+
+    assert messages[:-1] == format_activity_messages(activity, week)
+    assert messages[-1].startswith("🤖 AI 教練\n\n")
+    assert all(utf16_length(message) <= LINE_SAFE_TEXT_LENGTH for message in messages)

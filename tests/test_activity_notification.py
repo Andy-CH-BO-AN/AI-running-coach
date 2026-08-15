@@ -1,715 +1,832 @@
+"""Behavior contracts for persistent Activity AI LINE notifications."""
 from __future__ import annotations
 
-import logging
-from collections.abc import Iterator, Sequence
+import json
+import os
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date, timedelta
-from typing import Any
-from unittest.mock import MagicMock
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterator, Sequence
+from unittest.mock import patch
 
 import pytest
-from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 import src.notifications.notifier as notifier
+import src.services.ai_report_resolution as resolution
+from src.agents.activity_coach import ActivityCoachError
+from src.db.models import Activity, LineNotification
 from src.notifications.line_client import LineSendResult
 from src.notifications.notifier import (
     NotificationDatabaseAccess,
-    _ActivityDeliveryState,
-    _NotificationProfile,
-    _NotificationRun,
+    run_daily_line_notification,
+    run_line_notification,
 )
+from src.services.ai_report_resolution import PreparedLineDelivery
 
 
 SUCCESS = LineSendResult(True, 200, 1, None)
 LINE_FAILURE = LineSendResult(False, 500, 3, "server_error")
-ACTIVITY_MARKER_PREFIX = "activity-marker:"
 
 
-def _connection_error(message: str = "connection refused") -> OperationalError:
-    return OperationalError("SELECT 1", {}, ConnectionError(message))
-
-
-def _activity(activity_id: int, activity_date: date) -> dict[str, Any]:
-    return {
-        "activity_id": activity_id,
-        "date": activity_date.isoformat(),
-        "type": "easy",
-        "source_activity_type": "running",
-        "distance_km": 5.0,
-        "duration_min": 30.0,
-        "training_load": 50.0,
-        "avg_hr": 140,
-        "avg_pace": "6:00",
-        "segments": [],
-        "environment": {},
-        "data_quality": {"status": "complete", "missing_fields": []},
-    }
-
-
-def _context(*weeks: list[dict[str, Any]]) -> dict[str, Any]:
+def _context(*activity_ids: int) -> dict[str, Any]:
     return {
         "weekly_analysis": [
             {
-                "week_label": f"Week {index}",
-                "week_start": "2026-07-01",
-                "week_end": "2026-07-07",
-                "derived_training_load": 100.0,
-                "sessions": sessions,
+                "week_start": "2026-08-10",
+                "week_end": "2026-08-16",
+                "derived_total_distance_km": 18.0,
+                "derived_total_duration_min": 120.0,
+                "derived_training_load": 180.0,
+                "session_counts": {"total": len(activity_ids)},
+                "sessions": [
+                    {
+                        "activity_id": activity_id,
+                        "date": "2026-08-12",
+                        "source_activity_type": "running",
+                        "distance_km": 6.0,
+                        "duration_min": 36.0,
+                        "training_load": 60.0,
+                        "avg_hr": 142,
+                        "avg_pace": "6:00",
+                        "segments": [],
+                    }
+                    for activity_id in activity_ids
+                ],
             }
-            for index, sessions in enumerate(weeks)
         ]
     }
 
 
-@pytest.fixture(autouse=True)
-def _deterministic_activity_formatter(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Give the transport an identity marker independent of production copy/URLs."""
-    monkeypatch.setattr(
-        notifier,
-        "format_activity_messages",
-        lambda activity, _week: [
-            f"{ACTIVITY_MARKER_PREFIX}{activity['activity_id']}"
-        ],
-    )
-
-
-@dataclass
-class _FakeTransport:
-    failures: set[int] = field(default_factory=set)
-    sent_activity_ids: list[int] = field(default_factory=list)
-    calls: list[tuple[str, str, tuple[str, ...]]] = field(default_factory=list)
-
-    def send(
-        self,
-        token: str,
-        group_id: str,
-        messages: Sequence[str],
-    ) -> LineSendResult:
-        markers = [
-            message.removeprefix(ACTIVITY_MARKER_PREFIX)
-            for message in messages
-            if message.startswith(ACTIVITY_MARKER_PREFIX)
-        ]
-        assert len(markers) == 1, "one formatter marker must identify the Activity"
-        activity_id = int(markers[0])
-        self.sent_activity_ids.append(activity_id)
-        self.calls.append((token, group_id, tuple(messages)))
-        return LINE_FAILURE if activity_id in self.failures else SUCCESS
+def _write_context(tmp_path: Path, context: dict[str, Any]) -> Path:
+    path = tmp_path / "coach_context.json"
+    path.write_text(json.dumps(context), encoding="utf-8")
+    return path
 
 
 @dataclass
 class _FakeSession:
-    rollback_calls: int = 0
+    commits: int = 0
 
-    def rollback(self) -> None:
-        self.rollback_calls += 1
-
-
-@dataclass
-class _FakeDatabase:
-    available: bool = True
-    lock_error: SQLAlchemyError | None = None
-    session_error: SQLAlchemyError | None = None
-    revocations: list[SQLAlchemyError] = field(default_factory=list)
-    session_entries: int = 0
-    lock_entries: int = 0
-    session_object: _FakeSession = field(default_factory=_FakeSession)
-    lock_object: object = field(default_factory=object)
-
-    @contextmanager
-    def session(self) -> Iterator[_FakeSession]:
-        self.session_entries += 1
-        try:
-            if self.session_error is not None:
-                raise self.session_error
-            yield self.session_object
-        except SQLAlchemyError as exc:
-            if notifier.is_database_connection_error(exc):
-                self.revoke(exc)
-            raise
-
-    @contextmanager
-    def lock_connection(self) -> Iterator[object]:
-        self.lock_entries += 1
-        try:
-            if self.lock_error is not None:
-                raise self.lock_error
-            yield self.lock_object
-        except SQLAlchemyError as exc:
-            if notifier.is_database_connection_error(exc):
-                self.revoke(exc)
-            raise
-
-    def revoke(self, error: BaseException) -> None:
-        assert isinstance(error, SQLAlchemyError)
-        if self.available:
-            self.available = False
-            self.revocations.append(error)
-
-    def access(self) -> NotificationDatabaseAccess:
-        return NotificationDatabaseAccess(
-            is_available=lambda: self.available,
-            session=self.session,
-            lock_connection=self.lock_connection,
-            revoke=self.revoke,
-        )
+    def commit(self) -> None:
+        self.commits += 1
 
 
 @dataclass
-class _PersistenceProbe:
-    notified_ids: set[int] = field(default_factory=lambda: {-1})
-    recorded_ids: list[int] = field(default_factory=list)
-    seeded_ids: list[list[int]] = field(default_factory=list)
-    acquire: bool = True
-    acquire_error: SQLAlchemyError | None = None
-    load_error: SQLAlchemyError | None = None
-    seed_error: SQLAlchemyError | None = None
-    record_error: SQLAlchemyError | None = None
-    release_error: SQLAlchemyError | None = None
-    release_calls: int = 0
+class _FakeTransport:
+    results: list[LineSendResult] = field(default_factory=lambda: [SUCCESS])
+    messages: list[tuple[str, ...]] = field(default_factory=list)
 
-    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def acquire(_connection: object) -> bool:
-            if self.acquire_error is not None:
-                raise self.acquire_error
-            return self.acquire
-
-        def release(_connection: object) -> None:
-            self.release_calls += 1
-            if self.release_error is not None:
-                raise self.release_error
-
-        def load(_session: object) -> set[int]:
-            if self.load_error is not None:
-                raise self.load_error
-            return set(self.notified_ids)
-
-        def seed(_session: object, activity_ids: list[int]) -> int:
-            if self.seed_error is not None:
-                raise self.seed_error
-            self.seeded_ids.append(list(activity_ids))
-            return len(activity_ids)
-
-        def record(_session: object, activity_id: int) -> bool:
-            if self.record_error is not None:
-                raise self.record_error
-            self.recorded_ids.append(activity_id)
-            return True
-
-        monkeypatch.setattr(notifier, "_acquire_advisory_lock", acquire)
-        monkeypatch.setattr(notifier, "_release_advisory_lock", release)
-        monkeypatch.setattr(notifier, "get_notified_activity_ids", load)
-        monkeypatch.setattr(notifier, "seed_baseline_notifications", seed)
-        monkeypatch.setattr(notifier, "record_notification", record)
+    def send(self, _token: str, _group_id: str, messages: Sequence[str]) -> LineSendResult:
+        self.messages.append(tuple(messages))
+        return self.results.pop(0)
 
 
-def _execute(
-    monkeypatch: pytest.MonkeyPatch,
+def _prepared_notification(
+    activity_id: int,
     *,
-    context: dict[str, Any],
-    profile: _NotificationProfile,
-    transport: _FakeTransport,
-    probe: _PersistenceProbe,
-    database: _FakeDatabase | None = None,
-):
-    probe.install(monkeypatch)
-    database = database or _FakeDatabase()
-
-    if profile is _NotificationProfile.MANUAL:
-        monkeypatch.setattr(notifier, "_get_db_session", database.session)
-        monkeypatch.setattr(notifier, "_get_lock_connection", database.lock_connection)
-        access = None
-    else:
-        access = database.access()
-
-    result = _NotificationRun(
-        context=context,
-        token="test-token",
-        group_id="test-group",
-        profile=profile,
-        database=access,
-        transport=transport,
-    ).execute()
-    return result, database
-
-
-@pytest.mark.parametrize(
-    "profile",
-    [_NotificationProfile.MANUAL, _NotificationProfile.DAILY],
-)
-def test_persistent_profiles_share_newest_first_dedup_and_twenty_cap(
-    monkeypatch: pytest.MonkeyPatch,
-    profile: _NotificationProfile,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    start = date(2026, 7, 1)
-    activities = [_activity(activity_id, start + timedelta(days=activity_id)) for activity_id in range(1, 23)]
-    # Same Activity can appear in overlapping weeks; it still owns one lifecycle.
-    context = _context(activities[:11] + [_activity(22, start + timedelta(days=22))], activities[11:])
-    transport = _FakeTransport()
-    probe = _PersistenceProbe()
-
-    with caplog.at_level(logging.WARNING, logger="src.notifications.notifier"):
-        result, database = _execute(
-            monkeypatch,
-            context=context,
-            profile=profile,
-            transport=transport,
-            probe=probe,
-        )
-
-    assert result.status == "done"
-    assert (result.sent, result.failed) == (20, 0)
-    assert transport.sent_activity_ids == list(range(22, 2, -1))
-    assert probe.recorded_ids == transport.sent_activity_ids
-    assert probe.release_calls == 1
-    assert database.revocations == []
-    assert any(
-        record.levelno >= logging.WARNING
-        and "deferr" in record.getMessage().lower()
-        and "2" in record.getMessage()
-        for record in caplog.records
+    sent_at: datetime | None = None,
+) -> LineNotification:
+    return LineNotification(
+        id=uuid.uuid4(),
+        garmin_activity_id=activity_id,
+        weekly_summary_id=None,
+        ai_report_id=uuid.uuid4(),
+        rendered_messages=[f"persisted activity {activity_id}", "🤖 AI 教練\n\n分析"],
+        recorded_at=datetime(2026, 8, 12, tzinfo=timezone.utc),
+        sent_at=sent_at,
+        is_seed=False,
     )
 
 
-def test_daily_unavailable_is_newest_first_and_capped_at_three(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    start = date(2026, 7, 1)
-    context = _context([_activity(activity_id, start + timedelta(days=activity_id)) for activity_id in range(1, 6)])
-    transport = _FakeTransport()
-    probe = _PersistenceProbe()
-    database = _FakeDatabase(available=False)
+def _install_manual_persistence(monkeypatch: pytest.MonkeyPatch) -> _FakeSession:
+    session = _FakeSession()
 
-    with caplog.at_level(logging.WARNING, logger="src.notifications.notifier"):
-        result, database = _execute(
-            monkeypatch,
-            context=context,
-            profile=_NotificationProfile.DAILY,
-            transport=transport,
-            probe=probe,
-            database=database,
-        )
+    @contextmanager
+    def session_factory() -> Iterator[_FakeSession]:
+        yield session
 
-    assert result.status == "stateless_done"
-    assert (result.sent, result.failed) == (3, 0)
-    assert transport.sent_activity_ids == [5, 4, 3]
-    assert database.lock_entries == 0
-    assert database.session_entries == 0
-    assert probe.recorded_ids == []
-    warnings = [
-        record.getMessage().lower()
-        for record in caplog.records
-        if record.levelno >= logging.WARNING
-    ]
-    assert any("persistence" in message and "stateless" in message for message in warnings)
-    assert any(
-        "2" in message and ("not sent" in message or "defer" in message)
-        for message in warnings
-    )
+    @contextmanager
+    def lock_factory() -> Iterator[object]:
+        yield object()
+
+    monkeypatch.setattr(notifier, "_get_db_session", session_factory)
+    monkeypatch.setattr(notifier, "_get_lock_connection", lock_factory)
+    monkeypatch.setattr(notifier, "_acquire_advisory_lock", lambda _connection: True)
+    monkeypatch.setattr(notifier, "_release_advisory_lock", lambda _connection: None)
+    return session
 
 
-def test_seed_no_new_and_lock_outcomes(
+def _run_manual(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, context: dict[str, Any]):
+    path = _write_context(tmp_path, context)
+    return patch.dict(
+        os.environ,
+        {
+            "LINE_CHANNEL_ACCESS_TOKEN": "test-token",
+            "LINE_GROUP_ID": "test-group",
+        },
+        clear=True,
+    ), path
+
+
+def test_first_run_seeds_history_without_ai_or_line_send(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    context = _context([_activity(10, date(2026, 7, 10))])
-
-    seed_probe = _PersistenceProbe(notified_ids=set())
-    seed_transport = _FakeTransport()
-    seeded, _database = _execute(
-        monkeypatch,
-        context=context,
-        profile=_NotificationProfile.DAILY,
-        transport=seed_transport,
-        probe=seed_probe,
-    )
-    assert seeded.status == "seeded"
-    assert seed_probe.seeded_ids == [[10]]
-    assert seed_transport.sent_activity_ids == []
-    assert seed_probe.release_calls == 1
-
-    no_new_probe = _PersistenceProbe(notified_ids={-1, 10})
-    no_new_transport = _FakeTransport()
-    no_new, _database = _execute(
-        monkeypatch,
-        context=context,
-        profile=_NotificationProfile.DAILY,
-        transport=no_new_transport,
-        probe=no_new_probe,
-    )
-    assert no_new.status == "no_new"
-    assert no_new_transport.sent_activity_ids == []
-    assert no_new_probe.release_calls == 1
-
-    locked_probe = _PersistenceProbe(acquire=False)
-    locked_transport = _FakeTransport()
-    locked, locked_database = _execute(
-        monkeypatch,
-        context=context,
-        profile=_NotificationProfile.DAILY,
-        transport=locked_transport,
-        probe=locked_probe,
-    )
-    assert locked.status == "skipped_locked"
-    assert locked_transport.sent_activity_ids == []
-    assert locked_database.session_entries == 0
-    assert locked_probe.release_calls == 0
-
-
-def test_line_failure_continues_and_records_only_accepted_activities(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    context = _context(
-        [
-            _activity(1, date(2026, 7, 1)),
-            _activity(2, date(2026, 7, 2)),
-            _activity(3, date(2026, 7, 3)),
-        ]
-    )
-    transport = _FakeTransport(failures={3})
-    probe = _PersistenceProbe()
-
-    result, _database = _execute(
-        monkeypatch,
-        context=context,
-        profile=_NotificationProfile.DAILY,
-        transport=transport,
-        probe=probe,
-    )
-
-    assert result.status == "done"
-    assert (result.sent, result.failed) == (2, 1)
-    assert transport.sent_activity_ids == [3, 2, 1]
-    assert probe.recorded_ids == [2, 1]
-
-
-@pytest.mark.parametrize(
-    ("profile", "expected_status", "expected_ids", "expected_counts"),
-    [
-        (_NotificationProfile.MANUAL, "done", [4], (0, 1)),
-        (_NotificationProfile.DAILY, "persistence_loss_done", [4, 3, 2], (3, 0)),
-    ],
-)
-def test_sent_unrecorded_has_profile_specific_stop_and_count_semantics(
-    monkeypatch: pytest.MonkeyPatch,
-    profile: _NotificationProfile,
-    expected_status: str,
-    expected_ids: list[int],
-    expected_counts: tuple[int, int],
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    context = _context([_activity(activity_id, date(2026, 7, activity_id)) for activity_id in range(1, 5)])
-    transport = _FakeTransport()
-    persistence_secret = "persistence-error-secret-must-not-leak"
-    probe = _PersistenceProbe(
-        record_error=_connection_error(f"connection refused: {persistence_secret}")
-    )
-
-    with caplog.at_level(logging.WARNING, logger="src.notifications.notifier"):
-        result, database = _execute(
-            monkeypatch,
-            context=context,
-            profile=profile,
-            transport=transport,
-            probe=probe,
-        )
-
-    assert result.status == expected_status
-    assert (result.sent, result.failed) == expected_counts
-    assert transport.sent_activity_ids == expected_ids
-    assert len(set(transport.sent_activity_ids)) == len(transport.sent_activity_ids)
-    assert probe.recorded_ids == []
-    warning_records = [
-        record for record in caplog.records if record.levelno >= logging.WARNING
-    ]
-    assert persistence_secret not in " ".join(
-        record.getMessage() for record in warning_records
-    )
-    assert any(
-        "4" in record.getMessage()
-        and any(
-            term in record.getMessage().lower()
-            for term in ("again", "resent", "retry", "repeat")
-        )
-        for record in warning_records
-    )
-    if profile is _NotificationProfile.MANUAL:
-        assert database.session_object.rollback_calls == 1
-        assert database.revocations == []
-        assert probe.release_calls == 1
-    else:
-        assert len(database.revocations) == 1
-        assert database.session_object.rollback_calls == 0
-        assert probe.release_calls == 0
-
-
-@pytest.mark.parametrize("phase", ["lock", "acquire", "session", "load", "seed"])
-def test_daily_connection_loss_phase_matrix_enters_stateless_once(
-    monkeypatch: pytest.MonkeyPatch,
-    phase: str,
-) -> None:
-    context = _context([_activity(activity_id, date(2026, 7, activity_id)) for activity_id in range(1, 5)])
-    probe = _PersistenceProbe(notified_ids=set() if phase == "seed" else {-1})
-    database = _FakeDatabase()
-    if phase == "lock":
-        database.lock_error = _connection_error()
-    elif phase == "acquire":
-        probe.acquire_error = _connection_error()
-    elif phase == "session":
-        database.session_error = _connection_error()
-    elif phase == "load":
-        probe.load_error = _connection_error()
-    else:
-        probe.seed_error = _connection_error()
-
-    transport = _FakeTransport()
-    result, database = _execute(
-        monkeypatch,
-        context=context,
-        profile=_NotificationProfile.DAILY,
-        transport=transport,
-        probe=probe,
-        database=database,
-    )
-
-    assert result.status == "persistence_loss_done"
-    assert (result.sent, result.failed) == (3, 0)
-    assert transport.sent_activity_ids == [4, 3, 2]
-    assert len(database.revocations) == 1
-    assert probe.release_calls == 0
-
-
-def test_daily_failed_send_and_sent_unrecorded_are_not_retried_stateless(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    context = _context(
-        [_activity(activity_id, date(2026, 7, activity_id)) for activity_id in range(1, 6)]
-    )
-    transport = _FakeTransport(failures={5})
-    probe = _PersistenceProbe(record_error=_connection_error())
-
-    result, database = _execute(
-        monkeypatch,
-        context=context,
-        profile=_NotificationProfile.DAILY,
-        transport=transport,
-        probe=probe,
-    )
-
-    assert result.status == "persistence_loss_done"
-    assert (result.sent, result.failed) == (3, 1)
-    assert transport.sent_activity_ids == [5, 4, 3, 2]
-    assert len(set(transport.sent_activity_ids)) == 4
-    assert len(database.revocations) == 1
-    assert probe.release_calls == 0
-
-
-def test_daily_unlock_loss_revokes_without_resend_or_status_change(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    transport = _FakeTransport()
-    probe = _PersistenceProbe(release_error=_connection_error())
-
-    result, database = _execute(
-        monkeypatch,
-        context=_context([_activity(9, date(2026, 7, 9))]),
-        profile=_NotificationProfile.DAILY,
-        transport=transport,
-        probe=probe,
-    )
-
-    assert result.status == "done"
-    assert (result.sent, result.failed) == (1, 0)
-    assert transport.sent_activity_ids == [9]
-    assert probe.recorded_ids == [9]
-    assert len(database.revocations) == 1
-    assert probe.release_calls == 1
-
-
-def test_nontransient_db_and_formatter_errors_propagate(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    context = _context([_activity(7, date(2026, 7, 7))])
-
-    integrity_probe = _PersistenceProbe(
-        record_error=IntegrityError("INSERT", {}, Exception("constraint failed"))
-    )
-    integrity_database = _FakeDatabase()
-    with pytest.raises(IntegrityError):
-        _execute(
-            monkeypatch,
-            context=context,
-            profile=_NotificationProfile.DAILY,
-            transport=_FakeTransport(),
-            probe=integrity_probe,
-            database=integrity_database,
-        )
-    assert integrity_database.revocations == []
-    assert integrity_probe.release_calls == 1
-
-    formatter_probe = _PersistenceProbe()
-    formatter_database = _FakeDatabase()
+    _install_manual_persistence(monkeypatch)
+    seeded: list[list[int]] = []
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: set())
     monkeypatch.setattr(
         notifier,
-        "format_activity_messages",
-        lambda _activity, _week: (_ for _ in ()).throw(ValueError("bad formatter")),
+        "seed_baseline_notifications",
+        lambda _session, activity_ids: seeded.append(activity_ids) or len(activity_ids),
     )
-    with pytest.raises(ValueError, match="bad formatter"):
-        _execute(
-            monkeypatch,
-            context=context,
-            profile=_NotificationProfile.DAILY,
-            transport=_FakeTransport(),
-            probe=formatter_probe,
-            database=formatter_database,
-        )
-    assert formatter_database.revocations == []
-    assert formatter_probe.release_calls == 1
-
-
-def test_transport_program_error_propagates_without_revoking_persistence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    context = _context([_activity(7, date(2026, 7, 7))])
-    probe = _PersistenceProbe()
-    database = _FakeDatabase()
-    transport = MagicMock()
-    transport.send.side_effect = RuntimeError("transport programming error")
-
-    with pytest.raises(RuntimeError, match="transport programming error"):
-        _execute(
-            monkeypatch,
-            context=context,
-            profile=_NotificationProfile.DAILY,
-            transport=transport,
-            probe=probe,
-            database=database,
-        )
-
-    assert database.revocations == []
-    assert probe.release_calls == 1
-
-
-def test_production_transport_partial_batch_failure_never_records(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    candidate = notifier._ActivityCandidate(
-        _activity(8, date(2026, 7, 8)),
-        {"derived_training_load": 100.0},
-    )
-    pages = [f"page {index}" for index in range(6)]
-    monkeypatch.setattr(notifier, "format_activity_messages", lambda _activity, _week: pages)
-
-    accepted = MagicMock(status_code=200, headers={})
-    rejected = MagicMock(status_code=400, headers={})
-    http = MagicMock()
-    http.__enter__.return_value = http
-    http.__exit__.return_value = False
-    http.post.side_effect = [accepted, rejected]
-    monkeypatch.setattr("src.notifications.line_client.requests.Session", lambda: http)
-
-    recorded: list[int] = []
     monkeypatch.setattr(
         notifier,
-        "record_notification",
-        lambda _session, activity_id: recorded.append(activity_id),
-    )
-    delivery = notifier._ActivityDelivery(
-        candidate=candidate,
-        token="test-token",
-        group_id="test-group",
-        transport=notifier._ProductionLineTransport(),
-    )
-
-    outcome = delivery.run(_FakeSession())
-
-    assert outcome.state is _ActivityDeliveryState.LINE_FAILED
-    assert recorded == []
-    assert http.post.call_count == 2
-    assert len(http.post.call_args_list[0].kwargs["json"]["messages"]) == 5
-    assert len(http.post.call_args_list[1].kwargs["json"]["messages"]) == 1
-    retry_keys = [
-        call.kwargs["headers"]["X-Line-Retry-Key"]
-        for call in http.post.call_args_list
-    ]
-    assert retry_keys[0] != retry_keys[1]
-
-
-@pytest.mark.parametrize("daily", [False, True])
-@pytest.mark.parametrize(
-    "missing_name",
-    ["LINE_CHANNEL_ACCESS_TOKEN", "LINE_GROUP_ID"],
-)
-def test_public_wrappers_disable_before_loading_context_or_transport(
-    monkeypatch: pytest.MonkeyPatch,
-    daily: bool,
-    missing_name: str,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    token_secret = "token-secret-must-not-leak"
-    group_secret = "group-secret-must-not-leak"
-    monkeypatch.setenv("LINE_CHANNEL_ACCESS_TOKEN", token_secret)
-    monkeypatch.setenv("LINE_GROUP_ID", group_secret)
-    monkeypatch.delenv(missing_name)
-    monkeypatch.setattr(
-        notifier,
-        "_load_coach_context",
-        lambda _path: (_ for _ in ()).throw(AssertionError("context loaded")),
+        "ActivityAINotificationPreparer",
+        lambda **_kwargs: pytest.fail("baseline must not invoke AI"),
     )
     monkeypatch.setattr(
         notifier,
         "send_push_messages",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("transport called")),
+        lambda *_args: pytest.fail("baseline must not send LINE"),
     )
 
-    with caplog.at_level(logging.INFO, logger="src.notifications.notifier"):
-        if daily:
-            result = notifier.run_daily_line_notification("missing.json", database=None)
-        else:
-            result = notifier.run_line_notification("missing.json")
+    env, path = _run_manual(tmp_path, monkeypatch, _context(101, 102))
+    with env:
+        result = run_line_notification(str(path))
 
-    assert result == notifier.NotificationResult(status="disabled")
-    messages = " ".join(record.getMessage() for record in caplog.records)
-    assert any(
-        term in messages.lower()
-        for term in ("disabled", "missing")
-    )
-    assert token_secret not in messages
-    assert group_secret not in messages
+    assert (result.status, result.sent, result.failed) == ("seeded", 0, 0)
+    assert seeded == [[102, 101]]
 
 
-def test_internal_lifecycle_repr_hides_credentials_and_persistence_details() -> None:
-    marker_token = "token-must-not-leak"
-    marker_group = "group-must-not-leak"
-    marker_database_error = "database-secret-must-not-leak"
-    candidate = notifier._ActivityCandidate(
-        _activity(8, date(2026, 7, 8)),
-        {"derived_training_load": 100.0},
+def test_new_activity_prepares_ai_payload_outside_selection_lock_then_sends_canonical_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_manual_persistence(monkeypatch)
+    events: list[str] = []
+    prepared = PreparedLineDelivery(
+        notification_id=uuid.uuid4(),
+        ai_report_id=uuid.uuid4(),
+        rendered_messages=("deterministic facts", "🤖 AI 教練\n\ncanonical analysis"),
+        recorded_at=datetime(2026, 8, 12, tzinfo=timezone.utc),
+        already_sent=False,
     )
-    transport = _FakeTransport()
-    delivery = notifier._ActivityDelivery(
-        candidate=candidate,
-        token=marker_token,
-        group_id=marker_group,
-        transport=transport,
+    persisted = _prepared_notification(123)
+    persisted.id = prepared.notification_id
+    persisted.ai_report_id = prepared.ai_report_id
+    persisted.rendered_messages = list(prepared.rendered_messages)
+
+    def acquire(_connection: object) -> bool:
+        events.append("lock:acquire")
+        return True
+
+    def release(_connection: object) -> None:
+        events.append("lock:release")
+
+    class _Preparer:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def prepare(self, *, spec, garmin_activity_id: int) -> PreparedLineDelivery:
+            events.append("prepare")
+            assert garmin_activity_id == 123
+            assert spec.report_scope == "activity"
+            assert spec.input_json["activity"]["activity_id"] == 123
+            assert spec.input_json["recent_training_weeks"][0]["derived_training_load"] == 180.0
+            return prepared
+
+    sent_messages: list[tuple[str, ...]] = []
+    monkeypatch.setattr(notifier, "_acquire_advisory_lock", acquire)
+    monkeypatch.setattr(notifier, "_release_advisory_lock", release)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {-1})
+    monkeypatch.setattr(notifier, "list_pending_activity_notifications", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        notifier,
+        "get_activity_by_garmin_id",
+        lambda _session, activity_id: Activity(
+            id=uuid.uuid4(), user_id=uuid.uuid4(), garmin_activity_id=activity_id
+        ),
     )
-    run = _NotificationRun(
-        context=_context([candidate.activity]),
-        token=marker_token,
-        group_id=marker_group,
-        profile=_NotificationProfile.DAILY,
-        database=None,
-        transport=transport,
+    monkeypatch.setattr(notifier, "ActivityAINotificationPreparer", _Preparer)
+    monkeypatch.setattr(
+        notifier,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: persisted,
     )
-    outcome = notifier._ActivityDeliveryOutcome(
-        _ActivityDeliveryState.SENT_UNRECORDED,
-        SUCCESS,
-        OperationalError("INSERT", {}, ConnectionError(marker_database_error)),
+    monkeypatch.setattr(notifier, "mark_notification_sent", lambda *_args: None)
+    monkeypatch.setattr(
+        notifier,
+        "send_push_messages",
+        lambda _token, _group, messages: sent_messages.append(tuple(messages)) or SUCCESS,
     )
 
-    combined = " ".join((repr(delivery), repr(run), repr(outcome)))
-    assert marker_token not in combined
-    assert marker_group not in combined
-    assert marker_database_error not in combined
+    env, path = _run_manual(tmp_path, monkeypatch, _context(123))
+    with env:
+        result = run_line_notification(str(path))
+
+    assert (result.status, result.sent, result.failed) == ("done", 1, 0)
+    assert sent_messages == [prepared.rendered_messages]
+    assert events == [
+        "lock:acquire",
+        "lock:release",
+        "prepare",
+        "lock:acquire",
+        "lock:release",
+    ]
+
+
+def test_pending_payload_retries_without_ai_or_renderer_even_after_context_ages_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_manual_persistence(monkeypatch)
+    notification = _prepared_notification(456)
+    first_transport = _FakeTransport(results=[LINE_FAILURE])
+    second_transport = _FakeTransport(results=[SUCCESS])
+    transports = [first_transport, second_transport]
+
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {456})
+    monkeypatch.setattr(
+        notifier,
+        "list_pending_activity_notifications",
+        lambda *_args, **_kwargs: [notification],
+    )
+    monkeypatch.setattr(
+        notifier,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: notification,
+    )
+    monkeypatch.setattr(notifier, "mark_notification_sent", lambda *_args: None)
+    monkeypatch.setattr(
+        notifier,
+        "ActivityAINotificationPreparer",
+        lambda **_kwargs: pytest.fail("pending payload must not invoke AI"),
+    )
+    monkeypatch.setattr(
+        notifier,
+        "send_push_messages",
+        lambda *_args: transports.pop(0).send(*_args),
+    )
+
+    env, path = _run_manual(tmp_path, monkeypatch, _context())
+    with env:
+        first = run_line_notification(str(path))
+    with env:
+        second = run_line_notification(str(path))
+
+    expected = tuple(notification.rendered_messages or [])
+    assert (first.sent, first.failed) == (0, 1)
+    assert (second.status, second.sent, second.failed) == ("done", 1, 0)
+    assert first_transport.messages == [expected]
+    assert second_transport.messages == [expected]
+
+
+def test_ai_failure_defers_line_delivery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_manual_persistence(monkeypatch)
+
+    class _UnavailablePreparer:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def prepare(self, **_kwargs: Any) -> PreparedLineDelivery:
+            raise ActivityCoachError("provider unavailable")
+
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {-1})
+    monkeypatch.setattr(notifier, "list_pending_activity_notifications", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        notifier,
+        "get_activity_by_garmin_id",
+        lambda _session, activity_id: Activity(
+            id=uuid.uuid4(), user_id=uuid.uuid4(), garmin_activity_id=activity_id
+        ),
+    )
+    monkeypatch.setattr(notifier, "ActivityAINotificationPreparer", _UnavailablePreparer)
+    monkeypatch.setattr(
+        notifier,
+        "send_push_messages",
+        lambda *_args: pytest.fail("AI failure must defer LINE"),
+    )
+
+    env, path = _run_manual(tmp_path, monkeypatch, _context(789))
+    with env:
+        result = run_line_notification(str(path))
+
+    assert (result.status, result.sent, result.failed) == ("ai_failed", 0, 1)
+
+
+def test_unpersisted_activity_subject_defers_without_ai_or_line_send(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_manual_persistence(monkeypatch)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {-1})
+    monkeypatch.setattr(notifier, "list_pending_activity_notifications", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(notifier, "get_activity_by_garmin_id", lambda *_args: None)
+    monkeypatch.setattr(
+        notifier,
+        "ActivityAINotificationPreparer",
+        lambda **_kwargs: pytest.fail("unpersisted Activity must not invoke AI"),
+    )
+    monkeypatch.setattr(
+        notifier,
+        "send_push_messages",
+        lambda *_args: pytest.fail("unpersisted Activity must not send LINE"),
+    )
+
+    env, path = _run_manual(tmp_path, monkeypatch, _context(790))
+    with env:
+        result = run_line_notification(str(path))
+
+    assert (result.status, result.sent, result.failed) == ("persistence_unavailable", 0, 1)
+
+
+def test_daily_lookup_teardown_revocation_skips_ai_and_line_send(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    activity = Activity(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        garmin_activity_id=791,
+    )
+    available = True
+    session_count = 0
+
+    @dataclass
+    class _SubjectSession(_FakeSession):
+        def get(self, model: type[Any], key: uuid.UUID) -> Activity | None:
+            if model is Activity and key == activity.id:
+                return activity
+            return None
+
+    @contextmanager
+    def session_factory() -> Iterator[_SubjectSession]:
+        nonlocal session_count
+        session_count += 1
+        yield _SubjectSession()
+        if session_count == 4:
+            revoke(OperationalError("SELECT", {}, ConnectionError("connection refused")))
+
+    @contextmanager
+    def lock_factory() -> Iterator[object]:
+        yield object()
+
+    def revoke(_error: BaseException) -> None:
+        nonlocal available
+        available = False
+
+    database = NotificationDatabaseAccess(
+        is_available=lambda: available,
+        session=session_factory,
+        lock_connection=lock_factory,
+        revoke=revoke,
+    )
+    monkeypatch.setattr(notifier, "_acquire_advisory_lock", lambda _connection: True)
+    monkeypatch.setattr(notifier, "_release_advisory_lock", lambda _connection: None)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {-1})
+    monkeypatch.setattr(notifier, "list_pending_activity_notifications", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(notifier, "get_activity_by_garmin_id", lambda *_args: activity)
+    monkeypatch.setattr(
+        resolution,
+        "get_prepared_activity_notification",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        resolution,
+        "get_ai_report_by_idempotency_key",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        notifier,
+        "generate_activity_report",
+        lambda *_args: pytest.fail("revoked persistence must skip Gemini"),
+    )
+    monkeypatch.setattr(
+        notifier,
+        "send_push_messages",
+        lambda *_args: pytest.fail("revoked persistence must skip LINE"),
+    )
+
+    path = _write_context(tmp_path, _context(791))
+    with patch.dict(
+        os.environ,
+        {"LINE_CHANNEL_ACCESS_TOKEN": "test-token", "LINE_GROUP_ID": "test-group"},
+        clear=True,
+    ):
+        result = run_daily_line_notification(str(path), database=database)
+
+    assert (result.status, result.sent, result.failed) == ("persistence_unavailable", 0, 1)
+    assert session_count == 4
+
+
+def test_daily_database_unavailable_defers_without_stateless_line_send(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_context(tmp_path, _context(123))
+    database = NotificationDatabaseAccess(
+        is_available=lambda: False,
+        session=lambda: pytest.fail("unavailable DB must not open session"),
+        lock_connection=lambda: pytest.fail("unavailable DB must not acquire lock"),
+        revoke=lambda _error: None,
+    )
+    monkeypatch.setattr(
+        notifier,
+        "send_push_messages",
+        lambda *_args: pytest.fail("unavailable DB must not send LINE statelessly"),
+    )
+
+    with patch.dict(
+        os.environ,
+        {"LINE_CHANNEL_ACCESS_TOKEN": "test-token", "LINE_GROUP_ID": "test-group"},
+        clear=True,
+    ):
+        result = run_daily_line_notification(str(path), database=database)
+
+    assert (result.status, result.sent, result.failed) == ("persistence_unavailable", 0, 1)
+
+
+def test_manual_database_connection_loss_defers_without_line_send(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @contextmanager
+    def lock_factory() -> Iterator[object]:
+        yield object()
+
+    @contextmanager
+    def unavailable_session() -> Iterator[object]:
+        raise OperationalError("SELECT 1", {}, ConnectionError("connection refused"))
+        yield object()
+
+    monkeypatch.setattr(notifier, "_get_lock_connection", lock_factory)
+    monkeypatch.setattr(notifier, "_get_db_session", unavailable_session)
+    monkeypatch.setattr(notifier, "_acquire_advisory_lock", lambda _connection: True)
+    monkeypatch.setattr(notifier, "_release_advisory_lock", lambda _connection: None)
+    monkeypatch.setattr(
+        notifier,
+        "send_push_messages",
+        lambda *_args: pytest.fail("connection loss must not send LINE statelessly"),
+    )
+
+    env, path = _run_manual(tmp_path, monkeypatch, _context(123))
+    with env:
+        result = run_line_notification(str(path))
+
+    assert (result.status, result.sent, result.failed) == ("persistence_unavailable", 0, 1)
+
+
+def test_line_acknowledgement_persistence_failure_never_falls_back_to_stateless_send(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _install_manual_persistence(monkeypatch)
+    notification = _prepared_notification(901)
+
+    def failed_commit() -> None:
+        raise OperationalError("COMMIT", {}, ConnectionError("connection refused"))
+
+    monkeypatch.setattr(session, "commit", failed_commit)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {901})
+    monkeypatch.setattr(
+        notifier,
+        "list_pending_activity_notifications",
+        lambda *_args, **_kwargs: [notification],
+    )
+    monkeypatch.setattr(
+        notifier,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: notification,
+    )
+    monkeypatch.setattr(notifier, "mark_notification_sent", lambda *_args: None)
+    sent_messages: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        notifier,
+        "send_push_messages",
+        lambda _token, _group, messages: sent_messages.append(tuple(messages)) or SUCCESS,
+    )
+
+    env, path = _run_manual(tmp_path, monkeypatch, _context())
+    with env:
+        result = run_line_notification(str(path))
+
+    assert (result.status, result.sent, result.failed) == ("persistence_unavailable", 1, 1)
+    assert sent_messages == [tuple(notification.rendered_messages or [])]
+
+
+def test_daily_unlock_connection_loss_stops_later_delivery_and_preserves_completed_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeSession()
+    notification = _prepared_notification(903)
+    deferred_notification = _prepared_notification(904)
+    available = True
+    release_calls = 0
+    revoked: list[BaseException] = []
+
+    @contextmanager
+    def session_factory() -> Iterator[_FakeSession]:
+        yield session
+
+    @contextmanager
+    def lock_factory() -> Iterator[object]:
+        yield object()
+
+    def release(_connection: object) -> None:
+        nonlocal release_calls
+        release_calls += 1
+        if release_calls == 2:
+            raise OperationalError("UNLOCK", {}, ConnectionError("connection refused"))
+
+    def revoke(error: BaseException) -> None:
+        nonlocal available
+        available = False
+        revoked.append(error)
+
+    database = NotificationDatabaseAccess(
+        is_available=lambda: available,
+        session=session_factory,
+        lock_connection=lock_factory,
+        revoke=revoke,
+    )
+    monkeypatch.setattr(notifier, "_acquire_advisory_lock", lambda _connection: True)
+    monkeypatch.setattr(notifier, "_release_advisory_lock", release)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {903})
+    monkeypatch.setattr(
+        notifier,
+        "list_pending_activity_notifications",
+        lambda *_args, **_kwargs: [notification, deferred_notification],
+    )
+    monkeypatch.setattr(
+        notifier,
+        "get_prepared_activity_notification",
+        lambda _session, activity_id: {
+            903: notification,
+            904: deferred_notification,
+        }[activity_id],
+    )
+    monkeypatch.setattr(notifier, "mark_notification_sent", lambda *_args: None)
+    sent_messages: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        notifier,
+        "send_push_messages",
+        lambda _token, _group, messages: sent_messages.append(tuple(messages)) or SUCCESS,
+    )
+
+    path = _write_context(tmp_path, _context())
+    with patch.dict(
+        os.environ,
+        {"LINE_CHANNEL_ACCESS_TOKEN": "test-token", "LINE_GROUP_ID": "test-group"},
+        clear=True,
+    ):
+        result = run_daily_line_notification(str(path), database=database)
+
+    assert (result.status, result.sent, result.failed) == ("persistence_unavailable", 1, 0)
+    assert release_calls == 2
+    assert len(revoked) == 1
+    assert sent_messages == [tuple(notification.rendered_messages or [])]
+
+
+def test_daily_selection_unlock_loss_defers_without_ai_or_line_send(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeSession()
+    available = True
+    release_calls = 0
+
+    @contextmanager
+    def session_factory() -> Iterator[_FakeSession]:
+        yield session
+
+    @contextmanager
+    def lock_factory() -> Iterator[object]:
+        yield object()
+
+    def release(_connection: object) -> None:
+        nonlocal release_calls
+        release_calls += 1
+        raise OperationalError("UNLOCK", {}, ConnectionError("connection refused"))
+
+    def revoke(_error: BaseException) -> None:
+        nonlocal available
+        available = False
+
+    database = NotificationDatabaseAccess(
+        is_available=lambda: available,
+        session=session_factory,
+        lock_connection=lock_factory,
+        revoke=revoke,
+    )
+    monkeypatch.setattr(notifier, "_acquire_advisory_lock", lambda _connection: True)
+    monkeypatch.setattr(notifier, "_release_advisory_lock", release)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {-1})
+    monkeypatch.setattr(notifier, "list_pending_activity_notifications", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        notifier,
+        "ActivityAINotificationPreparer",
+        lambda **_kwargs: pytest.fail("unlock loss must not invoke AI"),
+    )
+    monkeypatch.setattr(
+        notifier,
+        "send_push_messages",
+        lambda *_args: pytest.fail("unlock loss must not send LINE"),
+    )
+
+    path = _write_context(tmp_path, _context(905))
+    with patch.dict(
+        os.environ,
+        {"LINE_CHANNEL_ACCESS_TOKEN": "test-token", "LINE_GROUP_ID": "test-group"},
+        clear=True,
+    ):
+        result = run_daily_line_notification(str(path), database=database)
+
+    assert (result.status, result.sent, result.failed) == ("persistence_unavailable", 0, 1)
+    assert release_calls == 1
+
+
+def test_daily_acknowledgement_connection_loss_skips_unlock_after_neon_revoke(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    notification = _prepared_notification(904)
+    available = True
+    release_calls = 0
+
+    @dataclass
+    class _FailingSession(_FakeSession):
+        def commit(self) -> None:
+            raise OperationalError("COMMIT", {}, ConnectionError("connection refused"))
+
+    session = _FailingSession()
+
+    @contextmanager
+    def session_factory() -> Iterator[_FailingSession]:
+        yield session
+
+    @contextmanager
+    def lock_factory() -> Iterator[object]:
+        yield object()
+
+    def release(_connection: object) -> None:
+        nonlocal release_calls
+        release_calls += 1
+
+    def revoke(_error: BaseException) -> None:
+        nonlocal available
+        available = False
+
+    database = NotificationDatabaseAccess(
+        is_available=lambda: available,
+        session=session_factory,
+        lock_connection=lock_factory,
+        revoke=revoke,
+    )
+    monkeypatch.setattr(notifier, "_acquire_advisory_lock", lambda _connection: True)
+    monkeypatch.setattr(notifier, "_release_advisory_lock", release)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {904})
+    monkeypatch.setattr(
+        notifier,
+        "list_pending_activity_notifications",
+        lambda *_args, **_kwargs: [notification],
+    )
+    monkeypatch.setattr(
+        notifier,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: notification,
+    )
+    monkeypatch.setattr(notifier, "mark_notification_sent", lambda *_args: None)
+    monkeypatch.setattr(notifier, "send_push_messages", lambda *_args: SUCCESS)
+
+    path = _write_context(tmp_path, _context())
+    with patch.dict(
+        os.environ,
+        {"LINE_CHANNEL_ACCESS_TOKEN": "test-token", "LINE_GROUP_ID": "test-group"},
+        clear=True,
+    ):
+        result = run_daily_line_notification(str(path), database=database)
+
+    assert (result.status, result.sent, result.failed) == ("persistence_unavailable", 1, 1)
+    assert release_calls == 1
+
+
+def test_manual_unlock_connection_loss_preserves_completed_delivery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_manual_persistence(monkeypatch)
+    notification = _prepared_notification(905)
+    release_calls = 0
+
+    def release(_connection: object) -> None:
+        nonlocal release_calls
+        release_calls += 1
+        if release_calls == 2:
+            raise OperationalError("UNLOCK", {}, ConnectionError("connection refused"))
+
+    monkeypatch.setattr(notifier, "_release_advisory_lock", release)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {905})
+    monkeypatch.setattr(
+        notifier,
+        "list_pending_activity_notifications",
+        lambda *_args, **_kwargs: [notification] if notification.sent_at is None else [],
+    )
+    monkeypatch.setattr(
+        notifier,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: notification,
+    )
+
+    def mark_sent(_session: _FakeSession, _notification_id: uuid.UUID) -> None:
+        notification.sent_at = datetime.now(timezone.utc)
+
+    sent_messages: list[tuple[str, ...]] = []
+    monkeypatch.setattr(notifier, "mark_notification_sent", mark_sent)
+    monkeypatch.setattr(
+        notifier,
+        "send_push_messages",
+        lambda _token, _group, messages: sent_messages.append(tuple(messages)) or SUCCESS,
+    )
+
+    env, path = _run_manual(tmp_path, monkeypatch, _context())
+    with env:
+        first = run_line_notification(str(path))
+    with env:
+        second = run_line_notification(str(path))
+
+    assert (first.status, first.sent, first.failed) == ("done", 1, 0)
+    assert (second.status, second.sent, second.failed) == ("no_new", 0, 0)
+    assert release_calls == 3
+    assert sent_messages == [tuple(notification.rendered_messages or [])]
+
+
+def test_manual_nonconnection_unlock_error_propagates_after_delivery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_manual_persistence(monkeypatch)
+    notification = _prepared_notification(906)
+    release_calls = 0
+
+    def release(_connection: object) -> None:
+        nonlocal release_calls
+        release_calls += 1
+        if release_calls == 2:
+            raise IntegrityError("UNLOCK", {}, Exception("constraint failed"))
+
+    monkeypatch.setattr(notifier, "_release_advisory_lock", release)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {906})
+    monkeypatch.setattr(
+        notifier,
+        "list_pending_activity_notifications",
+        lambda *_args, **_kwargs: [notification],
+    )
+    monkeypatch.setattr(
+        notifier,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: notification,
+    )
+    monkeypatch.setattr(notifier, "mark_notification_sent", lambda *_args: None)
+    monkeypatch.setattr(notifier, "send_push_messages", lambda *_args: SUCCESS)
+
+    env, path = _run_manual(tmp_path, monkeypatch, _context())
+    with env, pytest.raises(IntegrityError):
+        run_line_notification(str(path))
+
+
+def test_nonconnection_acknowledgement_error_propagates_after_line_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _install_manual_persistence(monkeypatch)
+    notification = _prepared_notification(902)
+
+    def failed_commit() -> None:
+        raise IntegrityError("COMMIT", {}, Exception("constraint failed"))
+
+    monkeypatch.setattr(session, "commit", failed_commit)
+    monkeypatch.setattr(notifier, "get_notified_activity_ids", lambda _session: {902})
+    monkeypatch.setattr(
+        notifier,
+        "list_pending_activity_notifications",
+        lambda *_args, **_kwargs: [notification],
+    )
+    monkeypatch.setattr(
+        notifier,
+        "get_prepared_activity_notification",
+        lambda _session, _activity_id: notification,
+    )
+    monkeypatch.setattr(notifier, "mark_notification_sent", lambda *_args: None)
+    monkeypatch.setattr(notifier, "send_push_messages", lambda *_args: SUCCESS)
+
+    env, path = _run_manual(tmp_path, monkeypatch, _context())
+    with env, pytest.raises(IntegrityError):
+        run_line_notification(str(path))
