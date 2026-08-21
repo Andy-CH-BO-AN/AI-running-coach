@@ -189,15 +189,16 @@ def parse_strength_training(
     total_sets = _integer(_summary_value(summary, "totalSets", "total_sets", "setCount"))
     active_count = _integer(_summary_value(summary, "activeSets", "active_sets"))
     total_reps = _integer(_summary_value(summary, "totalReps", "total_reps", "repCount"))
-    derived_count = len(active_set_reps) if active_set_reps else None
+    derived_total_count = len(sets) if sets else None
+    derived_active_count = len(active_set_reps) if active_set_reps else None
     derived_reps = (
         sum(rep for rep in active_set_reps if rep is not None)
         if active_set_reps and all(rep is not None for rep in active_set_reps)
         else None
     )
     return {
-        "total_sets": total_sets if total_sets is not None else derived_count,
-        "active_sets": active_count if active_count is not None else derived_count,
+        "total_sets": total_sets if total_sets is not None else derived_total_count,
+        "active_sets": active_count if active_count is not None else derived_active_count,
         "total_reps": total_reps if total_reps is not None else derived_reps,
         "total_volume_kg": _volume_kg(summary),
         "sets": sets,
