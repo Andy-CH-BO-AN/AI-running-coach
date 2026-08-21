@@ -166,7 +166,6 @@
     training_load: "訓練負荷",
     avg_hr: "平均心率",
     avg_pace: "平均配速",
-    avg_hr: "平均心率",
     cadence: "步頻",
     environment: "環境",
     estimated_temp_c: "氣溫",
@@ -672,10 +671,7 @@
       if (scoreDiff !== 0) {
         return scoreDiff;
       }
-      return compareActivityIdDesc(
-        a && a.activity_id,
-        b && b.activity_id
-      );
+      return compareActivityIdDesc(a && a.activity_id, b && b.activity_id);
     });
     var latestSameDaySession = latestDaySessions[0] || null;
 
@@ -699,10 +695,7 @@
       if (dateDiff !== 0) {
         return dateDiff;
       }
-      return compareActivityIdDesc(
-        a && a.activity_id,
-        b && b.activity_id
-      );
+      return compareActivityIdDesc(a && a.activity_id, b && b.activity_id);
     });
 
     var bestCandidate = candidateSessions[0] || null;
@@ -807,23 +800,18 @@
     if (!min && !max) {
       return "資料不足";
     }
-
     if (paceHasOpenEnd(max) && min) {
       return "快於 " + withPaceUnit(min);
     }
-
     if (paceHasOpenEnd(min) && max) {
       return "慢於 " + withPaceUnit(max);
     }
-
     if (!min) {
       return withPaceUnit(max);
     }
-
     if (!max) {
       return "快於 " + withPaceUnit(min);
     }
-
     return min + " - " + max;
   }
 
@@ -831,12 +819,10 @@
     if (typeof value !== "string") {
       return null;
     }
-
     var match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
     if (!match) {
       return null;
     }
-
     return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
   }
 
@@ -852,7 +838,6 @@
     if (!date) {
       return null;
     }
-
     date.setUTCDate(date.getUTCDate() + days);
     return formatIsoDate(date);
   }
@@ -862,7 +847,6 @@
     if (!date) {
       return null;
     }
-
     var jsDay = date.getUTCDay();
     return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][jsDay];
   }
@@ -872,7 +856,6 @@
     if (derived) {
       return derived;
     }
-
     var raw = fallbackText(value, "").trim();
     var upper = raw.toUpperCase();
     return DAY_ALIASES[upper] || raw || "";
@@ -883,18 +866,15 @@
     if (!date) {
       return fallbackText(isoDate, "日期不足");
     }
-
     return String(date.getUTCMonth() + 1) + "/" + String(date.getUTCDate());
   }
 
   function formatDateRangeLabel(startDate, endDate) {
     var startLabel = startDate ? formatDateLabel(startDate) : "";
     var endLabel = endDate ? formatDateLabel(endDate) : "";
-
     if (startLabel && endLabel) {
       return startLabel + "-" + endLabel;
     }
-
     return startLabel || endLabel || "日期未設定";
   }
 
@@ -905,7 +885,6 @@
     if (!date || !start || !end) {
       return false;
     }
-
     return date.getTime() >= start.getTime() && date.getTime() <= end.getTime();
   }
 
@@ -914,13 +893,11 @@
     if (!date) {
       return null;
     }
-
     var jsDay = date.getUTCDay();
     var offset = (8 - jsDay) % 7;
     if (offset === 0) {
       offset = 7;
     }
-
     date.setUTCDate(date.getUTCDate() + offset);
     return formatIsoDate(date);
   }
@@ -930,7 +907,6 @@
     if (!date) {
       return null;
     }
-
     var jsDay = date.getUTCDay();
     var offset = jsDay === 0 ? -6 : 1 - jsDay;
     date.setUTCDate(date.getUTCDate() + offset);
@@ -941,11 +917,9 @@
     if (trend === "improving") {
       return { label: "改善中", symbol: "↗", className: "trend-improving" };
     }
-
     if (trend === "declining") {
       return { label: "下滑", symbol: "↘", className: "trend-declining" };
     }
-
     return { label: "穩定", symbol: "→", className: "trend-stable" };
   }
 
@@ -953,27 +927,13 @@
     if (score === null) {
       return "unknown";
     }
-
     if (inverse) {
-      if (score >= 70) {
-        return "danger";
-      }
-
-      if (score >= 50) {
-        return "warning";
-      }
-
+      if (score >= 70) return "danger";
+      if (score >= 50) return "warning";
       return "good";
     }
-
-    if (score >= 75) {
-      return "good";
-    }
-
-    if (score >= 50) {
-      return "warning";
-    }
-
+    if (score >= 75) return "good";
+    if (score >= 50) return "warning";
     return "danger";
   }
 
@@ -984,44 +944,11 @@
     var fatigue = status.fatigue_level || {};
     var fitness = status.fitness_level || {};
     var trend = trendMeta(overall.trend);
-
     return [
-      {
-        key: "overall_rating",
-        title: "整體狀態",
-        score: clampScore(overall.score),
-        label: fallbackText(overall.label, "資料不足"),
-        trend: trend,
-        state: scoreState(clampScore(overall.score), false),
-        sourcePath: "athlete_status.overall_rating"
-      },
-      {
-        key: "fatigue_level",
-        title: "疲勞",
-        score: clampScore(fatigue.score),
-        label: fallbackText(fatigue.label, "資料不足"),
-        trend: { label: "越低越好", symbol: "", className: "trend-neutral" },
-        state: scoreState(clampScore(fatigue.score), true),
-        sourcePath: "athlete_status.fatigue_level"
-      },
-      {
-        key: "fitness_level",
-        title: "體能",
-        score: clampScore(fitness.score),
-        label: fallbackText(fitness.label, "資料不足"),
-        trend: { label: "體能基線", symbol: "", className: "trend-neutral" },
-        state: scoreState(clampScore(fitness.score), false),
-        sourcePath: "athlete_status.fitness_level"
-      },
-      {
-        key: "race_readiness",
-        title: "賽事準備度",
-        score: clampScore(readiness.confidence_score),
-        label: fallbackText(readiness.confidence_label, "資料不足"),
-        trend: { label: fallbackText(readiness.race_name, "目標賽事"), symbol: "", className: "trend-neutral" },
-        state: scoreState(clampScore(readiness.confidence_score), false),
-        sourcePath: "race_readiness.confidence_score"
-      }
+      { key: "overall_rating", title: "整體狀態", score: clampScore(overall.score), label: fallbackText(overall.label, "資料不足"), trend: trend, state: scoreState(clampScore(overall.score), false), sourcePath: "athlete_status.overall_rating" },
+      { key: "fatigue_level", title: "疲勞", score: clampScore(fatigue.score), label: fallbackText(fatigue.label, "資料不足"), trend: { label: "越低越好", symbol: "", className: "trend-neutral" }, state: scoreState(clampScore(fatigue.score), true), sourcePath: "athlete_status.fatigue_level" },
+      { key: "fitness_level", title: "體能", score: clampScore(fitness.score), label: fallbackText(fitness.label, "資料不足"), trend: { label: "體能基線", symbol: "", className: "trend-neutral" }, state: scoreState(clampScore(fitness.score), false), sourcePath: "athlete_status.fitness_level" },
+      { key: "race_readiness", title: "賽事準備度", score: clampScore(readiness.confidence_score), label: fallbackText(readiness.confidence_label, "資料不足"), trend: { label: fallbackText(readiness.race_name, "目標賽事"), symbol: "", className: "trend-neutral" }, state: scoreState(clampScore(readiness.confidence_score), false), sourcePath: "race_readiness.confidence_score" }
     ];
   }
 
@@ -1032,6 +959,7 @@
     var bikeDistance = 0;
     var duration = 0;
     var load = 0;
+    var hasTrainingLoad = false;
     var missingFields = {};
 
     sessions.forEach(function addSession(session) {
@@ -1039,15 +967,15 @@
       if (sourceType !== "strength_training" && isMissingNumericField(session, "distance_km")) {
         missingFields.distance_km = true;
       }
-
       if (isMissingNumericField(session, "duration_min")) {
         missingFields.duration_min = true;
       }
-
       if (isMissingNumericField(session, "training_load")) {
         missingFields.training_load = true;
+      } else {
+        load += Number(session.training_load);
+        hasTrainingLoad = true;
       }
-
       if (sourceType === "swimming" || sourceType === "lap_swimming") {
         swimDistance += toNumber(session.distance_km);
       } else if (sourceType === "cycling") {
@@ -1056,7 +984,6 @@
         runningDistance += toNumber(session.distance_km);
       }
       duration += toNumber(session && session.duration_min);
-      load += toNumber(session && session.training_load);
     });
 
     var missingFieldNames = Object.keys(missingFields);
@@ -1073,7 +1000,7 @@
       derived_swim_distance_km: roundTo(swimDistance, 2),
       derived_bike_distance_km: roundTo(bikeDistance, 2),
       derived_total_duration_min: roundTo(duration, 1),
-      derived_training_load: roundTo(load, 1),
+      derived_training_load: sessions.length === 0 ? 0 : hasTrainingLoad ? roundTo(load, 1) : null,
       data_quality: qualityStatus,
       missing_fields: missingFieldNames,
       sessions_count: sessions.length
@@ -1084,9 +1011,7 @@
     return {
       total_sets: isPresentNumber(strength && strength.total_sets) ? roundTo(strength.total_sets, 0) : null,
       total_reps: isPresentNumber(strength && strength.total_reps) ? roundTo(strength.total_reps, 0) : null,
-      total_volume_kg: isPresentNumber(strength && strength.total_volume_kg)
-        ? roundTo(strength.total_volume_kg, 1)
-        : null
+      total_volume_kg: isPresentNumber(strength && strength.total_volume_kg) ? roundTo(strength.total_volume_kg, 1) : null
     };
   }
 
@@ -1119,36 +1044,16 @@
     var explicitFocuses = safeArray(week && week.intensity_focuses).map(function adaptFocus(item) {
       if (typeof item === "string") {
         var text = item.trim();
-        if (!text) {
-          return null;
-        }
-        return {
-          dimension: "intensity",
-          label: intensityFocusLabel("intensity"),
-          headline: "強度重點",
-          analysis: text
-        };
+        if (!text) return null;
+        return { dimension: "intensity", label: intensityFocusLabel("intensity"), headline: "強度重點", analysis: text };
       }
-      if (!item || typeof item !== "object") {
-        return null;
-      }
-
+      if (!item || typeof item !== "object") return null;
       var analysis = fallbackText(item.analysis || item.text, "").trim();
-      if (!analysis) {
-        return null;
-      }
+      if (!analysis) return null;
       var dimension = fallbackText(item.dimension, "intensity");
-      return {
-        dimension: dimension,
-        label: intensityFocusLabel(dimension),
-        headline: fallbackText(item.headline, "強度重點"),
-        analysis: analysis
-      };
+      return { dimension: dimension, label: intensityFocusLabel(dimension), headline: fallbackText(item.headline, "強度重點"), analysis: analysis };
     }).filter(Boolean).slice(0, 2);
-    var intensityFocuses = explicitFocuses.length > 0
-      ? explicitFocuses
-      : buildFallbackIntensityFocuses(week, adaptedSessions, metrics);
-
+    var intensityFocuses = explicitFocuses.length > 0 ? explicitFocuses : buildFallbackIntensityFocuses(week, adaptedSessions, metrics);
     return {
       index: index,
       week_label: fallbackText(week && week.week_label, "第" + String(index + 1) + "週"),
@@ -1157,12 +1062,7 @@
       key_observation: fallbackText(week && week.key_observation, "此週尚無 AI 觀察。"),
       weekly_assessment: fallbackText(week && week.weekly_assessment, "此週資料不足。"),
       weekly_recommendation: fallbackText(week && week.weekly_recommendation, "暫無建議。"),
-      risk_flags: safeArray(week && week.risk_flags).map(function adaptRiskFlag(flag) {
-        return {
-          code: fallbackText(flag, ""),
-          label: riskFlagLabel(flag)
-        };
-      }),
+      risk_flags: safeArray(week && week.risk_flags).map(function adaptRiskFlag(flag) { return { code: fallbackText(flag, ""), label: riskFlagLabel(flag) }; }),
       intensity_focuses: intensityFocuses,
       sessions: adaptedSessions,
       metrics: metrics
@@ -1176,89 +1076,44 @@
       var anaerobic = toNumber(session.training_effect_anaerobic) * 12;
       var aerobic = toNumber(session.training_effect_aerobic) * 7;
       var load = Math.min(toNumber(session.training_load), 120) * 0.25;
-      var heat = isPresentNumber(session && session.environment && session.environment.estimated_temp_c)
-        ? Math.max(0, toNumber(session.environment.estimated_temp_c) - 26) * 1.5
-        : 0;
-      return {
-        session: session,
-        score: anaerobic + aerobic + load + heat
-      };
+      var heat = isPresentNumber(session && session.environment && session.environment.estimated_temp_c) ? Math.max(0, toNumber(session.environment.estimated_temp_c) - 26) * 1.5 : 0;
+      return { session: session, score: anaerobic + aerobic + load + heat };
     }).sort(function sortByScore(a, b) {
-      if (b.score !== a.score) {
-        return b.score - a.score;
-      }
+      if (b.score !== a.score) return b.score - a.score;
       return fallbackText(b.session.date, "").localeCompare(fallbackText(a.session.date, ""));
     });
-
     sessions.forEach(function inspectSession(session) {
       var temp = session.environment && session.environment.estimated_temp_c;
-      if (isPresentNumber(temp) && (hottestTemp === null || Number(temp) > hottestTemp)) {
-        hottestTemp = roundTo(temp, 1);
-      }
+      if (isPresentNumber(temp) && (hottestTemp === null || Number(temp) > hottestTemp)) hottestTemp = roundTo(temp, 1);
     });
-
     if (safeArray(week && week.risk_flags).indexOf("heat_stress") !== -1 && hottestTemp !== null) {
-      focuses.push({
-        dimension: "heat",
-        label: intensityFocusLabel("heat"),
-        headline: "高溫放大心率反應",
-        analysis: String(hottestTemp) + "°C 環境下，本週強度解讀要同時看體感與配速，不能只看心率高低。"
-      });
+      focuses.push({ dimension: "heat", label: intensityFocusLabel("heat"), headline: "高溫放大心率反應", analysis: String(hottestTemp) + "°C 環境下，本週強度解讀要同時看體感與配速，不能只看心率高低。" });
     }
-
     rankedSessions.slice(0, 2).forEach(function addRepresentativeSession(item, index) {
       var session = item.session;
       var typeLabel = displaySessionTypeLabel(session);
       var teParts = [];
-      if (isPresentNumber(session.training_effect_anaerobic) && toNumber(session.training_effect_anaerobic) > 0) {
-        teParts.push("無氧 TE " + roundTo(session.training_effect_anaerobic, 1));
-      }
-      if (isPresentNumber(session.training_effect_aerobic) && toNumber(session.training_effect_aerobic) > 0) {
-        teParts.push("有氧 TE " + roundTo(session.training_effect_aerobic, 1));
-      }
-      if (isPresentNumber(session.training_load) && toNumber(session.training_load) > 0) {
-        teParts.push("load " + roundTo(session.training_load, 1));
-      }
-      var usePaceDimension = isRunningSourceSession(session) && (
-        toNumber(session.training_effect_anaerobic) >= 1.5
-        || fallbackText(session.avg_pace, "").trim() !== ""
-      );
-
+      if (isPresentNumber(session.training_effect_anaerobic) && toNumber(session.training_effect_anaerobic) > 0) teParts.push("無氧 TE " + roundTo(session.training_effect_anaerobic, 1));
+      if (isPresentNumber(session.training_effect_aerobic) && toNumber(session.training_effect_aerobic) > 0) teParts.push("有氧 TE " + roundTo(session.training_effect_aerobic, 1));
+      if (isPresentNumber(session.training_load) && toNumber(session.training_load) > 0) teParts.push("load " + roundTo(session.training_load, 1));
+      var usePaceDimension = isRunningSourceSession(session) && (toNumber(session.training_effect_anaerobic) >= 1.5 || fallbackText(session.avg_pace, "").trim() !== "");
       focuses.push({
         dimension: usePaceDimension ? "pace" : "load",
         label: intensityFocusLabel(usePaceDimension ? "pace" : "load"),
         headline: "代表課 " + String(index + 1) + "：" + formatDateLabel(session.date) + " " + typeLabel,
-        analysis: teParts.length > 0
-          ? teParts.join(" · ")
-            + (isRunningSourceSession(session)
-              ? "，這堂跑步仍該和高溫、配速或加速段一起判讀實際負荷。"
-              : "，這堂課比單看平均心率更適合拿來判斷本週強度品質。")
-          : "這堂課是本週最值得優先回看的強度課。"
+        analysis: teParts.length > 0 ? teParts.join(" · ") + (isRunningSourceSession(session) ? "，這堂跑步仍該和高溫、配速或加速段一起判讀實際負荷。" : "，這堂課比單看平均心率更適合拿來判斷本週強度品質。") : "這堂課是本週最值得優先回看的強度課。"
       });
     });
-
-    if (!focuses.length && metrics.derived_training_load > 0) {
-      focuses.push({
-        dimension: "load",
-        label: intensityFocusLabel("load"),
-        headline: "先看總負荷，再看區間比例",
-        analysis: "本週累積 " + metrics.derived_training_load + " TSS，強度分佈應和總量一起解讀，避免單看某一個區間百分比。"
-      });
+    if (!focuses.length && metrics.derived_training_load !== null && metrics.derived_training_load > 0) {
+      focuses.push({ dimension: "load", label: intensityFocusLabel("load"), headline: "先看總負荷，再看區間比例", analysis: "本週累積 " + metrics.derived_training_load + " TSS，強度分佈應和總量一起解讀，避免單看某一個區間百分比。" });
     }
-
     return focuses.slice(0, 2);
   }
 
   function buildWeeklyAnalysis(report) {
     var weeks = safeArray(report.weekly_analysis).map(adaptWeek);
-    var chronological = weeks.slice().sort(function sortByDate(a, b) {
-      return fallbackText(a.week_start, "").localeCompare(fallbackText(b.week_start, ""));
-    });
-
-    return {
-      weeks: weeks,
-      chronological: chronological
-    };
+    var chronological = weeks.slice().sort(function sortByDate(a, b) { return fallbackText(a.week_start, "").localeCompare(fallbackText(b.week_start, "")); });
+    return { weeks: weeks, chronological: chronological };
   }
 
   function crossTrainingAnalysis(session) {
@@ -1267,21 +1122,14 @@
     var load = roundTo(session && session.training_load, 1);
     var aerobic = roundTo(session && session.training_effect_aerobic, 1);
     var anaerobic = roundTo(session && session.training_effect_anaerobic, 1);
-
     if (sourceType === "swimming" || sourceType === "lap_swimming") {
-      if (aerobic >= 3) {
-        return "這堂游泳偏有氧刺激，可補容量又不額外增加跑步衝擊。";
-      }
+      if (aerobic >= 3) return "這堂游泳偏有氧刺激，可補容量又不額外增加跑步衝擊。";
       return "這堂游泳以恢復和活動度維持為主，適合放在跑步主課之間。";
     }
-
     if (sourceType === "cycling") {
-      if (load >= 80 || aerobic >= 3 || anaerobic >= 2) {
-        return "這堂單車負荷偏高，對心肺有幫助，但隔天跑步主課要留意腿部殘留疲勞。";
-      }
+      if (load >= 80 || aerobic >= 3 || anaerobic >= 2) return "這堂單車負荷偏高，對心肺有幫助，但隔天跑步主課要留意腿部殘留疲勞。";
       return "這堂單車主要扮演有氧補量，不應搶走跑步主課的恢復資源。";
     }
-
     return sessionTypeLabel + " 是本週負荷最高的交叉訓練，可當作跑步以外的補量刺激。";
   }
 
@@ -1291,34 +1139,21 @@
         var sourceType = normalizedSourceActivityType(session);
         return sourceType === "swimming" || sourceType === "lap_swimming" || sourceType === "cycling";
       });
-      if (!sessions.length) {
-        return null;
-      }
-
+      if (!sessions.length) return null;
       var picked = sessions.slice().sort(function sortByLoad(a, b) {
         var loadDiff = toNumber(b.training_load) - toNumber(a.training_load);
-        if (loadDiff !== 0) {
-          return loadDiff;
-        }
+        if (loadDiff !== 0) return loadDiff;
         return fallbackText(b.date, "").localeCompare(fallbackText(a.date, ""));
       })[0];
-      var aiFocus = week && week.cross_training_focus && typeof week.cross_training_focus === "object"
-        ? week.cross_training_focus
-        : {};
+      var aiFocus = week && week.cross_training_focus && typeof week.cross_training_focus === "object" ? week.cross_training_focus : {};
       var focusActivityId = fallbackText(aiFocus.activity_id, "").trim();
       var canUseAiFocus = !focusActivityId;
       if (focusActivityId) {
-        var focusedSession = sessions.find(function matchesFocusActivity(session) {
-          return fallbackText(session.activity_id, "").trim() === focusActivityId;
-        });
-        if (focusedSession) {
-          picked = focusedSession;
-          canUseAiFocus = true;
-        }
+        var focusedSession = sessions.find(function matchesFocusActivity(session) { return fallbackText(session.activity_id, "").trim() === focusActivityId; });
+        if (focusedSession) { picked = focusedSession; canUseAiFocus = true; }
       }
       var aiAnalysis = canUseAiFocus ? fallbackText(aiFocus.analysis, "").trim() : "";
       var aiHeadline = canUseAiFocus ? fallbackText(aiFocus.headline, "").trim() : "";
-
       return {
         week_index: index,
         week_label: fallbackText(week && week.week_label, "第" + String(index + 1) + "週"),
@@ -1338,85 +1173,37 @@
   function buildHrZones(report) {
     var distribution = report.hr_zone_distribution || {};
     var zonesByNumber = {};
-    safeArray(distribution.zones).forEach(function mapZone(zone) {
-      if (zone && isPresentNumber(zone.zone)) {
-        zonesByNumber[Number(zone.zone)] = zone;
-      }
-    });
-
+    safeArray(distribution.zones).forEach(function mapZone(zone) { if (zone && isPresentNumber(zone.zone)) zonesByNumber[Number(zone.zone)] = zone; });
     var zones = [1, 2, 3, 4, 5].map(function normalizeZone(zoneNumber, index) {
       var zone = zonesByNumber[zoneNumber] || {};
-      return {
-        zone: zoneNumber,
-        name: fallbackText(zone.name, "Z" + String(zoneNumber)),
-        minutes: roundTo(zone.minutes, 1),
-        percentage: roundTo(zone.percentage, 1),
-        color: HR_ZONE_COLORS[index],
-        sourcePath: "hr_zone_distribution.zones[" + String(index) + "]"
-      };
+      return { zone: zoneNumber, name: fallbackText(zone.name, "Z" + String(zoneNumber)), minutes: roundTo(zone.minutes, 1), percentage: roundTo(zone.percentage, 1), color: HR_ZONE_COLORS[index], sourcePath: "hr_zone_distribution.zones[" + String(index) + "]" };
     });
-
     return {
       period_weeks: distribution.period_weeks || null,
       zones: zones,
-      total_minutes: roundTo(zones.reduce(function sum(total, zone) {
-        return total + toNumber(zone.minutes);
-      }, 0), 1),
+      total_minutes: roundTo(zones.reduce(function sum(total, zone) { return total + toNumber(zone.minutes); }, 0), 1),
       assessment: fallbackText(distribution.assessment, "心率區間資料不足。"),
       is_polarized: Boolean(distribution.is_polarized),
       recommendation: fallbackText(distribution.recommendation, "暫無心率區間建議。"),
-      has_data: zones.some(function hasMinutes(zone) {
-        return zone.minutes > 0 || zone.percentage > 0;
-      })
+      has_data: zones.some(function hasMinutes(zone) { return zone.minutes > 0 || zone.percentage > 0; })
     };
   }
 
   function buildPhysioMetrics(report) {
     var metrics = report.physio_metrics || {};
     var lactate = metrics.lactate_threshold || {};
-    var paceZones = safeArray(metrics.pace_zones).slice().sort(function sortPaceZones(a, b) {
-      return toNumber(a && a.zone) - toNumber(b && b.zone);
-    }).map(function adaptPaceZone(zone) {
-      return {
-        zone: zone.zone,
-        name: fallbackText(zone.name, "Zone " + String(zone.zone)),
-        pace_min: fallbackText(zone.pace_min, "資料不足"),
-        pace_max: fallbackText(zone.pace_max, "資料不足"),
-        pace_range: paceRangeLabel(zone.pace_min, zone.pace_max),
-        hr_min: isPresentNumber(zone.hr_min) ? zone.hr_min : null,
-        hr_max: isPresentNumber(zone.hr_max) ? zone.hr_max : null,
-        is_reasonable: zone.is_reasonable !== false,
-        note: fallbackText(zone.note, "")
-      };
+    var paceZones = safeArray(metrics.pace_zones).slice().sort(function sortPaceZones(a, b) { return toNumber(a && a.zone) - toNumber(b && b.zone); }).map(function adaptPaceZone(zone) {
+      return { zone: zone.zone, name: fallbackText(zone.name, "Zone " + String(zone.zone)), pace_min: fallbackText(zone.pace_min, "資料不足"), pace_max: fallbackText(zone.pace_max, "資料不足"), pace_range: paceRangeLabel(zone.pace_min, zone.pace_max), hr_min: isPresentNumber(zone.hr_min) ? zone.hr_min : null, hr_max: isPresentNumber(zone.hr_max) ? zone.hr_max : null, is_reasonable: zone.is_reasonable !== false, note: fallbackText(zone.note, "") };
     });
-
     return {
-      vo2max: {
-        value: metrics.vo2max && isPresentNumber(metrics.vo2max.value) ? metrics.vo2max.value : null,
-        unit: fallbackText(metrics.vo2max && metrics.vo2max.unit, ""),
-        assessment: fallbackText(metrics.vo2max && metrics.vo2max.assessment, "資料不足")
-      },
+      vo2max: { value: metrics.vo2max && isPresentNumber(metrics.vo2max.value) ? metrics.vo2max.value : null, unit: fallbackText(metrics.vo2max && metrics.vo2max.unit, ""), assessment: fallbackText(metrics.vo2max && metrics.vo2max.assessment, "資料不足") },
       lactate_threshold: {
-        heart_rate: {
-          value: lactate.heart_rate && isPresentNumber(lactate.heart_rate.value) ? lactate.heart_rate.value : null,
-          unit: fallbackText(lactate.heart_rate && lactate.heart_rate.unit, "bpm")
-        },
-        pace: {
-          value: fallbackText(lactate.pace && lactate.pace.value, "資料不足"),
-          unit: fallbackText(lactate.pace && lactate.pace.unit, "/km"),
-          assessment: ""
-        },
+        heart_rate: { value: lactate.heart_rate && isPresentNumber(lactate.heart_rate.value) ? lactate.heart_rate.value : null, unit: fallbackText(lactate.heart_rate && lactate.heart_rate.unit, "bpm") },
+        pace: { value: fallbackText(lactate.pace && lactate.pace.value, "資料不足"), unit: fallbackText(lactate.pace && lactate.pace.unit, "/km"), assessment: "" },
         assessment: fallbackText(lactate.assessment, "資料不足")
       },
-      max_heart_rate: {
-        value: metrics.max_heart_rate && isPresentNumber(metrics.max_heart_rate.value) ? metrics.max_heart_rate.value : null,
-        unit: fallbackText(metrics.max_heart_rate && metrics.max_heart_rate.unit, "bpm")
-      },
-      resting_heart_rate: {
-        value: metrics.resting_heart_rate && isPresentNumber(metrics.resting_heart_rate.value) ? metrics.resting_heart_rate.value : null,
-        unit: fallbackText(metrics.resting_heart_rate && metrics.resting_heart_rate.unit, "bpm"),
-        source: fallbackText(metrics.resting_heart_rate && metrics.resting_heart_rate.source, "")
-      },
+      max_heart_rate: { value: metrics.max_heart_rate && isPresentNumber(metrics.max_heart_rate.value) ? metrics.max_heart_rate.value : null, unit: fallbackText(metrics.max_heart_rate && metrics.max_heart_rate.unit, "bpm") },
+      resting_heart_rate: { value: metrics.resting_heart_rate && isPresentNumber(metrics.resting_heart_rate.value) ? metrics.resting_heart_rate.value : null, unit: fallbackText(metrics.resting_heart_rate && metrics.resting_heart_rate.unit, "bpm"), source: fallbackText(metrics.resting_heart_rate && metrics.resting_heart_rate.source, "") },
       pace_zones: paceZones,
       has_pace_zones: paceZones.length > 0
     };
@@ -1432,43 +1219,18 @@
       return aPriority - bPriority;
     }).map(function adaptCapability(item) {
       var priority = fallbackText(item.priority, "low");
-      return {
-        capability: fallbackText(item.capability, "能力缺口"),
-        priority: priority,
-        priority_label: priority === "high" ? "高優先" : priority === "medium" ? "中優先" : "低優先",
-        training_suggestion: fallbackText(item.training_suggestion, "暫無訓練建議。")
-      };
+      return { capability: fallbackText(item.capability, "能力缺口"), priority: priority, priority_label: priority === "high" ? "高優先" : priority === "medium" ? "中優先" : "低優先", training_suggestion: fallbackText(item.training_suggestion, "暫無訓練建議。") };
     });
-
-    return {
-      race_name: fallbackText(readiness.race_name, "目標賽事"),
-      race_date: readiness.race_date || null,
-      race_date_label: readiness.race_date ? readiness.race_date : "日期未設定",
-      confidence_score: clampScore(readiness.confidence_score),
-      confidence_label: fallbackText(readiness.confidence_label, "資料不足"),
-      missing_capabilities: capabilities
-    };
+    return { race_name: fallbackText(readiness.race_name, "目標賽事"), race_date: readiness.race_date || null, race_date_label: readiness.race_date ? readiness.race_date : "日期未設定", confidence_score: clampScore(readiness.confidence_score), confidence_label: fallbackText(readiness.confidence_label, "資料不足"), missing_capabilities: capabilities };
   }
 
   function getPlanStartDate(report) {
     var plan = report.next_week_plan || {};
-    var days = safeArray(plan.days).slice().sort(function sortDays(a, b) {
-      return fallbackText(a && a.date, "").localeCompare(fallbackText(b && b.date, ""));
-    });
-
-    if (plan.week_start) {
-      return mondayOnOrBefore(plan.week_start) || plan.week_start;
-    }
-
-    if (days.length > 0 && days[0].date) {
-      return mondayOnOrBefore(days[0].date) || days[0].date;
-    }
-
+    var days = safeArray(plan.days).slice().sort(function sortDays(a, b) { return fallbackText(a && a.date, "").localeCompare(fallbackText(b && b.date, "")); });
+    if (plan.week_start) return mondayOnOrBefore(plan.week_start) || plan.week_start;
+    if (days.length > 0 && days[0].date) return mondayOnOrBefore(days[0].date) || days[0].date;
     var currentWeekStart = report.weekly_analysis && report.weekly_analysis[0] && report.weekly_analysis[0].week_start;
-    if (currentWeekStart) {
-      return mondayOnOrBefore(addDays(currentWeekStart, 7)) || addDays(currentWeekStart, 7);
-    }
-
+    if (currentWeekStart) return mondayOnOrBefore(addDays(currentWeekStart, 7)) || addDays(currentWeekStart, 7);
     return nextMondayAfter(report.meta && report.meta.today) || null;
   }
 
@@ -1476,12 +1238,7 @@
     var plan = report.next_week_plan || {};
     var startDate = getPlanStartDate(report);
     var byDate = {};
-    safeArray(plan.days).forEach(function collectDay(day) {
-      if (day && day.date) {
-        byDate[day.date] = day;
-      }
-    });
-
+    safeArray(plan.days).forEach(function collectDay(day) { if (day && day.date) byDate[day.date] = day; });
     var days = [];
     for (var index = 0; index < 7; index += 1) {
       var date = startDate ? addDays(startDate, index) : null;
@@ -1490,89 +1247,32 @@
       var intensityMeta = INTENSITY_META[intensity] || { label: intensity, className: "intensity-unknown" };
       var sessionType = fallbackText(source.session_type, intensity === "rest" ? "rest" : "easy");
       var dayKey = normalizeDayKey(source.day_of_week, date);
-
       var workoutMeta = extractPlanWorkoutMeta(source);
       days.push({
-        date: date,
-        date_label: formatDateLabel(date),
-        day_key: dayKey,
-        day_label: DAY_LABELS_ZH[dayKey] || fallbackText(dayKey, "日期"),
-        session_type: sessionType,
-        session_type_label: SESSION_TYPE_LABELS[sessionType] || sessionType,
-        title: fallbackText(source.title, intensity === "rest" ? "恢復日" : "未命名課表"),
-        description: fallbackText(source.description, ""),
-        distance_km: isPresentNumber(source.distance_km) ? roundTo(source.distance_km, 2) : null,
-        duration_min: roundTo(source.duration_min, 1),
-        intensity: intensity,
-        intensity_label: intensityMeta.label,
-        intensity_class: intensityMeta.className,
-        key_workout: Boolean(source.key_workout),
-        weather_consideration: fallbackText(source.weather_consideration, ""),
-        pace_label: workoutMeta.pace_label,
-        interval_label: workoutMeta.interval_label,
-        rest_label: workoutMeta.rest_label
+        date: date, date_label: formatDateLabel(date), day_key: dayKey, day_label: DAY_LABELS_ZH[dayKey] || fallbackText(dayKey, "日期"), session_type: sessionType, session_type_label: SESSION_TYPE_LABELS[sessionType] || sessionType,
+        title: fallbackText(source.title, intensity === "rest" ? "恢復日" : "未命名課表"), description: fallbackText(source.description, ""), distance_km: isPresentNumber(source.distance_km) ? roundTo(source.distance_km, 2) : null,
+        duration_min: roundTo(source.duration_min, 1), intensity: intensity, intensity_label: intensityMeta.label, intensity_class: intensityMeta.className, key_workout: Boolean(source.key_workout), weather_consideration: fallbackText(source.weather_consideration, ""), pace_label: workoutMeta.pace_label, interval_label: workoutMeta.interval_label, rest_label: workoutMeta.rest_label
       });
     }
-
-    var totalDistance = roundTo(days.reduce(function sumDistance(total, day) {
-      return total + toNumber(day.distance_km);
-    }, 0), 2);
-
-    return {
-      week_start: startDate,
-      theme: fallbackText(plan.theme, "下週課表"),
-      total_distance_km: totalDistance,
-      target_training_load: isPresentNumber(plan.target_training_load)
-        ? roundTo(plan.target_training_load, 1)
-        : (isPresentNumber(plan.weekly_target_tss) ? roundTo(plan.weekly_target_tss, 1) : null),
-      adjustment_rule: fallbackText(plan.adjustment_rule || plan.volume_adjustment_rule, ""),
-      days: days,
-      has_data: days.some(function hasWorkout(day) {
-        return day.session_type !== "rest" || day.distance_km > 0 || day.duration_min > 0;
-      })
-    };
+    var totalDistance = roundTo(days.reduce(function sumDistance(total, day) { return total + toNumber(day.distance_km); }, 0), 2);
+    return { week_start: startDate, theme: fallbackText(plan.theme, "下週課表"), total_distance_km: totalDistance, target_training_load: isPresentNumber(plan.target_training_load) ? roundTo(plan.target_training_load, 1) : (isPresentNumber(plan.weekly_target_tss) ? roundTo(plan.weekly_target_tss, 1) : null), adjustment_rule: fallbackText(plan.adjustment_rule || plan.volume_adjustment_rule, ""), days: days, has_data: days.some(function hasWorkout(day) { return day.session_type !== "rest" || day.distance_km > 0 || day.duration_min > 0; }) };
   }
 
   function metricWithFallback(metric, title, options) {
     var config = options || {};
     var value = metric && isPresentNumber(metric.value) ? metric.value : null;
-    return {
-      title: title,
-      value: value,
-      display_value: value === null ? "資料不足" : String(value),
-      unit: fallbackText(metric && metric.unit, ""),
-      assessment: config.showAssessment ? fallbackText(metric && metric.assessment, "資料不足") : "",
-      has_data: value !== null
-    };
+    return { title: title, value: value, display_value: value === null ? "資料不足" : String(value), unit: fallbackText(metric && metric.unit, ""), assessment: config.showAssessment ? fallbackText(metric && metric.assessment, "資料不足") : "", has_data: value !== null };
   }
 
   function buildMechanics(report) {
     var mechanics = report.running_mechanics || {};
     var economy = isPresentNumber(mechanics.running_economy_score) ? clampScore(mechanics.running_economy_score) : null;
-
-    return {
-      metrics: [
-        metricWithFallback(mechanics.cadence_avg, "步頻", { showAssessment: true }),
-        metricWithFallback(mechanics.ground_contact_ms, "觸地時間"),
-        metricWithFallback(mechanics.vertical_oscillation_cm, "垂直振幅"),
-        metricWithFallback(mechanics.stride_length_m, "步幅")
-      ],
-      running_economy_score: economy,
-      running_economy_label: economy === null ? "資料不足" : String(economy),
-      improvement_tips: safeArray(mechanics.improvement_tips),
-      filter_note: "已排除輕鬆跑與間歇休息段，僅計入有效跑步分圈。"
-    };
+    return { metrics: [metricWithFallback(mechanics.cadence_avg, "步頻", { showAssessment: true }), metricWithFallback(mechanics.ground_contact_ms, "觸地時間"), metricWithFallback(mechanics.vertical_oscillation_cm, "垂直振幅"), metricWithFallback(mechanics.stride_length_m, "步幅")], running_economy_score: economy, running_economy_label: economy === null ? "資料不足" : String(economy), improvement_tips: safeArray(mechanics.improvement_tips), filter_note: "已排除輕鬆跑與間歇休息段，僅計入有效跑步分圈。" };
   }
 
   function buildLoadAssessment(report) {
     var load = report.load_assessment || {};
-    return {
-      current_tss_weekly: isPresentNumber(load.current_tss_weekly) ? roundTo(load.current_tss_weekly, 1) : null,
-      optimal_tss_range: load.optimal_tss_range || null,
-      status: fallbackText(load.status, "unknown"),
-      label: fallbackText(load.label, "負荷資料不足"),
-      recommendation: fallbackText(load.recommendation, "暫無負荷建議。")
-    };
+    return { current_tss_weekly: isPresentNumber(load.current_tss_weekly) ? roundTo(load.current_tss_weekly, 1) : null, optimal_tss_range: load.optimal_tss_range || null, status: fallbackText(load.status, "unknown"), label: fallbackText(load.label, "負荷資料不足"), recommendation: fallbackText(load.recommendation, "暫無負荷建議。") };
   }
 
   function buildPeriodization(report) {
@@ -1587,78 +1287,24 @@
         var intensityMeta = INTENSITY_META[intensity] || { label: intensity, className: "intensity-unknown" };
         var sessionType = fallbackText(session.session_type, intensity === "rest" ? "rest" : "easy");
         var dayKey = normalizeDayKey(session.day, null);
-
-        return {
-          day_key: dayKey,
-          day_label: DAY_LABELS_ZH[dayKey] || fallbackText(dayKey, "日期"),
-          session_type: sessionType,
-          session_type_label: SESSION_TYPE_LABELS[sessionType] || sessionType,
-          description: fallbackText(session.description, ""),
-          duration_min: isPresentNumber(session.duration_min) ? roundTo(session.duration_min, 1) : null,
-          intensity: intensity,
-          intensity_label: intensityMeta.label,
-          intensity_class: intensityMeta.className
-        };
+        return { day_key: dayKey, day_label: DAY_LABELS_ZH[dayKey] || fallbackText(dayKey, "日期"), session_type: sessionType, session_type_label: SESSION_TYPE_LABELS[sessionType] || sessionType, description: fallbackText(session.description, ""), duration_min: isPresentNumber(session.duration_min) ? roundTo(session.duration_min, 1) : null, intensity: intensity, intensity_label: intensityMeta.label, intensity_class: intensityMeta.className };
       });
-
-      return {
-        phase_name: fallbackText(phase.phase_name, "未命名週期"),
-        start_date: startDate,
-        end_date: endDate,
-        date_range_label: formatDateRangeLabel(startDate, endDate),
-        weeks: isPresentNumber(phase.weeks) ? phase.weeks : null,
-        weeks_label: isPresentNumber(phase.weeks) ? String(phase.weeks) + " 週" : "週數未設定",
-        focus: fallbackText(phase.focus, ""),
-        weekly_structure: weeklyStructure,
-        is_current: isCurrent
-      };
+      return { phase_name: fallbackText(phase.phase_name, "未命名週期"), start_date: startDate, end_date: endDate, date_range_label: formatDateRangeLabel(startDate, endDate), weeks: isPresentNumber(phase.weeks) ? phase.weeks : null, weeks_label: isPresentNumber(phase.weeks) ? String(phase.weeks) + " 週" : "週數未設定", focus: fallbackText(phase.focus, ""), weekly_structure: weeklyStructure, is_current: isCurrent };
     });
-    var currentPhase = phases.filter(function findCurrent(phase) {
-      return phase.is_current;
-    })[0] || null;
-
-    return {
-      weeks_to_race: isPresentNumber(periodization.weeks_to_race) ? periodization.weeks_to_race : null,
-      weeks_to_race_label: isPresentNumber(periodization.weeks_to_race)
-        ? "距離目標賽 " + periodization.weeks_to_race + " 週"
-        : "目標賽週數未設定",
-      reference_date: referenceDate,
-      reference_date_label: referenceDate ? formatDateLabel(referenceDate) : "",
-      phases: phases,
-      current_phase: currentPhase,
-      has_data: phases.length > 0
-    };
+    var currentPhase = phases.filter(function findCurrent(phase) { return phase.is_current; })[0] || null;
+    return { weeks_to_race: isPresentNumber(periodization.weeks_to_race) ? periodization.weeks_to_race : null, weeks_to_race_label: isPresentNumber(periodization.weeks_to_race) ? "距離目標賽 " + periodization.weeks_to_race + " 週" : "目標賽週數未設定", reference_date: referenceDate, reference_date_label: referenceDate ? formatDateLabel(referenceDate) : "", phases: phases, current_phase: currentPhase, has_data: phases.length > 0 };
   }
 
   function textBlob(value) {
-    if (Array.isArray(value)) {
-      return value.map(textBlob).join(" ");
-    }
-
-    if (value && typeof value === "object") {
-      return Object.keys(value).map(function readKey(key) {
-        return textBlob(value[key]);
-      }).join(" ");
-    }
-
+    if (Array.isArray(value)) return value.map(textBlob).join(" ");
+    if (value && typeof value === "object") return Object.keys(value).map(function readKey(key) { return textBlob(value[key]); }).join(" ");
     return fallbackText(value, "");
   }
 
   function isHighRiskEvidence(item) {
-    var haystack = textBlob([
-      item.insight_id,
-      item.claim,
-      item.source_sections,
-      item.supporting_metrics,
-      item.supporting_sessions
-    ]).toLowerCase();
-    var markers = [
-      "risk", "fatigue", "injury", "overtraining", "overreaching", "load", "疲勞", "風險", "傷", "疼痛", "過度", "中暑"
-    ];
-
-    return markers.some(function containsMarker(marker) {
-      return haystack.indexOf(marker) !== -1;
-    });
+    var haystack = textBlob([item.insight_id, item.claim, item.source_sections, item.supporting_metrics, item.supporting_sessions]).toLowerCase();
+    var markers = ["risk", "fatigue", "injury", "overtraining", "overreaching", "load", "疲勞", "風險", "傷", "疼痛", "過度", "中暑"];
+    return markers.some(function containsMarker(marker) { return haystack.indexOf(marker) !== -1; });
   }
 
   function buildEvidence(report) {
@@ -1666,259 +1312,103 @@
       var confidence = clampScore(item && item.confidence);
       var visualizationHint = fallbackText(item && item.visualization_hint, "metric_card");
       var adapted = {
-        id: fallbackText(item && item.insight_id, "evidence_" + String(index + 1)),
-        claim: fallbackText(item && item.claim, "未命名依據"),
-        source_sections: safeArray(item && item.source_sections),
-        source_section_labels: safeArray(item && item.source_sections).map(sourceSectionLabel),
-        supporting_metrics: safeArray(item && item.supporting_metrics).map(function adaptMetric(metric) {
-          var sourcePath = metric && metric.source_path;
-          var copy = {};
-          Object.keys(metric || {}).forEach(function copyKey(key) {
-            copy[key] = metric[key];
-          });
-          copy.source_label = metricSourceLabel(sourcePath, report);
-          copy.source_path = sourcePath;
-          copy.display_value = metricDisplayValue(copy.value, copy.unit);
-          return copy;
-        }),
+        id: fallbackText(item && item.insight_id, "evidence_" + String(index + 1)), claim: fallbackText(item && item.claim, "未命名依據"), source_sections: safeArray(item && item.source_sections), source_section_labels: safeArray(item && item.source_sections).map(sourceSectionLabel),
+        supporting_metrics: safeArray(item && item.supporting_metrics).map(function adaptMetric(metric) { var sourcePath = metric && metric.source_path; var copy = {}; Object.keys(metric || {}).forEach(function copyKey(key) { copy[key] = metric[key]; }); copy.source_label = metricSourceLabel(sourcePath, report); copy.source_path = sourcePath; copy.display_value = metricDisplayValue(copy.value, copy.unit); return copy; }),
         supporting_sessions: safeArray(item && item.supporting_sessions).map(function adaptSupportingSession(session) {
           var sourcePath = session && session.source_path;
           var sourceSession = readJsonPath(report, sourcePath);
           var copy = {};
-          Object.keys(session || {}).forEach(function copyKey(key) {
-            copy[key] = session[key];
-          });
+          Object.keys(session || {}).forEach(function copyKey(key) { copy[key] = session[key]; });
           var canonicalSession = sourceSession || copy;
-          if (sourceSession) {
-            copy.activity_id = sourceSession.activity_id;
-            copy.date = sourceSession.date;
-            copy.type = sourceSession.type;
-            copy.source_activity_type = sourceSession.source_activity_type;
-            copy.distance_km = sourceSession.distance_km;
-          }
+          if (sourceSession) { copy.activity_id = sourceSession.activity_id; copy.date = sourceSession.date; copy.type = sourceSession.type; copy.source_activity_type = sourceSession.source_activity_type; copy.distance_km = sourceSession.distance_km; }
           copy.date_label = canonicalSession && canonicalSession.date ? formatDateLabel(canonicalSession.date) : "日期不詳";
           copy.type_label = displaySessionTypeLabel(canonicalSession);
-          copy.distance_label = isPresentNumber(canonicalSession && canonicalSession.distance_km)
-            ? roundTo(canonicalSession.distance_km, 2) + " km"
-            : "";
+          copy.distance_label = isPresentNumber(canonicalSession && canonicalSession.distance_km) ? roundTo(canonicalSession.distance_km, 2) + " km" : "";
           copy.source_label = sessionSourceLabel(sourcePath, sourceSession);
           copy.source_path = sourcePath;
           var includeRunningMetrics = includesRunningMechanics(copy, sourceSession);
-          copy.segments = safeArray(
-            sourceSession ? sourceSession.segments : copy.segments
-          ).map(function adaptSegment(segment, segmentIndex) {
+          copy.segments = safeArray(sourceSession ? sourceSession.segments : copy.segments).map(function adaptSegment(segment, segmentIndex) {
             var segmentType = fallbackText(segment && segment.segment_type, "lap");
-            return {
-              index: segmentIndex + 1,
-              segment_type: segmentType,
-              segment_type_label: SEGMENT_TYPE_LABELS[segmentType] || humanizeIdentifier(segmentType),
-              distance_km: isPresentNumber(segment && segment.distance_km) ? roundTo(segment.distance_km, 2) : null,
-              avg_pace: segment ? segment.avg_pace : null,
-              speed_kmh: isPresentNumber(segment && segment.speed_kmh) ? roundTo(segment.speed_kmh, 1) : null,
-              avg_hr: isPresentNumber(segment && segment.avg_hr) ? roundTo(segment.avg_hr, 1) : null,
-              cadence: includeRunningMetrics && isPresentNumber(segment && segment.cadence) ? roundTo(segment.cadence, 1) : null,
-              stride_length_m: segmentStrideLength(segment, includeRunningMetrics),
-              note: fallbackText(segment && segment.note, "")
-            };
+            return { index: segmentIndex + 1, segment_type: segmentType, segment_type_label: SEGMENT_TYPE_LABELS[segmentType] || humanizeIdentifier(segmentType), distance_km: isPresentNumber(segment && segment.distance_km) ? roundTo(segment.distance_km, 2) : null, avg_pace: segment ? segment.avg_pace : null, speed_kmh: isPresentNumber(segment && segment.speed_kmh) ? roundTo(segment.speed_kmh, 1) : null, avg_hr: isPresentNumber(segment && segment.avg_hr) ? roundTo(segment.avg_hr, 1) : null, cadence: includeRunningMetrics && isPresentNumber(segment && segment.cadence) ? roundTo(segment.cadence, 1) : null, stride_length_m: segmentStrideLength(segment, includeRunningMetrics), note: fallbackText(segment && segment.note, "") };
           });
           return copy;
         }),
-        confidence: confidence === null ? 0 : confidence,
-        visualization_hint: visualizationHint,
-        visualization_label: visualizationHintLabel(visualizationHint),
-        sourcePath: "evidence_links[" + String(index) + "]"
+        confidence: confidence === null ? 0 : confidence, visualization_hint: visualizationHint, visualization_label: visualizationHintLabel(visualizationHint), sourcePath: "evidence_links[" + String(index) + "]"
       };
       adapted.high_risk = isHighRiskEvidence(adapted);
       return adapted;
-    }).sort(function sortEvidence(a, b) {
-      if (a.high_risk !== b.high_risk) {
-        return a.high_risk ? -1 : 1;
-      }
-      return b.confidence - a.confidence;
-    });
-
-    return {
-      items: evidence,
-      hasEvidence: evidence.length > 0,
-      fallbackMessage: evidence.length > 0 ? "" : "此報告尚未提供教練判斷理由"
-    };
+    }).sort(function sortEvidence(a, b) { if (a.high_risk !== b.high_risk) return a.high_risk ? -1 : 1; return b.confidence - a.confidence; });
+    return { items: evidence, hasEvidence: evidence.length > 0, fallbackMessage: evidence.length > 0 ? "" : "此報告尚未提供教練判斷理由" };
   }
 
   function findEvidenceForText(text, evidenceItems) {
     var needle = fallbackText(text, "").toLowerCase();
-    if (!needle) {
-      return null;
-    }
-
+    if (!needle) return null;
     var match = null;
     var bestScore = 0;
-
     safeArray(evidenceItems).forEach(function scoreEvidence(item) {
       var claim = fallbackText(item.claim, "").toLowerCase();
-      if (!claim) {
-        return;
-      }
-
+      if (!claim) return;
       var score = 0;
-
-      // Exact substring match is strongest
       if (needle.indexOf(claim) !== -1 || claim.indexOf(needle) !== -1) {
         score = 20;
       } else {
-        // Character bigram overlap for fuzzy matching
         var needleBigrams = {};
         var claimBigrams = {};
         var i;
-        for (i = 0; i < needle.length - 1; i += 1) {
-          var nb = needle.slice(i, i + 2);
-          needleBigrams[nb] = (needleBigrams[nb] || 0) + 1;
-        }
-        for (i = 0; i < claim.length - 1; i += 1) {
-          var cb = claim.slice(i, i + 2);
-          claimBigrams[cb] = (claimBigrams[cb] || 0) + 1;
-        }
-
+        for (i = 0; i < needle.length - 1; i += 1) { var nb = needle.slice(i, i + 2); needleBigrams[nb] = (needleBigrams[nb] || 0) + 1; }
+        for (i = 0; i < claim.length - 1; i += 1) { var cb = claim.slice(i, i + 2); claimBigrams[cb] = (claimBigrams[cb] || 0) + 1; }
         var overlap = 0;
         var total = 0;
-        Object.keys(needleBigrams).forEach(function countOverlap(bigram) {
-          total += needleBigrams[bigram];
-          if (claimBigrams[bigram]) {
-            overlap += Math.min(needleBigrams[bigram], claimBigrams[bigram]);
-          }
-        });
-
-        if (total > 0) {
-          score = (overlap / total) * 15;
-        }
+        Object.keys(needleBigrams).forEach(function countOverlap(bigram) { total += needleBigrams[bigram]; if (claimBigrams[bigram]) overlap += Math.min(needleBigrams[bigram], claimBigrams[bigram]); });
+        if (total > 0) score = (overlap / total) * 15;
       }
-
-      if (score > bestScore) {
-        bestScore = score;
-        match = item;
-      }
+      if (score > bestScore) { bestScore = score; match = item; }
     });
-
     return bestScore >= 3 ? match : null;
   }
 
   function buildCoachingSummary(report, evidenceItems) {
     var summary = report.coaching_summary || {};
-    var insights = safeArray(summary.top_3_insights).map(function adaptInsight(text) {
-      var evidence = findEvidenceForText(text, evidenceItems);
-      return {
-        text: fallbackText(text, ""),
-        evidence_id: evidence ? evidence.id : null
-      };
-    });
-    var actions = safeArray(summary.top_3_actions).map(function adaptAction(text) {
-      var evidence = findEvidenceForText(text, evidenceItems);
-      return {
-        text: fallbackText(text, ""),
-        evidence_id: evidence ? evidence.id : null
-      };
-    });
-
-    return {
-      headline: fallbackText(summary.headline, "尚無教練摘要。"),
-      top_3_insights: insights,
-      top_3_actions: actions
-    };
+    var insights = safeArray(summary.top_3_insights).map(function adaptInsight(text) { var evidence = findEvidenceForText(text, evidenceItems); return { text: fallbackText(text, ""), evidence_id: evidence ? evidence.id : null }; });
+    var actions = safeArray(summary.top_3_actions).map(function adaptAction(text) { var evidence = findEvidenceForText(text, evidenceItems); return { text: fallbackText(text, ""), evidence_id: evidence ? evidence.id : null }; });
+    return { headline: fallbackText(summary.headline, "尚無教練摘要。"), top_3_insights: insights, top_3_actions: actions };
   }
 
   function buildPrimaryAction(report) {
     var summary = report.coaching_summary || {};
     var status = report.athlete_status || {};
     var overall = status.overall_rating || {};
-    
     var todayAction = safeArray(summary.top_3_actions)[0] || "依課表正常執行";
     var rationale = safeArray(summary.top_3_insights)[0] || "維持訓練節奏";
-    
-    return {
-      todayAction: todayAction,
-      rationale: rationale,
-      statusBadge: fallbackText(overall.label, "狀態穩定"),
-      statusClass: scoreState(clampScore(overall.score), false)
-    };
+    return { todayAction: todayAction, rationale: rationale, statusBadge: fallbackText(overall.label, "狀態穩定"), statusClass: scoreState(clampScore(overall.score), false) };
   }
 
   function build12WeekTrend(report) {
     var dbTrend = report.db_fitness_trend || {};
     var rawTrend = safeArray(dbTrend.weeks).length ? safeArray(dbTrend.weeks) : safeArray(report.twelve_week_summary);
-
     var distancePoints = rawTrend.map(function mapDistance(week) {
       var value = toNumber(week.derived_total_distance_km);
-      return {
-        label: fallbackText(week.week_label, fallbackText(week.week_start, "週資料")),
-        week_start_label: fallbackText(week.week_start, "").slice(5).replace("-", "/"),
-        is_current_week: Boolean(week.is_current_week),
-        week_progress_ratio: isPresentNumber(week.week_progress_ratio) ? Number(week.week_progress_ratio) : 1,
-        value: value,
-        display: String(value)
-      };
+      return { label: fallbackText(week.week_label, fallbackText(week.week_start, "週資料")), week_start_label: fallbackText(week.week_start, "").slice(5).replace("-", "/"), is_current_week: Boolean(week.is_current_week), week_progress_ratio: isPresentNumber(week.week_progress_ratio) ? Number(week.week_progress_ratio) : 1, available: true, value: value, display: String(value) };
     });
     var loadPoints = rawTrend.map(function mapLoad(week) {
-      var value = toNumber(week.derived_training_load);
-      return {
-        label: fallbackText(week.week_label, fallbackText(week.week_start, "週資料")),
-        week_start_label: fallbackText(week.week_start, "").slice(5).replace("-", "/"),
-        is_current_week: Boolean(week.is_current_week),
-        week_progress_ratio: isPresentNumber(week.week_progress_ratio) ? Number(week.week_progress_ratio) : 1,
-        value: value,
-        display: String(value)
-      };
+      var available = isPresentNumber(week.derived_training_load);
+      var value = available ? roundTo(week.derived_training_load, 1) : null;
+      return { label: fallbackText(week.week_label, fallbackText(week.week_start, "週資料")), week_start_label: fallbackText(week.week_start, "").slice(5).replace("-", "/"), is_current_week: Boolean(week.is_current_week), week_progress_ratio: isPresentNumber(week.week_progress_ratio) ? Number(week.week_progress_ratio) : 1, available: available, value: value, display: available ? String(value) : "資料不足" };
     });
     var distanceSeries = distancePoints.map(function(point) { return point.value; });
-    var loadSeries = loadPoints.map(function(point) { return point.value; });
-
+    var latestLoad = loadPoints[loadPoints.length - 1] || null;
     var metrics = [
-      {
-        label: "12 週跑量",
-        value: distanceSeries.length ? String(distanceSeries[distanceSeries.length - 1]) + " km" : "資料不足",
-        unit: "km",
-        points: distancePoints
-      },
-      {
-        label: "12 週訓練量",
-        value: loadSeries.length ? String(loadSeries[loadSeries.length - 1]) + " TSS" : "資料不足",
-        unit: "TSS",
-        points: loadPoints
-      }
+      { label: "12 週跑量", value: distanceSeries.length ? String(distanceSeries[distanceSeries.length - 1]) + " km" : "資料不足", unit: "km", points: distancePoints },
+      { label: "12 週訓練量", value: latestLoad && latestLoad.available ? latestLoad.display + " TSS" : "資料不足", unit: "TSS", points: loadPoints }
     ];
-
-    return {
-      metrics: metrics,
-      periodLabel: rawTrend.length
-        ? "近 12 週 · " + formatDateLabel(rawTrend[0].week_start) + " — " +
-          formatDateLabel((report.meta && report.meta.today) || rawTrend[rawTrend.length - 1].week_start)
-        : "",
-      summaryNote: fallbackText(report.twelve_week_summary_note, ""),
-      temperature_note: fallbackText(report.temperature_adjustment_note, "")
-    };
+    return { metrics: metrics, periodLabel: rawTrend.length ? "近 12 週 · " + formatDateLabel(rawTrend[0].week_start) + " — " + formatDateLabel((report.meta && report.meta.today) || rawTrend[rawTrend.length - 1].week_start) : "", summaryNote: fallbackText(report.twelve_week_summary_note, ""), temperature_note: fallbackText(report.temperature_adjustment_note, "") };
   }
 
   function buildDashboardModel(report) {
     var source = report || {};
     var evidence = buildEvidence(source);
-
-    return {
-      meta: source.meta || {},
-      status_cards: buildStatusCards(source),
-      weekly_analysis: buildWeeklyAnalysis(source),
-      cross_training_highlights: buildCrossTrainingHighlights(source),
-      hr_zones: buildHrZones(source),
-      power_zones: buildPowerZones(source),
-      physio_metrics: buildPhysioMetrics(source),
-      load_assessment: buildLoadAssessment(source),
-      race_readiness: buildRaceReadiness(source),
-      periodization: buildPeriodization(source),
-      next_week_plan: buildCalendar(source),
-      running_mechanics: buildMechanics(source),
-      evidence: evidence,
-      coaching_summary: buildCoachingSummary(source, evidence.items),
-      primary_action: buildPrimaryAction(source),
-      twelve_week_trend: build12WeekTrend(source),
-      latest_activity: buildLatestActivity(source)
-    };
+    return { meta: source.meta || {}, status_cards: buildStatusCards(source), weekly_analysis: buildWeeklyAnalysis(source), cross_training_highlights: buildCrossTrainingHighlights(source), hr_zones: buildHrZones(source), power_zones: buildPowerZones(source), physio_metrics: buildPhysioMetrics(source), load_assessment: buildLoadAssessment(source), race_readiness: buildRaceReadiness(source), periodization: buildPeriodization(source), next_week_plan: buildCalendar(source), running_mechanics: buildMechanics(source), evidence: evidence, coaching_summary: buildCoachingSummary(source, evidence.items), primary_action: buildPrimaryAction(source), twelve_week_trend: build12WeekTrend(source), latest_activity: buildLatestActivity(source) };
   }
 
   return {
