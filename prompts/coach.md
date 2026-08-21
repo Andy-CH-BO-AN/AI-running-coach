@@ -207,9 +207,9 @@
           "training_effect_aerobic": number,
           "training_effect_anaerobic": number,
           "strength": {
-            "total_sets": "number",
-            "active_sets": "number",
-            "total_reps": "number",
+            "total_sets": "number | null",
+            "active_sets": "number | null",
+            "total_reps": "number | null",
             "total_volume_kg": "number | null",
             "sets": [
               {
@@ -445,5 +445,6 @@
 【肌力訓練規則】
 - `source_activity_type = "strength_training"` 一律稱為「肌力訓練」。它可作為跑步主目標下的交叉訓練：分析動作名稱所反映的可能跑步影響、下肢疲勞、跑課間距與恢復。
 - `sessions[].strength` 是唯一的組數、次數、容量與動作事實來源。保留其 set 順序及 rest entries；只在單位可靠時引用 kg 容量。
+- `sessions[].strength` 的組數、次數或容量為 `null` 表示 Garmin 資料不可得，不是 0；不得補算、猜測或以此做訓練結論。
 - 不得診斷傷病、評論動作品質、猜測肌群、杜撰數字、推算 1RM、或自行建立增肌/漸進超負荷課表。`training_preferences` 未明確安排時，也不得新增肌力課。
 - 肌力沒有距離、配速、跑姿、游泳或自行車效率、zone 資料；不得把這些缺失列為資料品質問題或寫成 0 km。

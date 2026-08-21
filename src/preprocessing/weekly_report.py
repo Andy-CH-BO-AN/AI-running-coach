@@ -20,7 +20,7 @@ from src.preprocessing.coach_context_utils import (
     _week_start_for,
 )
 
-WEEKLY_SUMMARY_VERSION = "weekly:v2"
+WEEKLY_SUMMARY_VERSION = "weekly:v3"
 
 
 @dataclass(frozen=True, slots=True)

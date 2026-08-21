@@ -185,9 +185,9 @@ class RunningSessionFacts:
 
 @dataclass(frozen=True, slots=True)
 class StrengthSessionFacts:
-    total_sets: int
-    active_sets: int
-    total_reps: int
+    total_sets: int | None
+    active_sets: int | None
+    total_reps: int | None
     total_volume_kg: float | None
     sets: tuple[dict[str, Any], ...]
 
@@ -206,6 +206,10 @@ def _nonnegative_integer(value: Any, location: str) -> int:
     if number < 0 or int(number) != number:
         raise SessionFactContractError(f"{location}: expected a non-negative integer")
     return int(number)
+
+
+def _nonnegative_integer_or_none(value: Any, location: str) -> int | None:
+    return None if value is None else _nonnegative_integer(value, location)
 
 
 def _strength_from_context_payload(
@@ -249,9 +253,9 @@ def _strength_from_context_payload(
             "duration_sec": duration,
         })
     return StrengthSessionFacts(
-        total_sets=_nonnegative_integer(payload["total_sets"], f"{location}.total_sets"),
-        active_sets=_nonnegative_integer(payload["active_sets"], f"{location}.active_sets"),
-        total_reps=_nonnegative_integer(payload["total_reps"], f"{location}.total_reps"),
+        total_sets=_nonnegative_integer_or_none(payload["total_sets"], f"{location}.total_sets"),
+        active_sets=_nonnegative_integer_or_none(payload["active_sets"], f"{location}.active_sets"),
+        total_reps=_nonnegative_integer_or_none(payload["total_reps"], f"{location}.total_reps"),
         total_volume_kg=total_volume,
         sets=tuple(normalized_sets),
     )
@@ -957,9 +961,9 @@ def _session_from_normalized(activity: NormalizedActivity) -> SessionFacts:
             )
         else:
             strength = StrengthSessionFacts(
-                total_sets=0,
-                active_sets=0,
-                total_reps=0,
+                total_sets=None,
+                active_sets=None,
+                total_reps=None,
                 total_volume_kg=None,
                 sets=(),
             )

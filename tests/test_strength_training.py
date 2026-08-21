@@ -19,6 +19,7 @@ from src.preprocessing.coach_context import (
     build_deterministic_coach_context,
     enforce_deterministic_report_fields,
 )
+from src.preprocessing.coach_context_session_facts import SessionFacts
 from src.services.garmin_import_service import strength_backfill_baseline_ids
 
 
@@ -55,11 +56,32 @@ def test_strength_parser_derives_only_missing_counts_and_rejects_unknown_weight_
 
     assert strength["total_sets"] == 2
     assert strength["active_sets"] == 2
-    assert strength["total_reps"] == 5
+    assert strength["total_reps"] is None
     assert strength["total_volume_kg"] is None
     assert strength["sets"][0]["weight_kg"] is None
     assert strength["sets"][2]["reps"] == 0
     assert strength["sets"][2]["weight_kg"] is None
+
+
+def test_strength_parser_derives_reps_only_when_every_active_set_has_a_valid_source_count():
+    derived = parse_strength_training(
+        {},
+        [
+            {"setType": "ACTIVE", "reps": 0},
+            {"setType": "ACTIVE", "reps": 8},
+        ],
+    )
+    rest_only = parse_strength_training(
+        {},
+        [{"setType": "REST", "duration": 30}, {"setType": "unknown"}],
+    )
+
+    assert derived["total_sets"] == 2
+    assert derived["active_sets"] == 2
+    assert derived["total_reps"] == 8
+    assert rest_only["total_sets"] is None
+    assert rest_only["active_sets"] is None
+    assert rest_only["total_reps"] is None
 
 
 def test_strength_parser_accepts_nested_garmin_wrapper_aliases():
@@ -160,6 +182,10 @@ def test_strength_context_keeps_distance_unavailable_and_adds_load_effect_and_ag
 
 
 def test_strength_context_marks_empty_exercise_sets_partial_and_nulls_weekly_aggregates():
+    parsed_strength = parse_strength_training({}, [])
+    assert parsed_strength["total_sets"] is None
+    assert parsed_strength["active_sets"] is None
+    assert parsed_strength["total_reps"] is None
     context = build_deterministic_coach_context(
         normalize_activity_window(
             [{
@@ -169,7 +195,7 @@ def test_strength_context_marks_empty_exercise_sets_partial_and_nulls_weekly_agg
                 "duration": 45,
                 "raw_data": {
                     "training_stress_score": 22,
-                    "strength": parse_strength_training({}, []),
+                    "strength": parsed_strength,
                     "strength_sets_available": False,
                 },
             }]
@@ -178,8 +204,45 @@ def test_strength_context_marks_empty_exercise_sets_partial_and_nulls_weekly_agg
     )
     session = context["weekly_analysis"][0]["sessions"][0]
     assert session["strength"]["sets"] == []
+    assert session["strength"]["total_sets"] is None
+    assert session["strength"]["active_sets"] is None
+    assert session["strength"]["total_reps"] is None
     assert session["data_quality"] == {"status": "partial", "missing_fields": ["strength.sets"]}
     assert context["cross_training"]["strength_training"]["total_sets"] is None
+    validated = SessionFacts.from_context_payload(
+        session,
+        location="strength session",
+    ).strength
+    assert validated is not None
+    assert (validated.total_sets, validated.active_sets, validated.total_reps) == (None, None, None)
+    message = format_activity_message(session, None)
+    assert "總組數" not in message
+    assert "總次數" not in message
+
+
+def test_strength_context_keeps_missing_strength_payload_counts_unavailable():
+    context = build_deterministic_coach_context(
+        normalize_activity_window(
+            [{
+                "activity_id": 3,
+                "type": "strength_training",
+                "date": "2026-08-19",
+                "duration": 45,
+                "raw_data": {"training_stress_score": 22},
+            }]
+        ),
+        today="2026-08-20",
+    )
+
+    session = context["weekly_analysis"][0]["sessions"][0]
+    assert session["strength"] == {
+        "total_sets": None,
+        "active_sets": None,
+        "total_reps": None,
+        "total_volume_kg": None,
+        "sets": [],
+    }
+    assert session["data_quality"] == {"status": "partial", "missing_fields": ["strength.sets"]}
 
 
 def test_strength_activity_fetch_uses_exercise_sets_and_never_requests_lap_splits():
@@ -375,3 +438,4 @@ def test_all_three_coaching_prompts_define_strength_guardrails():
         contents = prompt.read_text(encoding="utf-8")
         assert "strength_training" in contents
         assert "不得" in contents
+        assert "不是 0" in contents

@@ -179,15 +179,26 @@ def parse_strength_training(
     exercise_sets: Any,
 ) -> dict[str, Any]:
     """Produce the public strength contract without deriving unverified volume."""
-    sets = [_normalize_set(item, index) for index, item in enumerate(_set_payloads(exercise_sets), start=1)]
-    active_sets = [item for item in sets if item["set_type"] == "active"]
+    source_sets = _set_payloads(exercise_sets)
+    sets = [_normalize_set(item, index) for index, item in enumerate(source_sets, start=1)]
+    active_set_reps = [
+        _integer(_first(source_set, "reps", "repCount", "repetitionCount", "totalReps"))
+        for source_set, normalized_set in zip(source_sets, sets)
+        if normalized_set["set_type"] == "active"
+    ]
     total_sets = _integer(_summary_value(summary, "totalSets", "total_sets", "setCount"))
     active_count = _integer(_summary_value(summary, "activeSets", "active_sets"))
     total_reps = _integer(_summary_value(summary, "totalReps", "total_reps", "repCount"))
+    derived_count = len(active_set_reps) if active_set_reps else None
+    derived_reps = (
+        sum(rep for rep in active_set_reps if rep is not None)
+        if active_set_reps and all(rep is not None for rep in active_set_reps)
+        else None
+    )
     return {
-        "total_sets": total_sets if total_sets is not None else len(active_sets),
-        "active_sets": active_count if active_count is not None else len(active_sets),
-        "total_reps": total_reps if total_reps is not None else sum(item["reps"] for item in active_sets),
+        "total_sets": total_sets if total_sets is not None else derived_count,
+        "active_sets": active_count if active_count is not None else derived_count,
+        "total_reps": total_reps if total_reps is not None else derived_reps,
         "total_volume_kg": _volume_kg(summary),
         "sets": sets,
     }
