@@ -164,12 +164,17 @@ def import_garmin_raw_file(session: Session, user_id, path: str | Path) -> dict[
             continue
 
         raw_data = activity_data.get("raw_data") or activity_data.get("raw_metrics") or {}
+        # Missing set details must use the monotonic merge path even when the
+        # all-history fetch tolerated a 404 without a transient-failure marker.
+        # A successful-empty first observation is still inserted; this only
+        # prevents a later incomplete payload from erasing already-known sets.
         strength_detail_partial = (
             activity_type == "strength_training"
             and isinstance(raw_data, dict)
             and (
                 raw_data.get("strength_sets_fetch_failed") is True
                 or not raw_data
+                or raw_data.get("strength_sets_available") is False
             )
         )
         if strength_detail_partial:
