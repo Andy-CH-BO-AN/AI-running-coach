@@ -59,15 +59,15 @@ def _strength_summary_failure_payload():
     }
 
 
-def _summary_success_sets_failure_payload():
-    payload = _strength_payload(failed=True, sets=[], total_reps=24, load=31)
+def _summary_success_sets_failure_payload(*, load: int = 31):
+    payload = _strength_payload(failed=True, sets=[], total_reps=24, load=load)
     raw_data = payload["raw_data"]
     raw_data["aerobic_training_effect"] = 2.3
     raw_data["anaerobic_training_effect"] = 0.7
     raw_data["strength"].update({"total_sets": 4, "active_sets": 4})
     raw_data["strength_raw_summary"] = {
         "summaryDTO": {
-            "activityTrainingLoad": 31,
+            "activityTrainingLoad": load,
             "aerobicTrainingEffect": 2.3,
             "anaerobicTrainingEffect": 0.7,
             "totalSets": 4,
@@ -77,26 +77,32 @@ def _summary_success_sets_failure_payload():
     return payload
 
 
-def test_transient_strength_set_failure_does_not_replace_existing_complete_activity(db_session, tmp_path):
+def test_transient_strength_set_failure_preserves_sets_and_applies_corrected_summary(db_session, tmp_path):
     complete_path = tmp_path / "garmin_raw_strength_complete.json"
     partial_path = tmp_path / "garmin_raw_strength_partial.json"
     complete_sets = [
         {"set_index": 1, "set_type": "active", "exercise_names": ["Squat"], "category": None, "reps": 9, "weight_kg": None, "duration_sec": None},
         {"set_index": 2, "set_type": "active", "exercise_names": ["Squat"], "category": None, "reps": 9, "weight_kg": None, "duration_sec": None},
     ]
-    _write_json(complete_path, [_strength_payload(failed=False, sets=complete_sets, total_reps=18, load=22)])
-    _write_json(partial_path, [_strength_payload(failed=True, sets=[], total_reps=None, load=23)])
+    _write_json(complete_path, [_strength_payload(failed=False, sets=complete_sets, total_reps=18, load=20)])
+    corrected = _summary_success_sets_failure_payload(load=35)
+    _write_json(partial_path, [corrected])
     user = get_or_create_default_user(db_session)
 
     first = import_garmin_raw_file(db_session, user.id, complete_path)
     second = import_garmin_raw_file(db_session, user.id, partial_path)
+    third = import_garmin_raw_file(db_session, user.id, partial_path)
 
     assert first["activities"] == 1
-    assert second["activities"] == 0
+    assert second["activities"] == 1
+    assert third["activities"] == 0
     activity = db_session.scalars(select(Activity)).one()
-    assert activity.raw_json["raw_data"]["strength"]["sets"] == complete_sets
-    assert activity.raw_json["raw_data"]["strength"]["total_reps"] == 18
-    assert float(activity.training_stress_score) == 22
+    raw_data = activity.raw_json["raw_data"]
+    assert raw_data["strength"]["sets"] == complete_sets
+    assert raw_data["strength_raw_exercise_sets"] == complete_sets
+    assert raw_data["strength"]["total_reps"] == 24
+    assert raw_data["strength_raw_summary"]["summaryDTO"]["activityTrainingLoad"] == 35
+    assert float(activity.training_stress_score) == 35
 
 
 def test_transient_strength_summary_failure_does_not_replace_existing_complete_activity(db_session, tmp_path):
