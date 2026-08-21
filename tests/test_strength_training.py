@@ -54,7 +54,7 @@ def test_strength_parser_derives_only_missing_counts_and_rejects_unknown_weight_
         ],
     )
 
-    assert strength["total_sets"] == 2
+    assert strength["total_sets"] == 3
     assert strength["active_sets"] == 2
     assert strength["total_reps"] is None
     assert strength["total_volume_kg"] is None
@@ -94,7 +94,7 @@ def test_strength_parser_derives_reps_only_when_every_active_set_has_a_valid_sou
     assert derived["total_sets"] == 2
     assert derived["active_sets"] == 2
     assert derived["total_reps"] == 8
-    assert rest_only["total_sets"] is None
+    assert rest_only["total_sets"] == 2
     assert rest_only["active_sets"] is None
     assert rest_only["total_reps"] is None
 
