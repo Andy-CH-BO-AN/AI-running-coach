@@ -22,6 +22,11 @@ _UNKNOWN_LOAD_CLAIM = re.compile(
     re.IGNORECASE,
 )
 _UNKNOWN_LOAD_NEUTRAL = re.compile(r"負荷(?:資料|數據)(?:不足|不可得)")
+_UNKNOWN_LOAD_NO_INCREASE = re.compile(
+    r"(?:不(?:應|要|宜|該|需|需要|建議)|避免|無需|不用|勿).{0,8}"
+    r"(?:增加|提高|提升).{0,12}(?:TSS|訓練負荷|負荷)",
+    re.IGNORECASE,
+)
 
 
 class WeeklyCoachError(RuntimeError):
@@ -101,10 +106,12 @@ def _has_unknown_load(value: Any) -> bool:
 def _contains_unknown_load_claim(payload: dict[str, Any]) -> bool:
     texts = [payload["analysis"], payload["recommendation"]]
     texts.extend(entry["description"] for entry in payload["next_week_plan"])
-    return any(
-        _UNKNOWN_LOAD_CLAIM.search(_UNKNOWN_LOAD_NEUTRAL.sub("", text))
-        for text in texts
-    )
+    for text in texts:
+        normalized = _UNKNOWN_LOAD_NEUTRAL.sub("", text)
+        normalized = _UNKNOWN_LOAD_NO_INCREASE.sub("", normalized)
+        if _UNKNOWN_LOAD_CLAIM.search(normalized):
+            return True
+    return False
 
 
 def _generate_payload(full_prompt: str) -> tuple[str, dict[str, Any]]:
