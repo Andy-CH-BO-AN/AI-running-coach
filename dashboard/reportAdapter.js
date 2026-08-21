@@ -738,10 +738,12 @@
       conclusion: fallbackText(session.coaching_note, ""),
       has_ai_conclusion: Boolean(fallbackText(session.coaching_note, "")),
       distance_km: adapted.distance_km,
-      avg_pace: adapted.avg_pace || "--:--",
+      duration_min: adapted.duration_min,
+      avg_pace: adapted.avg_pace || null,
       avg_hr: adapted.avg_hr,
       temperature_c: isPresentNumber(environment.estimated_temp_c) ? roundTo(environment.estimated_temp_c, 1) : null,
       training_load: adapted.training_load,
+      strength: adapted.strength,
       work_reps: workReps,
       coaching_notes: {
         observation: fallbackText(session.observation, ""),
@@ -1032,7 +1034,8 @@
     var missingFields = {};
 
     sessions.forEach(function addSession(session) {
-      if (isMissingNumericField(session, "distance_km")) {
+      var sourceType = normalizedSourceActivityType(session);
+      if (sourceType !== "strength_training" && isMissingNumericField(session, "distance_km")) {
         missingFields.distance_km = true;
       }
 
@@ -1044,7 +1047,6 @@
         missingFields.training_load = true;
       }
 
-      var sourceType = normalizedSourceActivityType(session);
       if (sourceType === "swimming" || sourceType === "lap_swimming") {
         swimDistance += toNumber(session.distance_km);
       } else if (sourceType === "cycling") {
@@ -1077,6 +1079,16 @@
     };
   }
 
+  function adaptStrengthSummary(strength) {
+    return {
+      total_sets: isPresentNumber(strength && strength.total_sets) ? roundTo(strength.total_sets, 0) : null,
+      total_reps: isPresentNumber(strength && strength.total_reps) ? roundTo(strength.total_reps, 0) : null,
+      total_volume_kg: isPresentNumber(strength && strength.total_volume_kg)
+        ? roundTo(strength.total_volume_kg, 1)
+        : null
+    };
+  }
+
   function adaptSession(session) {
     var type = fallbackText(session && session.type, "rest");
     return {
@@ -1092,6 +1104,7 @@
       avg_pace: session ? session.avg_pace : null,
       training_effect_aerobic: session ? session.training_effect_aerobic : null,
       training_effect_anaerobic: session ? session.training_effect_anaerobic : null,
+      strength: adaptStrengthSummary(session && session.strength),
       environment: session && session.environment ? session.environment : {},
       coaching_note: fallbackText(session && session.coaching_note, ""),
       segments: safeArray(session && session.segments)

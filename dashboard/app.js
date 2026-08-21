@@ -283,6 +283,23 @@
     return div;
   }
 
+  function appendActivityStatWhenPresent(container, label, value, unit) {
+    if (value === null || value === undefined || value === "") {
+      return;
+    }
+    container.appendChild(renderActivityStat(label, value, unit));
+  }
+
+  function renderStrengthActivityStats(container, latest) {
+    var strength = latest.strength || {};
+    appendActivityStatWhenPresent(container, "時間", latest.duration_min, "分");
+    appendActivityStatWhenPresent(container, "訓練負荷", latest.training_load, "");
+    appendActivityStatWhenPresent(container, "心率", latest.avg_hr, "bpm");
+    appendActivityStatWhenPresent(container, "總組數", strength.total_sets, "組");
+    appendActivityStatWhenPresent(container, "總次數", strength.total_reps, "次");
+    appendActivityStatWhenPresent(container, "總容量", strength.total_volume_kg, "kg");
+  }
+
   function renderLatestActivity(model) {
     clear(elements.latestActivity);
     var latest = model.latest_activity;
@@ -308,10 +325,14 @@
 
     var stats = document.createElement("div");
     stats.className = "activity-stat-grid";
-    stats.appendChild(renderActivityStat("距離", latest.distance_km || "0", "km"));
-    stats.appendChild(renderActivityStat("配速", latest.avg_pace || "--:--", "/km"));
-    stats.appendChild(renderActivityStat("心率", latest.avg_hr || "--", "bpm"));
-    stats.appendChild(renderActivityStat("氣溫", latest.temperature_c !== null ? latest.temperature_c : "--", "°C"));
+    if (String(latest.source_activity_type || "").toLowerCase() === "strength_training") {
+      renderStrengthActivityStats(stats, latest);
+    } else {
+      stats.appendChild(renderActivityStat("距離", latest.distance_km || "0", "km"));
+      stats.appendChild(renderActivityStat("配速", latest.avg_pace || "--:--", "/km"));
+      stats.appendChild(renderActivityStat("心率", latest.avg_hr || "--", "bpm"));
+      stats.appendChild(renderActivityStat("氣溫", latest.temperature_c !== null ? latest.temperature_c : "--", "°C"));
+    }
     elements.latestActivity.appendChild(stats);
 
     if (latest.work_reps.length > 0) {

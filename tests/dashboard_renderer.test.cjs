@@ -134,6 +134,28 @@ test("latest activity renders splits without requiring an interval layout", asyn
   dom.window.close();
 });
 
+test("latest strength activity renders strength facts instead of distance and pace", async () => {
+  const dom = await renderReport(reportWithSession({
+    date: "2026-05-12",
+    source_activity_type: "Strength_Training",
+    distance_km: null,
+    duration_min: 45,
+    training_load: 31,
+    avg_hr: 122,
+    strength: { total_sets: 16, total_reps: 120, total_volume_kg: 2400 },
+  }));
+
+  const latestActivity = dom.window.document.getElementById("latestActivity");
+  assert.match(latestActivity.textContent, /時間\s*45\s*分/);
+  assert.match(latestActivity.textContent, /訓練負荷\s*31/);
+  assert.match(latestActivity.textContent, /總組數\s*16\s*組/);
+  assert.match(latestActivity.textContent, /總次數\s*120\s*次/);
+  assert.match(latestActivity.textContent, /總容量\s*2400\s*kg/);
+  assert.doesNotMatch(latestActivity.textContent, /距離/);
+  assert.doesNotMatch(latestActivity.textContent, /配速/);
+  dom.window.close();
+});
+
 test("cycling splits render speed with km/h units", async () => {
   const dom = await renderReport(reportWithSession({
     date: "2026-05-12",
