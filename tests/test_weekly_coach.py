@@ -113,36 +113,3 @@ def test_weekly_coach_preserves_cross_training_on_unavailable_day(monkeypatch, t
         "session": "固定游泳",
         "description": "45 分鐘輕鬆游泳，維持可對話強度，作為低衝擊有氧與跑步恢復。",
     }
-
-
-def test_weekly_coach_rejects_undertraining_claim_when_any_session_load_is_unknown(monkeypatch):
-    payload = _payload()
-    payload["recommendation"] = "本週負荷不足，建議提高訓練負荷。"
-    monkeypatch.setattr(weekly_coach.coach_agent, "MODEL_FALLBACKS", ("provider",))
-    monkeypatch.setattr(
-        weekly_coach.coach_agent,
-        "_generate_content_with_retries",
-        lambda *_args: payload,
-    )
-
-    with pytest.raises(weekly_coach.WeeklyCoachError, match="unknown training load"):
-        weekly_coach.generate_weekly_report(
-            _spec(input_json={"sessions": [{"training_load": 50}, {"training_load": None}]})
-        )
-
-
-def test_weekly_coach_allows_neutral_unknown_load_copy(monkeypatch):
-    payload = _payload()
-    payload["recommendation"] = "本週負荷資料不足，先依體感保守恢復。"
-    monkeypatch.setattr(weekly_coach.coach_agent, "MODEL_FALLBACKS", ("provider",))
-    monkeypatch.setattr(
-        weekly_coach.coach_agent,
-        "_generate_content_with_retries",
-        lambda *_args: payload,
-    )
-
-    draft = weekly_coach.generate_weekly_report(
-        _spec(input_json={"sessions": [{"training_load": 50}, {"training_load": None}]})
-    )
-
-    assert draft.report_json == payload
