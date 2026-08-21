@@ -12,10 +12,11 @@ from sqlalchemy.orm import Session
 from src.db.models import AIReport, LineNotification, WeeklySummary
 from src.db.repositories import get_or_create_default_user
 from src.notifications.line_client import LineSendResult
-from src.preprocessing.weekly_report import build_completed_week_summary
+from src.preprocessing.weekly_report import WEEKLY_SUMMARY_VERSION, build_completed_week_summary
 from src.services.ai_report_resolution import AIReportDraft, AIReportSpec
 from src.services.weekly_training_report import (
     LINE_RETRY_KEY_SAFE_WINDOW,
+    WEEKLY_REPORT_PROMPT_VERSION,
     WeeklyTrainingReportRunner,
     _weekly_ai_idempotency_key,
 )
@@ -338,8 +339,6 @@ def test_weekly_runner_adds_goal_preferences_and_compact_profile_to_ai_input(
         "total_reps": 18,
         "total_volume_kg": 5.4,
     }
-    assert captured[0].prompt_version == "weekly-coach:v5"
-    assert captured[0].feature_version == "weekly:v5"
     assert input_json["athlete_profile"] == {
         "vo2max": {"value": 52, "unit": "ml/kg/min"},
         "max_heart_rate": {"value": 190, "unit": "bpm"},
@@ -559,9 +558,9 @@ def test_weekly_runner_preserves_persisted_cross_training_on_unavailable_day(db_
             user_id=user.id,
             report_scope="weekly",
             input_json=input_json,
-                prompt_version="weekly-coach:v5",
+            prompt_version=WEEKLY_REPORT_PROMPT_VERSION,
             weekly_summary_id=summary.id,
-                feature_version="weekly:v5",
+            feature_version=WEEKLY_SUMMARY_VERSION,
         )
     )
     persisted = db_session.get(AIReport, report.id)

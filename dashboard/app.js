@@ -99,17 +99,6 @@
     });
   }
 
-  function isAvailableNumber(value) {
-    if (value === null || value === undefined || value === "") {
-      return false;
-    }
-    return Number.isFinite(Number(value));
-  }
-
-  function formatTrainingLoad(value) {
-    return isAvailableNumber(value) ? String(value) + " TSS" : "資料不足";
-  }
-
   function renderPrimaryAction(model) {
     var primary = model.primary_action;
     clear(elements.primaryAction);
@@ -218,9 +207,7 @@
 
     var score = document.createElement("div");
     score.className = "stat-value large";
-    score.textContent = isAvailableNumber(load.current_tss_weekly)
-      ? String(load.current_tss_weekly)
-      : "資料不足";
+    score.textContent = load.current_tss_weekly || "0";
 
     var label = document.createElement("div");
     label.className = "pill " + load.status;
@@ -229,15 +216,7 @@
     var range = document.createElement("p");
     range.className = "subtle";
     if (load.optimal_tss_range) {
-      var minimum = load.optimal_tss_range.min;
-      var maximum = load.optimal_tss_range.max;
-      if (isAvailableNumber(minimum) && isAvailableNumber(maximum)) {
-        range.textContent = "建議範圍: " + minimum + " - " + maximum;
-      } else if (isAvailableNumber(minimum)) {
-        range.textContent = "建議下限: " + minimum;
-      } else if (isAvailableNumber(maximum)) {
-        range.textContent = "建議上限: " + maximum;
-      }
+      range.textContent = "建議範圍: " + load.optimal_tss_range.min + " - " + load.optimal_tss_range.max;
     }
 
     elements.loadAssessment.appendChild(caption);
@@ -412,7 +391,7 @@
       appendTableCells(row, [
         week.week_label,
         week.metrics.derived_running_distance_km + " km",
-        formatTrainingLoad(week.metrics.derived_training_load),
+        week.metrics.derived_training_load + " TSS",
         week.metrics.derived_total_duration_min + " min",
         week.metrics.data_quality
       ], 0);
@@ -451,7 +430,7 @@
         metricLabels.push("單車 " + week.metrics.derived_bike_distance_km + " km");
       }
       metricLabels.push(week.metrics.derived_total_duration_min + " min");
-      metricLabels.push(formatTrainingLoad(week.metrics.derived_training_load));
+      metricLabels.push(week.metrics.derived_training_load + " TSS");
       metricLabels.forEach(function(value) {
         metrics.appendChild(textElement("span", "", value));
       });
@@ -538,10 +517,7 @@
       [
         highlight.distance_label,
         highlight.duration_label,
-        highlight.load_label,
-        highlight.strength_sets_label,
-        highlight.strength_reps_label,
-        highlight.strength_volume_label
+        highlight.load_label
       ].forEach(function(value) {
         if (value) {
           stats.appendChild(textElement("span", "", value));
@@ -579,19 +555,17 @@
 
     var trendSeries = metrics.map(function(metric, index) {
       var points = normalizeTrendPoints(metric.points || metric.series || []);
-      var availablePoints = points.filter(function(point) { return point.available; });
       var displayMeta = metricTrendMeta(metric, index);
       return {
         metric: metric,
         index: index,
         mode: index === 0 ? "distance" : "load",
         points: points,
-        availablePoints: availablePoints,
         meta: displayMeta,
-        latest: points[points.length - 1] || { available: false, value: null, display: "資料不足" },
-        peak: availablePoints.reduce(function findPeak(best, point) {
-          return !best || point.value > best.value ? point : best;
-        }, null)
+        latest: points[points.length - 1] || { value: 0, display: "0" },
+        peak: points.reduce(function findPeak(best, point) {
+          return point.value > best.value ? point : best;
+        }, points[0] || { value: 0, label: "資料不足", week_start_label: "" })
       };
     }).filter(function(series) {
       return series.points.length > 0;
@@ -606,11 +580,11 @@
       var card = document.createElement("div");
       card.className = "trend-summary-card";
 
-      var average = series.availablePoints.length
-        ? series.availablePoints.reduce(function sum(total, point) { return total + point.value; }, 0) / series.availablePoints.length
+      var average = series.points.length
+        ? series.points.reduce(function sum(total, point) { return total + point.value; }, 0) / series.points.length
         : 0;
       var expectedForWeek = series.latest.is_current_week ? average * series.latest.week_progress_ratio : average;
-      var isLow = series.latest.available && expectedForWeek > 0 && series.latest.value < expectedForWeek * 0.8;
+      var isLow = expectedForWeek > 0 && series.latest.value < expectedForWeek * 0.8;
 
       var summary = document.createElement("div");
       summary.className = "trend-card-summary";
@@ -618,27 +592,21 @@
       var valueRow = document.createElement("div");
       valueRow.className = "trend-value-row";
       valueRow.appendChild(textElement("strong", "trend-metric-value", series.latest.display));
-      if (series.latest.available) {
-        valueRow.appendChild(textElement("span", "trend-unit", series.meta.unit));
-      }
+      valueRow.appendChild(textElement("span", "trend-unit", series.meta.unit));
       summary.appendChild(valueRow);
 
       var badgeRow = document.createElement("div");
       badgeRow.className = "trend-badge-row";
-      var badgeText = !series.latest.available
-        ? "資料不足"
-        : series.latest.is_current_week
-          ? (isLow ? "↓ 本週至今偏低" : "本週至今穩定")
-          : (isLow ? "↓ 本週偏低" : "本週穩定");
+      var badgeText = series.latest.is_current_week
+        ? (isLow ? "↓ 本週至今偏低" : "本週至今穩定")
+        : (isLow ? "↓ 本週偏低" : "本週穩定");
       var badge = textElement("span", "trend-badge" + (isLow ? " low" : ""), badgeText);
       badgeRow.appendChild(badge);
-      if (series.peak) {
-        badgeRow.appendChild(textElement(
-          "span",
-          "trend-peak",
-          "峰值 " + series.peak.display + " " + series.meta.unit + "（" + (series.peak.week_start_label || series.peak.label) + " 週）"
-        ));
-      }
+      badgeRow.appendChild(textElement(
+        "span",
+        "trend-peak",
+        "峰值 " + series.peak.display + " " + series.meta.unit + "（" + (series.peak.week_start_label || series.peak.label) + " 週）"
+      ));
       summary.appendChild(badgeRow);
 
       card.appendChild(summary);
@@ -668,7 +636,6 @@
       if (typeof point === "number") {
         return {
           label: "第 " + String(index + 1) + " 週",
-          available: true,
           value: point,
           display: String(point),
           week_start_label: "",
@@ -676,20 +643,13 @@
           week_progress_ratio: 1
         };
       }
-      var available = Boolean(
-        point
-        && point.available !== false
-        && isAvailableNumber(point.value)
-      );
-      var value = available ? Number(point.value) : null;
       return {
         label: point.label || ("第 " + String(index + 1) + " 週"),
         week_start_label: point.week_start_label || "",
         is_current_week: Boolean(point.is_current_week),
         week_progress_ratio: Number(point.week_progress_ratio) || 1,
-        available: available,
-        value: value,
-        display: available ? (point.display || String(value)) : "資料不足"
+        value: Number(point.value) || 0,
+        display: point.display || String(point.value)
       };
     });
   }
@@ -753,37 +713,26 @@
 
     seriesList.forEach(function drawSeries(series) {
       var meta = chartMeta[series.index] || chartMeta[0];
-      var availableValues = series.points.filter(function(point) {
-        return point.available;
-      }).map(function(point) {
-        return point.value;
-      });
-      var max = availableValues.length ? Math.max.apply(null, availableValues) || 1 : 1;
-      var pointPairs = [];
-      series.points.forEach(function(point, index) {
-        if (!point.available) {
-          return;
-        }
-        pointPairs.push({
+      var max = Math.max.apply(null, series.points.map(function(point) { return point.value; })) || 1;
+      var pointPairs = series.points.map(function(point, index) {
+        return {
           x: xMin + index * step,
           y: meta.top + meta.height - (point.value / max) * meta.height,
           point: point,
           index: index
-        });
+        };
       });
       var points = pointPairs.map(function(pair) {
         return pair.x + "," + pair.y;
       }).join(" ");
 
-      if (points) {
-        var polyline = document.createElementNS(ns, "polyline");
-        polyline.setAttribute("fill", "none");
-        polyline.setAttribute("stroke", meta.color);
-        polyline.setAttribute("stroke-width", "2");
-        polyline.setAttribute("vector-effect", "non-scaling-stroke");
-        polyline.setAttribute("points", points);
-        svg.appendChild(polyline);
-      }
+      var polyline = document.createElementNS(ns, "polyline");
+      polyline.setAttribute("fill", "none");
+      polyline.setAttribute("stroke", meta.color);
+      polyline.setAttribute("stroke-width", "2");
+      polyline.setAttribute("vector-effect", "non-scaling-stroke");
+      polyline.setAttribute("points", points);
+      svg.appendChild(polyline);
 
       pointPairs.forEach(function(pair) {
         var hit = document.createElement("span");
@@ -805,7 +754,7 @@
         plot.appendChild(hit);
 
         var isPeak = pair.point === series.peak;
-        var isLatest = pair.index === series.points.length - 1;
+        var isLatest = pair.index === pointPairs.length - 1;
         if (!isPeak && !isLatest) {
           return;
         }
@@ -857,10 +806,7 @@
     var tbody = document.createElement("tbody");
     points.forEach(function(point) {
       var row = document.createElement("tr");
-      appendTableCells(row, [
-        point.label,
-        point.display + (point.available && unit ? " " + unit : "")
-      ], 0);
+      appendTableCells(row, [point.label, point.display + (unit ? " " + unit : "")], 0);
       tbody.appendChild(row);
     });
     table.appendChild(tbody);

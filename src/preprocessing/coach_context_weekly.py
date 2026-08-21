@@ -56,17 +56,6 @@ def _build_week_session_counts(week_sessions: Sequence[CoachSession]) -> CoachSe
     }
 
 
-def _known_training_load_total(
-    sessions: Sequence[CoachSession],
-) -> float | None:
-    if not sessions:
-        return 0.0
-    values = [_safe_float(session.get("training_load")) for session in sessions]
-    if any(value is None for value in values):
-        return None
-    return _round_or_none(sum(value for value in values if value is not None), 1)
-
-
 def _build_12week_summary(
     sessions: Sequence[CoachSession],
     today: date,
@@ -88,7 +77,7 @@ def _build_12week_summary(
             "derived_total_distance_km": _round_or_none(
                 sum(_safe_float(s.get("distance_km")) or 0 for s in week_sessions), 2
             ) or 0.0,
-            "derived_training_load": _known_training_load_total(week_sessions),
+            "derived_training_load": _round_or_none(sum(s["training_load"] for s in week_sessions), 1) or 0.0,
             "sessions_count": len(week_sessions),
         })
     return list(reversed(weeks))  # chronological: oldest first
@@ -126,7 +115,7 @@ def _build_weekly_analysis(
                 sum(_safe_float(session.get("distance_km")) or 0 for session in week_sessions), 2
             ) or 0.0,
             "derived_total_duration_min": _round_or_none(sum(session["duration_min"] for session in week_sessions), 1) or 0.0,
-            "derived_training_load": _known_training_load_total(week_sessions),
+            "derived_training_load": _round_or_none(sum(session["training_load"] for session in week_sessions), 1) or 0.0,
         }
         buckets.append(
             {
@@ -149,12 +138,7 @@ def _build_weekly_analysis(
             }
         )
 
-    nonzero_loads = [
-        load
-        for week in buckets[1:]
-        if (load := _safe_float(week.get("derived_training_load"))) is not None
-        and load > 0
-    ]
+    nonzero_loads = [week["derived_training_load"] for week in buckets[1:] if week["derived_training_load"] > 0]
     baseline_load = sum(nonzero_loads) / len(nonzero_loads) if nonzero_loads else None
     for week in buckets:
         week["risk_flags"] = _risk_flags_for_week(week, baseline_load=baseline_load)
@@ -162,28 +146,13 @@ def _build_weekly_analysis(
 
 
 def _build_load_assessment(weekly_analysis: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
-    current_load = (
-        _safe_float(weekly_analysis[0].get("derived_training_load"))
-        if weekly_analysis
-        else 0.0
-    )
-    previous_loads = [
-        load
-        for week in weekly_analysis[1:]
-        if (load := _safe_float(week.get("derived_training_load"))) is not None
-        and load > 0
-    ]
-    average_previous = (
-        sum(previous_loads) / len(previous_loads)
-        if previous_loads
-        else current_load
-    )
-    lower = _round_or_none(average_previous * 0.8, 1) if average_previous else None
-    upper = _round_or_none(average_previous * 1.3, 1) if average_previous else None
+    current_load = weekly_analysis[0]["derived_training_load"] if weekly_analysis else 0.0
+    previous_loads = [week["derived_training_load"] for week in weekly_analysis[1:] if week["derived_training_load"] > 0]
+    average_previous = sum(previous_loads) / len(previous_loads) if previous_loads else current_load
+    lower = _round_or_none(average_previous * 0.8, 1) if average_previous else 0.0
+    upper = _round_or_none(average_previous * 1.3, 1) if average_previous else 0.0
 
-    if current_load is None:
-        status = "unknown"
-    elif current_load == 0:
+    if current_load == 0:
         status = "undertraining"
     elif upper and current_load > upper * 1.2:
         status = "overtraining"
@@ -195,10 +164,10 @@ def _build_load_assessment(weekly_analysis: Sequence[Dict[str, Any]]) -> Dict[st
         status = "optimal"
 
     return {
-        "current_tss_weekly": _round_or_none(current_load, 1),
+        "current_tss_weekly": _round_or_none(current_load, 1) or 0.0,
         "optimal_tss_range": {"min": lower, "max": upper},
         "status": status,
-        "baseline_previous_3_weeks": _round_or_none(average_previous, 1),
+        "baseline_previous_3_weeks": _round_or_none(average_previous, 1) if average_previous else 0.0,
     }
 
 
@@ -250,17 +219,15 @@ def _build_evidence_facts(
     facts: List[EvidenceFact] = []
     current_week = weekly_analysis[0] if weekly_analysis else None
     if current_week:
-        current_week_load = _safe_float(current_week.get("derived_training_load"))
-        if current_week_load is not None:
-            facts.append(
-                {
-                    "fact_id": "current_week_load",
-                    "label": "本週訓練負荷",
-                    "value": current_week_load,
-                    "unit": "TSS",
-                    "source_path": "deterministic_context.weekly_analysis[0].derived_training_load",
-                }
-            )
+        facts.append(
+            {
+                "fact_id": "current_week_load",
+                "label": "本週訓練負荷",
+                "value": current_week["derived_training_load"],
+                "unit": "TSS",
+                "source_path": "deterministic_context.weekly_analysis[0].derived_training_load",
+            }
+        )
         for flag in current_week.get("risk_flags", []):
             facts.append(
                 {

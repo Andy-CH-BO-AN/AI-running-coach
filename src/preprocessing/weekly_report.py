@@ -20,7 +20,7 @@ from src.preprocessing.coach_context_utils import (
     _week_start_for,
 )
 
-WEEKLY_SUMMARY_VERSION = "weekly:v5"
+WEEKLY_SUMMARY_VERSION = "weekly:v6"
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,36 +80,23 @@ def _sport_totals(sessions: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
                 "distance_km": 0.0,
                 "duration_min": 0.0,
                 "training_load": 0.0,
-                "has_training_load": False,
-                "has_unknown_training_load": False,
             },
         )
         entry["count"] += 1
         entry["distance_km"] += _number(session.get("distance_km"))
         entry["duration_min"] += _number(session.get("duration_min"))
-        load = _safe_float(session.get("training_load"))
-        if load is not None:
-            entry["training_load"] += load
-            entry["has_training_load"] = True
-        else:
-            entry["has_unknown_training_load"] = True
+        entry["training_load"] += _number(session.get("training_load"))
 
     return [
         {
-            "source_activity_type": entry["source_activity_type"],
-            "display_name": entry["display_name"],
-            "count": entry["count"],
+            **entry,
             "distance_km": (
                 None
                 if entry["source_activity_type"] == "strength_training"
                 else _round_or_none(entry["distance_km"], 2) or 0.0
             ),
             "duration_min": _round_or_none(entry["duration_min"], 1) or 0.0,
-            "training_load": (
-                _round_or_none(entry["training_load"], 1)
-                if entry["has_training_load"] and not entry["has_unknown_training_load"]
-                else None
-            ),
+            "training_load": _round_or_none(entry["training_load"], 1) or 0.0,
         }
         for _, entry in sorted(totals.items())
     ]
@@ -138,7 +125,7 @@ def _combined_sport_metrics(
 def _strength_training_summary(
     sessions: Sequence[Mapping[str, Any]],
 ) -> dict[str, int | float | None]:
-    """Aggregate each strength fact only when that field is available."""
+    """Aggregate only complete Garmin strength session facts for weekly AI."""
     strength_sessions = [
         session
         for session in sessions
@@ -151,18 +138,22 @@ def _strength_training_summary(
             "total_reps": None,
             "total_volume_kg": None,
         }
+    complete = all(
+        (session.get("data_quality") or {}).get("status") == "complete"
+        and isinstance(session.get("strength"), Mapping)
+        for session in strength_sessions
+    )
 
     def aggregate(key: str) -> int | float | None:
-        values: list[float] = []
-        for session in strength_sessions:
-            strength = session.get("strength")
-            if not isinstance(strength, Mapping):
-                return None
-            value = _safe_float(strength.get(key))
-            if value is None:
-                return None
-            values.append(value)
-        total = sum(values)
+        if not complete:
+            return None
+        values = [
+            _safe_float((session.get("strength") or {}).get(key))
+            for session in strength_sessions
+        ]
+        if any(value is None for value in values):
+            return None
+        total = sum(value or 0 for value in values)
         return int(total) if key != "total_volume_kg" else _round_or_none(total, 2)
 
     return {
@@ -177,18 +168,13 @@ def _load_metrics(
     weekly_analysis: Sequence[Mapping[str, Any]],
     week_start: date,
     sessions: Sequence[Mapping[str, Any]],
-    current_load: float | None,
-) -> dict[str, Any]:
+    current_load: float,
+) -> dict[str, float | None]:
     previous_loads: list[float] = []
     for week in weekly_analysis:
         candidate_start = _parse_date(week.get("week_start"))
-        previous_load = _safe_float(week.get("derived_training_load"))
-        if (
-            candidate_start is not None
-            and candidate_start < week_start
-            and previous_load is not None
-        ):
-            previous_loads.append(previous_load)
+        if candidate_start is not None and candidate_start < week_start:
+            previous_loads.append(_number(week.get("derived_training_load")))
     previous_loads = previous_loads[:3]
     chronic_load = (
         _round_or_none(sum(previous_loads) / len(previous_loads), 1)
@@ -197,36 +183,36 @@ def _load_metrics(
     )
     acute_chronic_ratio = (
         _round_or_none(current_load / chronic_load, 2)
-        if current_load is not None and chronic_load and chronic_load > 0
+        if chronic_load and chronic_load > 0
         else None
     )
 
+    daily_loads = {
+        week_start + timedelta(days=offset): 0.0
+        for offset in range(7)
+    }
+    for session in sessions:
+        day = _parse_date(session.get("date"))
+        if day not in daily_loads:
+            continue
+        daily_loads[day] += _number(
+            session.get("training_load")
+        )
+    values = list(daily_loads.values())
     monotony: float | None = None
-    if current_load is not None:
-        daily_loads = {
-            week_start + timedelta(days=offset): 0.0
-            for offset in range(7)
-        }
-        for session in sessions:
-            day = _parse_date(session.get("date"))
-            load = _safe_float(session.get("training_load"))
-            if day not in daily_loads or load is None:
-                continue
-            daily_loads[day] += load
-        values = list(daily_loads.values())
-        if len(values) >= 2:
-            mean = sum(values) / len(values)
-            variance = sum((value - mean) ** 2 for value in values) / len(values)
-            standard_deviation = math.sqrt(variance)
-            if standard_deviation > 0:
-                monotony = _round_or_none(mean / standard_deviation, 2)
+    if len(values) >= 2:
+        mean = sum(values) / len(values)
+        variance = sum((value - mean) ** 2 for value in values) / len(values)
+        standard_deviation = math.sqrt(variance)
+        if standard_deviation > 0:
+            monotony = _round_or_none(mean / standard_deviation, 2)
     strain = (
         _round_or_none(current_load * monotony, 1)
-        if current_load is not None and monotony is not None
+        if monotony is not None
         else None
     )
     return {
-        "acute_load": _round_or_none(current_load, 1),
+        "acute_load": _round_or_none(current_load, 1) or 0.0,
         "chronic_load": chronic_load,
         "acute_chronic_ratio": acute_chronic_ratio,
         "monotony": monotony,
@@ -290,7 +276,7 @@ def build_completed_week_summary(
         for session in sessions
     )
     total_duration = _number(week.get("derived_total_duration_min"))
-    training_load = _safe_float(week.get("derived_training_load"))
+    training_load = _number(week.get("derived_training_load"))
     load_metrics = _load_metrics(
         weekly_analysis,
         week_start,
@@ -326,7 +312,7 @@ def build_completed_week_summary(
         "sessions": sessions,
         "strength_training": strength_training,
         "training_load": {
-            "garmin_weekly_load": _round_or_none(training_load, 1),
+            "garmin_weekly_load": _round_or_none(training_load, 1) or 0.0,
             **load_metrics,
         },
         "data_quality": dict(week.get("data_quality") or {}),
