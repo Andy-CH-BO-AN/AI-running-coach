@@ -17,6 +17,31 @@ function reportWithSession(session, extra = {}) {
   };
 }
 
+function strengthLoadReport(trainingLoad) {
+  return reportWithSession({
+    date: "2026-05-12",
+    source_activity_type: "strength_training",
+    distance_km: null,
+    duration_min: 45,
+    training_load: trainingLoad,
+    strength: { total_sets: 4, total_reps: 32, total_volume_kg: null },
+  }, {
+    meta: { today: "2026-05-12" },
+    load_assessment: {
+      current_tss_weekly: trainingLoad,
+      status: trainingLoad === null ? "unknown" : "undertraining",
+      label: trainingLoad === null ? "負荷資料不足" : "本週負荷偏低",
+      optimal_tss_range: null,
+    },
+    twelve_week_summary: [{
+      week_start: "2026-05-11",
+      week_label: "第1週",
+      derived_total_distance_km: 0,
+      derived_training_load: trainingLoad,
+    }],
+  });
+}
+
 async function waitForRender(window) {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (window.document.getElementById("appStatus").textContent === "") {
@@ -153,6 +178,35 @@ test("latest strength activity renders strength facts instead of distance and pa
   assert.match(latestActivity.textContent, /總容量\s*2400\s*kg/);
   assert.doesNotMatch(latestActivity.textContent, /距離/);
   assert.doesNotMatch(latestActivity.textContent, /配速/);
+  dom.window.close();
+});
+
+test("unknown strength load stays unavailable across dashboard load surfaces", async () => {
+  const dom = await renderReport(strengthLoadReport(null));
+  const { document } = dom.window;
+
+  assert.match(document.getElementById("loadAssessment").textContent, /資料不足/);
+  assert.match(document.getElementById("weeklyChart").textContent, /資料不足/);
+  assert.match(document.getElementById("weeklyChart").textContent, /部分資料不足/);
+  assert.match(document.getElementById("weeklyNarratives").textContent, /資料不足/);
+  assert.match(document.getElementById("twelveWeekContent").textContent, /資料不足/);
+  assert.doesNotMatch(document.getElementById("weeklyChart").textContent, /0\s*TSS/);
+  assert.doesNotMatch(document.getElementById("weeklyNarratives").textContent, /0\s*TSS/);
+  assert.doesNotMatch(document.getElementById("twelveWeekContent").textContent, /0\s*TSS/);
+  assert.equal(document.querySelectorAll(".trend-hit-area.load").length, 0);
+  dom.window.close();
+});
+
+test("explicit zero strength load remains measured zero across dashboard", async () => {
+  const dom = await renderReport(strengthLoadReport(0));
+  const { document } = dom.window;
+
+  assert.match(document.getElementById("loadAssessment").textContent, /本週訓練量 \(TSS\)\s*0/);
+  assert.match(document.getElementById("weeklyChart").textContent, /0\s*TSS/);
+  assert.doesNotMatch(document.getElementById("weeklyChart").textContent, /部分資料不足/);
+  assert.match(document.getElementById("weeklyNarratives").textContent, /0\s*TSS/);
+  assert.match(document.getElementById("twelveWeekContent").textContent, /0\s*TSS/);
+  assert.equal(document.querySelectorAll(".trend-hit-area.load").length, 1);
   dom.window.close();
 });
 
