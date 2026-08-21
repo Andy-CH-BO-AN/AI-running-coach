@@ -23,7 +23,8 @@ _UNKNOWN_LOAD_CLAIM = re.compile(
 )
 _UNKNOWN_LOAD_NEUTRAL = re.compile(r"負荷(?:資料|數據)(?:不足|不可得)")
 _UNKNOWN_LOAD_NO_INCREASE = re.compile(
-    r"(?:不(?:應|要|宜|該|需|需要|建議)|避免|無需|不用|勿).{0,8}"
+    r"(?:不(?:應|要|宜|該|需|需要|建議)|避免|無需|不用|勿)"
+    r"(?:(?:再|額外|進一步|立即|直接|刻意|主動|盲目|過度|貿然|急著|輕易)\s*){0,2}"
     r"(?:增加|提高|提升).{0,12}(?:TSS|訓練負荷|負荷)",
     re.IGNORECASE,
 )
