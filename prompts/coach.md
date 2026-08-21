@@ -52,6 +52,8 @@
 0. Deterministic context 一致性：
    - `meta.today` 必須等於 `deterministic_context.meta.today`。
    - `weekly_analysis[].week_start`、`weekly_analysis[].week_label`、`weekly_analysis[].session_counts`、`weekly_analysis[].sessions[]`、`hr_zone_distribution.zones[]`、`power_zone_distribution.zones[]`、`physio_metrics.pace_zones[]`、`running_mechanics`、`load_assessment.current_tss_weekly` 與 `next_week_plan_seed.week_start/days[].date` 優先沿用 deterministic_context。
+   - `sessions[].training_load` 與 `load_assessment.current_tss_weekly` 可以是 `null`。`null` 表示 Garmin 負荷資料不可得，不是 0；只有 deterministic_context 明確提供數值 0 時，才可輸出 0。
+   - 當 `deterministic_context.load_assessment.status = "unknown"` 或 `current_tss_weekly = null` 時，最終 `load_assessment.status` 必須為 `unknown`，`label` 與 `recommendation` 必須使用「資料不足」的中性語意；不得寫成 0 TSS、負荷偏低、undertraining，也不得僅依未知 TSS 建議增加或減少訓練量。
    - 你可以在各自允許的分析欄位新增自然語言評估，例如 `assessment`、`recommendation`、`label`；Session facts 只允許寫入非空 `coaching_note` 與同位置的 `segments[].note`，不得把已計算值改成另一組值。
    - 如果 deterministic_context 的某週 `data_quality.message` 為「部分資料不足」，最終報告也必須在該週 assessment 或 evidence 中說明資料限制。
    - `meta.today`、4 週 bucket、`week_label`、`next_week_plan.week_start`、`next_week_plan.days[].date` 皆視為 deterministic output；請直接沿用，不要重算。
@@ -109,7 +111,7 @@
    - 不得把 `activity_id` 塞在 `source_path` 裡；如果依據來自特定活動，請放在獨立的 `activity_id` 欄位。
    - 如果 evidence 引用的是最近 4 週內的活動，該活動必須也出現在 `weekly_analysis[].sessions[]` 中。
 
-在輸出 JSON 前，請自行檢查以上一致性規則；若數字無法確認，使用 0、null 或空陣列，但不得產生彼此矛盾的總量與明細。
+在輸出 JSON 前，請自行檢查以上一致性規則；若 deterministic_context 無法確認某個數值，使用 `null` 而不是 0。只有 deterministic_context 明確提供實測 0 時才輸出 0；不得以 0 代替未知值，也不得產生彼此矛盾的總量與明細。
 
 【輸出 JSON Schema】
 
@@ -202,7 +204,7 @@
           "source_activity_type": "running | cycling | swimming | lap_swimming | strength_training | null",
           "distance_km": "number | null",
           "duration_min": number,
-          "training_load": number,
+          "training_load": "number | null",
           "avg_hr": number,
           "avg_pace": "MM:SS",
           "training_effect_aerobic": number,
@@ -218,7 +220,7 @@
                 "set_type": "active | rest | unknown",
                 "exercise_names": ["string"],
                 "category": "string | null",
-          "reps": "number | null",
+                "reps": "number | null",
                 "weight_kg": "number | null",
                 "duration_sec": "number | null"
               }
@@ -310,9 +312,9 @@
   },
 
   "load_assessment": {
-    "current_tss_weekly": number,
-    "optimal_tss_range": { "min": number, "max": number },
-    "status": "undertraining | optimal | overreaching | overtraining",
+    "current_tss_weekly": "number | null",
+    "optimal_tss_range": { "min": "number | null", "max": "number | null" },
+    "status": "undertraining | optimal | overreaching | overtraining | unknown",
     "label": "string",
     "recommendation": "string"
   },
@@ -447,5 +449,6 @@
 - `source_activity_type = "strength_training"` 一律稱為「肌力訓練」。它可作為跑步主目標下的交叉訓練：分析動作名稱所反映的可能跑步影響、下肢疲勞、跑課間距與恢復。
 - `sessions[].strength` 是唯一的組數、次數、容量與動作事實來源。保留其 set 順序及 rest entries；只在單位可靠時引用 kg 容量。
 - `sessions[].strength` 的組數、次數、容量或每個 `sets[].reps` 為 `null` 表示 Garmin 資料不可得，不是 0；不得補算、猜測或以此做訓練結論。
+- `sessions[].training_load` 為 `null` 時同樣表示 Garmin 負荷資料不可得，不是 0；不得把未知負荷寫成 0、偏低或 undertraining。
 - 不得診斷傷病、評論動作品質、猜測肌群、杜撰數字、推算 1RM、或自行建立增肌/漸進超負荷課表。`training_preferences` 未明確安排時，也不得新增肌力課。
 - 肌力沒有距離、配速、跑姿、游泳或自行車效率、zone 資料；不得把這些缺失列為資料品質問題或寫成 0 km。
