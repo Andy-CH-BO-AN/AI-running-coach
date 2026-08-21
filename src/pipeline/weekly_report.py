@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Callable
-from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -22,18 +21,16 @@ from src.services.weekly_training_report import (
     WeeklyTrainingReportResult,
     WeeklyTrainingReportRunner,
 )
+from src.services.training_calendar import TRAINING_TIMEZONE, resolve_training_calendar_date
 
-WEEKLY_REPORT_TIMEZONE = ZoneInfo("Asia/Taipei")
+WEEKLY_REPORT_TIMEZONE = TRAINING_TIMEZONE
 # Current week + completed report week + three chronic-baseline weeks.
 WEEKLY_ANALYSIS_WEEKS = 5
 
 
 def _default_weekly_report_date(now: datetime | None = None) -> date:
     """Resolve manual and scheduled runs against the report's local calendar."""
-    instant = now or datetime.now(timezone.utc)
-    if instant.tzinfo is None:
-        raise ValueError("now must be timezone-aware")
-    return instant.astimezone(WEEKLY_REPORT_TIMEZONE).date()
+    return resolve_training_calendar_date(now)
 
 
 def _weekly_activity_window(today: date) -> tuple[datetime, datetime]:

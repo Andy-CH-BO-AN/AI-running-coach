@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from src.services.artifacts import RAW_DATA_DIR, raw_artifact_paths, write_json
+from src.services.artifacts import (
+    RAW_DATA_DIR,
+    raw_artifact_paths,
+    strength_backfill_artifact_paths,
+    write_json,
+)
 from src.services.garmin_import_service import (
     import_fetched_raw_artifacts,
     import_strength_backfill,
 )
+from src.services.training_calendar import resolve_training_calendar_date
 
 
 def _build_timestamp() -> str:
-    return datetime.now().strftime("%Y%m%d")
+    return resolve_training_calendar_date().strftime("%Y%m%d")
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -41,7 +46,16 @@ def fetch_garmin_raw_files(
     output_dir: Path = RAW_DATA_DIR,
     activity_type: str | None = None,
     all_history: bool = False,
+    force: bool = False,
 ) -> tuple[Path, Path]:
+    stamp = timestamp or _build_timestamp()
+    artifact_paths = strength_backfill_artifact_paths if all_history else raw_artifact_paths
+    user_path, raw_path = artifact_paths(stamp, output_dir=output_dir)
+    existing_paths = [path for path in (user_path, raw_path) if path.exists()]
+    if existing_paths and not force:
+        names = ", ".join(str(path) for path in existing_paths)
+        raise FileExistsError(f"Artifact already exists: {names}. Use --force to overwrite.")
+
     print(
         "Starting raw-only Garmin fetch. If Garmin prints two 429 login messages, "
         "wait 3-8 minutes before assuming it is stuck.",
@@ -66,9 +80,6 @@ def fetch_garmin_raw_files(
 
     if not raw_activities:
         raise RuntimeError("No Garmin activities found. Check credentials, Garmin login, or activity filters.")
-
-    stamp = timestamp or _build_timestamp()
-    user_path, raw_path = raw_artifact_paths(stamp, output_dir=output_dir)
 
     print(f"Writing {len(raw_activities)} activities to {raw_path}", flush=True)
     _write_json(raw_path, raw_activities)
@@ -101,6 +112,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--timestamp", help="Optional YYYYMMDD timestamp for output filenames.")
     parser.add_argument("--output-dir", default=str(RAW_DATA_DIR), help="Directory for garmin_raw/user JSON files.")
+    parser.add_argument("--force", action="store_true", help="Allow overwriting an existing artifact pair.")
     parser.add_argument("--import-db", action="store_true", help="Import the fetched raw files into PostgreSQL.")
     return parser.parse_args()
 
@@ -115,6 +127,7 @@ def main() -> None:
         output_dir=Path(args.output_dir),
         activity_type=args.activity_type,
         all_history=args.all,
+        force=args.force,
     )
 
     print(f"user_file: {user_path}")

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +11,7 @@ import pandas as pd
 RAW_DATA_DIR = Path("data/raw")
 PROCESSED_DATA_DIR = Path("data/processed")
 OUTPUT_DIR = Path("output")
+_ARTIFACT_TIMESTAMP_PATTERN = re.compile(r"\d{8}\Z")
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -29,9 +32,31 @@ def write_json_report(path: Path, response: dict[str, Any]) -> None:
         file_obj.write("\n")
 
 
+def _validated_artifact_timestamp(timestamp: str) -> str:
+    if not isinstance(timestamp, str) or not _ARTIFACT_TIMESTAMP_PATTERN.fullmatch(timestamp):
+        raise ValueError("Artifact timestamp must use YYYYMMDD")
+    try:
+        datetime.strptime(timestamp, "%Y%m%d")
+    except ValueError as exc:
+        raise ValueError("Artifact timestamp must use a real YYYYMMDD date") from exc
+    return timestamp
+
+
 def raw_artifact_paths(timestamp: str, output_dir: Path = RAW_DATA_DIR) -> tuple[Path, Path]:
+    timestamp = _validated_artifact_timestamp(timestamp)
     raw_path = output_dir / f"garmin_raw_{timestamp}.json"
     user_path = output_dir / f"garmin_user_{timestamp}.json"
+    return user_path, raw_path
+
+
+def strength_backfill_artifact_paths(
+    timestamp: str,
+    output_dir: Path = RAW_DATA_DIR,
+) -> tuple[Path, Path]:
+    """Return isolated artifact names for a strength-only history backfill."""
+    timestamp = _validated_artifact_timestamp(timestamp)
+    raw_path = output_dir / f"garmin_raw_{timestamp}_strength_backfill.json"
+    user_path = output_dir / f"garmin_user_{timestamp}_strength_backfill.json"
     return user_path, raw_path
 
 

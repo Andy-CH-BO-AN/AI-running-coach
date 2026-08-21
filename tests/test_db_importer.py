@@ -141,16 +141,18 @@ def test_strength_backfill_is_idempotent_seeds_old_activities_and_keeps_profile_
         yield db_session
 
     monkeypatch.setattr("src.services.garmin_import_service.SessionLocal", session_local)
+    monkeypatch.setattr(
+        "src.services.garmin_import_service.resolve_training_calendar_date",
+        lambda: date(2026, 8, 20),
+    )
     first = import_strength_backfill(
         user_path=tmp_path / "garmin_user_20260820.json",
         raw_path=raw_path,
-        today=date(2026, 8, 20),
         include_mirror_sync=False,
     )
     second = import_strength_backfill(
         user_path=tmp_path / "garmin_user_20260820.json",
         raw_path=raw_path,
-        today=date(2026, 8, 20),
         include_mirror_sync=False,
     )
 

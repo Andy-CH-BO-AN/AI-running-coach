@@ -9,6 +9,7 @@ from src.db.mirror import sync_shadow_database, validate_shadow_parity
 from src.db.repositories import get_or_create_default_user, seed_baseline_notifications
 from src.db.session import SessionLocal
 from src.services.db_importer import import_artifact_bundle
+from src.services.training_calendar import resolve_training_calendar_date
 
 
 def import_garmin_artifacts(
@@ -179,7 +180,7 @@ def import_strength_backfill(
 
     baseline_ids = strength_backfill_baseline_ids(
         activities,
-        today=today or date.today(),
+        today=today or resolve_training_calendar_date(),
     )
     with SessionLocal() as session:
         user = get_or_create_default_user(session)
