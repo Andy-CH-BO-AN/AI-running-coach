@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -17,17 +16,6 @@ MAX_ANALYSIS_UTF16_LENGTH = 320
 MAX_RECOMMENDATION_UTF16_LENGTH = 320
 MAX_PLAN_SESSION_UTF16_LENGTH = 100
 MAX_PLAN_DESCRIPTION_UTF16_LENGTH = 360
-_UNKNOWN_LOAD_CLAIM = re.compile(
-    r"0\s*TSS|負荷.{0,4}(?:偏低|不足|太低|很低)|undertraining|(?:增加|提高|提升).{0,12}(?:TSS|訓練負荷|負荷)",
-    re.IGNORECASE,
-)
-_UNKNOWN_LOAD_NEUTRAL = re.compile(r"負荷(?:資料|數據)(?:不足|不可得)")
-_UNKNOWN_LOAD_NO_INCREASE = re.compile(
-    r"(?:不(?:應|要|宜|該|需|需要|建議)|避免|無需|不用|勿)"
-    r"(?:(?:再|額外|進一步|立即|直接|刻意|主動|盲目|過度|貿然|急著|輕易)\s*){0,2}"
-    r"(?:增加|提高|提升).{0,12}(?:TSS|訓練負荷|負荷)",
-    re.IGNORECASE,
-)
 
 
 class WeeklyCoachError(RuntimeError):
@@ -92,29 +80,6 @@ def _normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _has_unknown_load(value: Any) -> bool:
-    if isinstance(value, dict):
-        return any(
-            (key in {"training_load", "derived_training_load"} and item is None)
-            or _has_unknown_load(item)
-            for key, item in value.items()
-        )
-    if isinstance(value, list):
-        return any(_has_unknown_load(item) for item in value)
-    return False
-
-
-def _contains_unknown_load_claim(payload: dict[str, Any]) -> bool:
-    texts = [payload["analysis"], payload["recommendation"]]
-    texts.extend(entry["description"] for entry in payload["next_week_plan"])
-    for text in texts:
-        normalized = _UNKNOWN_LOAD_NEUTRAL.sub("", text)
-        normalized = _UNKNOWN_LOAD_NO_INCREASE.sub("", normalized)
-        if _UNKNOWN_LOAD_CLAIM.search(normalized):
-            return True
-    return False
-
-
 def _generate_payload(full_prompt: str) -> tuple[str, dict[str, Any]]:
     """Reuse the established model fallback and retry policy for weekly output."""
     switched_to_vertexai = False
@@ -157,8 +122,6 @@ def generate_weekly_report(spec: AIReportSpec) -> AIReportDraft:
         f"{json.dumps(spec.input_json, ensure_ascii=False, indent=2)}"
     )
     model_name, payload = _generate_payload(full_prompt)
-    if _has_unknown_load(spec.input_json) and _contains_unknown_load_claim(payload):
-        raise WeeklyCoachError("Weekly AI response misinterprets unknown training load")
     report_text = f"{payload['analysis']}\n\n建議：{payload['recommendation']}"
     return AIReportDraft(
         report_text=report_text,
