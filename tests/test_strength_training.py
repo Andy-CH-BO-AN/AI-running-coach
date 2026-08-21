@@ -59,8 +59,23 @@ def test_strength_parser_derives_only_missing_counts_and_rejects_unknown_weight_
     assert strength["total_reps"] is None
     assert strength["total_volume_kg"] is None
     assert strength["sets"][0]["weight_kg"] is None
-    assert strength["sets"][2]["reps"] == 0
+    assert strength["sets"][2]["reps"] is None
     assert strength["sets"][2]["weight_kg"] is None
+
+
+def test_strength_parser_keeps_omitted_per_set_reps_unavailable():
+    strength = parse_strength_training(
+        {},
+        [
+            {"setType": "ACTIVE"},
+            {"setType": "ACTIVE", "reps": float("nan")},
+        ],
+    )
+
+    assert [item["reps"] for item in strength["sets"]] == [None, None]
+    assert strength["total_sets"] == 2
+    assert strength["active_sets"] == 2
+    assert strength["total_reps"] is None
 
 
 def test_strength_parser_derives_reps_only_when_every_active_set_has_a_valid_source_count():
@@ -243,6 +258,38 @@ def test_strength_context_keeps_missing_strength_payload_counts_unavailable():
         "sets": [],
     }
     assert session["data_quality"] == {"status": "partial", "missing_fields": ["strength.sets"]}
+
+
+def test_strength_context_preserves_unavailable_per_set_reps_for_coaching():
+    parsed_strength = parse_strength_training(
+        {},
+        [
+            {"setType": "ACTIVE", "exerciseName": "DEIDENTIFIED"},
+            {"setType": "ACTIVE", "exerciseName": "DEIDENTIFIED", "reps": float("nan")},
+        ],
+    )
+    context = build_deterministic_coach_context(
+        normalize_activity_window(
+            [{
+                "activity_id": 4,
+                "type": "strength_training",
+                "date": "2026-08-19",
+                "duration": 45,
+                "raw_data": {
+                    "training_stress_score": 22,
+                    "strength": parsed_strength,
+                    "strength_sets_available": True,
+                },
+            }]
+        ),
+        today="2026-08-20",
+    )
+
+    session = context["weekly_analysis"][0]["sessions"][0]
+    assert [item["reps"] for item in session["strength"]["sets"]] == [None, None]
+    validated = SessionFacts.from_context_payload(session, location="strength session")
+    assert validated.strength is not None
+    assert [item["reps"] for item in validated.strength.projection()["sets"]] == [None, None]
 
 
 def test_strength_activity_fetch_uses_exercise_sets_and_never_requests_lap_splits():
@@ -437,5 +484,6 @@ def test_all_three_coaching_prompts_define_strength_guardrails():
         prompt = Path("prompts") / prompt_name
         contents = prompt.read_text(encoding="utf-8")
         assert "strength_training" in contents
+        assert "sets[].reps" in contents
         assert "不得" in contents
         assert "不是 0" in contents

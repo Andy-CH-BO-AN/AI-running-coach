@@ -86,7 +86,8 @@
    - `next_week_plan.days` 必須固定輸出 7 天，且順序固定為 `Mon | Tue | Wed | Thu | Fri | Sat | Sun`。
    - `next_week_plan.days[].date` 與 `day_of_week` 必須直接沿用 `deterministic_context.next_week_plan_seed.days[]`；模型只補上課表內容、強度、距離與訓練描述。
    - 沒安排訓練的日期也必須輸出，`intensity` 為 `rest`，`distance_km` 與 `duration_min` 為 0，`key_workout` 為 false。
-   - 所有非休息日都必須輸出 `distance_km > 0` 與 `duration_min > 0`；`description` 也必須明寫總距離或主課表距離，避免 dashboard 只看得到課名。
+   - 距離型的非休息日必須輸出 `distance_km > 0` 與 `duration_min > 0`；`description` 也必須明寫總距離或主課表距離，避免 dashboard 只看得到課名。
+   - 只有 `training_preferences` 明確安排的肌力日可輸出 `session_type = "strength_training"`。這類日子沒有距離：`distance_km` 必須為 `null`、`duration_min > 0`，`description` 改明寫時長與恢復重點，不得寫成 0 km 或補距離。
    - `session_type = "long"` 的日子必須同時提供 `distance_km`、`duration_min`、`target_pace`，且 `description` 必須包含距離與配速（例：「10km，配速 5:30-5:45/km」）。
    - `session_type = "interval"` 的日子必須提供 `interval_distance`（例：「400m × 8」）、`target_pace`（例：「3:30-3:40/km」或「84-88s/rep」）、`rest_time`（例：「90s」）與 `rest_type`（`stand`、`walk`、`jog` 三選一），並在 `description` 明寫是站休、走休或跑休。
    - 間歇課的 `distance_km` 必須是整堂課總距離，包含熱身、主課表、恢復段與收操；不要只填主課表距離。
@@ -217,7 +218,7 @@
                 "set_type": "active | rest | unknown",
                 "exercise_names": ["string"],
                 "category": "string | null",
-                "reps": "number",
+          "reps": "number | null",
                 "weight_kg": "number | null",
                 "duration_sec": "number | null"
               }
@@ -363,7 +364,7 @@
         "session_type": "string",
         "title": "string",
         "description": "string",
-        "distance_km": number,
+        "distance_km": "number | null",
         "duration_min": number,
         "target_pace": "string | null",
         "interval_distance": "string | null",
@@ -445,6 +446,6 @@
 【肌力訓練規則】
 - `source_activity_type = "strength_training"` 一律稱為「肌力訓練」。它可作為跑步主目標下的交叉訓練：分析動作名稱所反映的可能跑步影響、下肢疲勞、跑課間距與恢復。
 - `sessions[].strength` 是唯一的組數、次數、容量與動作事實來源。保留其 set 順序及 rest entries；只在單位可靠時引用 kg 容量。
-- `sessions[].strength` 的組數、次數或容量為 `null` 表示 Garmin 資料不可得，不是 0；不得補算、猜測或以此做訓練結論。
+- `sessions[].strength` 的組數、次數、容量或每個 `sets[].reps` 為 `null` 表示 Garmin 資料不可得，不是 0；不得補算、猜測或以此做訓練結論。
 - 不得診斷傷病、評論動作品質、猜測肌群、杜撰數字、推算 1RM、或自行建立增肌/漸進超負荷課表。`training_preferences` 未明確安排時，也不得新增肌力課。
 - 肌力沒有距離、配速、跑姿、游泳或自行車效率、zone 資料；不得把這些缺失列為資料品質問題或寫成 0 km。

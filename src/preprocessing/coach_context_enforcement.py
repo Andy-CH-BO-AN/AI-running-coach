@@ -177,7 +177,10 @@ def _enforce_next_week_plan(
         ai_day.setdefault("session_type", "rest")
         ai_day.setdefault("title", "恢復日")
         ai_day.setdefault("description", "")
-        ai_day.setdefault("distance_km", 0)
+        if str(ai_day["session_type"]).strip().lower() == "strength_training":
+            ai_day["distance_km"] = None
+        else:
+            ai_day.setdefault("distance_km", 0)
         ai_day.setdefault("duration_min", 0)
         ai_day.setdefault("intensity", "rest")
         ai_day.setdefault("key_workout", False)

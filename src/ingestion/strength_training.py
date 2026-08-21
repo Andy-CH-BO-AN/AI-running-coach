@@ -149,7 +149,7 @@ def _normalize_set(set_payload: Mapping[str, Any], index: int) -> dict[str, Any]
         "set_type": normalized_type,
         "exercise_names": names,
         "category": category.strip() if isinstance(category, str) and category.strip() else None,
-        "reps": _integer(_first(set_payload, "reps", "repCount", "repetitionCount", "totalReps")) or 0,
+        "reps": _integer(_first(set_payload, "reps", "repCount", "repetitionCount", "totalReps")),
         "weight_kg": _weight_kg(set_payload),
         "duration_sec": _number(duration),
     }
@@ -182,8 +182,8 @@ def parse_strength_training(
     source_sets = _set_payloads(exercise_sets)
     sets = [_normalize_set(item, index) for index, item in enumerate(source_sets, start=1)]
     active_set_reps = [
-        _integer(_first(source_set, "reps", "repCount", "repetitionCount", "totalReps"))
-        for source_set, normalized_set in zip(source_sets, sets)
+        normalized_set["reps"]
+        for normalized_set in sets
         if normalized_set["set_type"] == "active"
     ]
     total_sets = _integer(_summary_value(summary, "totalSets", "total_sets", "setCount"))
