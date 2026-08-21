@@ -61,7 +61,7 @@ class CoachSession(TypedDict, total=False):
     rest_duration_min: float
     swim_pace_seconds_per_100m: int
     elapsed_pace_seconds_per_100m: int
-    training_load: float
+    training_load: float | None
     avg_hr: int | None
     avg_pace: str | None
     training_effect_aerobic: float | None
@@ -529,7 +529,7 @@ class SessionFacts:
     source_activity_type: str | None
     distance_km: float | None
     duration_min: float
-    training_load: float
+    training_load: float | None
     avg_hr: int | None
     avg_pace: str | None
     running: RunningSessionFacts | None
@@ -779,7 +779,7 @@ class SessionFacts:
                 _required(payload, "duration_min", location),
                 f"{location}.duration_min",
             ),
-            training_load=_number(
+            training_load=_number_or_none(
                 _required(payload, "training_load", location),
                 f"{location}.training_load",
             ),
@@ -986,7 +986,11 @@ def _session_from_normalized(activity: NormalizedActivity) -> SessionFacts:
         source_activity_type=source_activity_type,
         distance_km=None if is_strength else distance if distance is not None else 0,
         duration_min=duration if duration is not None else 0,
-        training_load=training_load if training_load is not None else 0,
+        training_load=(
+            training_load
+            if training_load is not None
+            else None if is_strength else 0
+        ),
         avg_hr=_round_or_none(activity.avg_hr_bpm, 0),
         avg_pace=(
             None

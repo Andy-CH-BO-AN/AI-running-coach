@@ -21,7 +21,7 @@ class CoachWeek(TypedDict, total=False):
     week_end: str
     derived_total_distance_km: float
     derived_total_duration_min: float
-    derived_training_load: float
+    derived_training_load: float | None
     sessions: list[CoachSession]
     session_counts: CoachSessionCounts
     data_quality: CoachDataQuality
