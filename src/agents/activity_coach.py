@@ -19,6 +19,11 @@ _UNKNOWN_LOAD_CLAIM = re.compile(
     re.IGNORECASE,
 )
 _UNKNOWN_LOAD_NEUTRAL = re.compile(r"負荷(?:資料|數據)(?:不足|不可得)")
+_UNKNOWN_LOAD_NO_INCREASE = re.compile(
+    r"(?:不(?:應|要|宜|該|需|需要|建議)|避免|無需|不用|勿).{0,8}"
+    r"(?:增加|提高|提升).{0,12}(?:TSS|訓練負荷|負荷)",
+    re.IGNORECASE,
+)
 
 
 class ActivityCoachError(RuntimeError):
@@ -41,7 +46,9 @@ def _subject_activity_has_unknown_load(input_json: dict[str, Any]) -> bool:
 
 
 def _contains_unknown_load_claim(text: str) -> bool:
-    return bool(_UNKNOWN_LOAD_CLAIM.search(_UNKNOWN_LOAD_NEUTRAL.sub("", text)))
+    normalized = _UNKNOWN_LOAD_NEUTRAL.sub("", text)
+    normalized = _UNKNOWN_LOAD_NO_INCREASE.sub("", normalized)
+    return bool(_UNKNOWN_LOAD_CLAIM.search(normalized))
 
 
 def _generate_analysis(full_prompt: str) -> tuple[str, str]:
