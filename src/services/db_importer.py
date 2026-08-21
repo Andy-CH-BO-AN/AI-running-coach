@@ -35,25 +35,41 @@ def _infer_captured_at(path: str | Path) -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _strength_detail_fact_count(raw_data: Mapping[str, Any]) -> int:
-    count = sum(
-        raw_data.get(key) is not None
-        for key in (
-            "training_stress_score",
-            "aerobic_training_effect",
-            "anaerobic_training_effect",
-        )
-    )
-    strength = raw_data.get("strength")
-    if isinstance(strength, Mapping):
-        count += sum(
-            strength.get(key) is not None
-            for key in ("total_sets", "active_sets", "total_reps", "total_volume_kg")
-        )
-        count += int(bool(strength.get("sets")))
-    count += int(bool(raw_data.get("strength_raw_summary")))
-    count += int(bool(raw_data.get("strength_raw_exercise_sets")))
-    return count
+def _strength_deterministic_facts_changed(
+    existing_raw: Mapping[str, Any],
+    incoming_raw: Mapping[str, Any],
+) -> bool:
+    """Return whether a partial fetch carries a new or corrected deterministic fact."""
+    for key in (
+        "training_stress_score",
+        "aerobic_training_effect",
+        "anaerobic_training_effect",
+    ):
+        value = incoming_raw.get(key)
+        if value is not None and value != existing_raw.get(key):
+            return True
+
+    incoming_summary = incoming_raw.get("strength_raw_summary")
+    if incoming_summary and incoming_summary != existing_raw.get("strength_raw_summary"):
+        return True
+
+    existing_strength = existing_raw.get("strength")
+    if not isinstance(existing_strength, Mapping):
+        existing_strength = {}
+    incoming_strength = incoming_raw.get("strength")
+    if isinstance(incoming_strength, Mapping):
+        for key in ("total_sets", "active_sets", "total_reps", "total_volume_kg"):
+            value = incoming_strength.get(key)
+            if value is not None and value != existing_strength.get(key):
+                return True
+        incoming_sets = incoming_strength.get("sets")
+        if incoming_sets and incoming_sets != existing_strength.get("sets"):
+            return True
+
+    incoming_raw_sets = incoming_raw.get("strength_raw_exercise_sets")
+    if incoming_raw_sets and incoming_raw_sets != existing_raw.get("strength_raw_exercise_sets"):
+        return True
+    return False
 
 
 def _merge_partial_strength_activity(
@@ -75,6 +91,9 @@ def _merge_partial_strength_activity(
         return None
 
     existing_raw_dict = dict(existing_raw)
+    if not _strength_deterministic_facts_changed(existing_raw_dict, incoming_raw):
+        return None
+
     merged_raw = deepcopy(existing_raw_dict)
 
     # Overlay new non-null summary facts, while never replacing known values
@@ -115,11 +134,6 @@ def _merge_partial_strength_activity(
         and not incoming_raw.get("strength_raw_exercise_sets")
     ):
         merged_raw["strength_sets_available"] = True
-
-    # Do not rewrite a complete row only because a retry failed. An upsert is
-    # useful only when the merged payload contains strictly more known facts.
-    if _strength_detail_fact_count(merged_raw) <= _strength_detail_fact_count(existing_raw_dict):
-        return None
 
     merged = deepcopy(dict(existing_raw_json))
     for key, value in incoming.items():
