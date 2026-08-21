@@ -45,6 +45,19 @@ def _strength_payload(*, failed: bool, sets: list[dict], total_reps: int | None,
     }
 
 
+def _strength_summary_failure_payload():
+    return {
+        "activity_id": 988,
+        "type": "strength_training",
+        "date": "2026-08-20",
+        "distance": None,
+        "duration": 45,
+        "average_heart_rate": 121,
+        "splits": [],
+        "raw_data": {},
+    }
+
+
 def test_transient_strength_set_failure_does_not_replace_existing_complete_activity(db_session, tmp_path):
     complete_path = tmp_path / "garmin_raw_strength_complete.json"
     partial_path = tmp_path / "garmin_raw_strength_partial.json"
@@ -67,6 +80,27 @@ def test_transient_strength_set_failure_does_not_replace_existing_complete_activ
     assert float(activity.training_stress_score) == 22
 
 
+def test_transient_strength_summary_failure_does_not_replace_existing_complete_activity(db_session, tmp_path):
+    complete_path = tmp_path / "garmin_raw_strength_complete.json"
+    partial_path = tmp_path / "garmin_raw_strength_summary_failed.json"
+    complete_sets = [
+        {"set_index": 1, "set_type": "active", "exercise_names": ["Squat"], "category": None, "reps": 9, "weight_kg": None, "duration_sec": None},
+        {"set_index": 2, "set_type": "active", "exercise_names": ["Squat"], "category": None, "reps": 9, "weight_kg": None, "duration_sec": None},
+    ]
+    _write_json(complete_path, [_strength_payload(failed=False, sets=complete_sets, total_reps=18, load=22)])
+    _write_json(partial_path, [_strength_summary_failure_payload()])
+    user = get_or_create_default_user(db_session)
+
+    import_garmin_raw_file(db_session, user.id, complete_path)
+    second = import_garmin_raw_file(db_session, user.id, partial_path)
+
+    assert second["activities"] == 0
+    activity = db_session.scalars(select(Activity)).one()
+    assert activity.raw_json["raw_data"]["strength"]["sets"] == complete_sets
+    assert activity.raw_json["raw_data"]["strength"]["total_reps"] == 18
+    assert float(activity.training_stress_score) == 22
+
+
 def test_first_seen_partial_strength_activity_is_still_inserted(db_session, tmp_path):
     partial_path = tmp_path / "garmin_raw_strength_partial.json"
     _write_json(partial_path, [_strength_payload(failed=True, sets=[], total_reps=None, load=23)])
@@ -78,3 +112,17 @@ def test_first_seen_partial_strength_activity_is_still_inserted(db_session, tmp_
     activity = db_session.scalars(select(Activity)).one()
     assert activity.raw_json["raw_data"]["strength_sets_fetch_failed"] is True
     assert activity.raw_json["raw_data"]["strength"]["sets"] == []
+
+
+def test_first_seen_strength_summary_failure_is_still_inserted_as_partial(db_session, tmp_path):
+    partial_path = tmp_path / "garmin_raw_strength_summary_failed.json"
+    _write_json(partial_path, [_strength_summary_failure_payload()])
+    user = get_or_create_default_user(db_session)
+
+    counts = import_garmin_raw_file(db_session, user.id, partial_path)
+
+    assert counts["activities"] == 1
+    activity = db_session.scalars(select(Activity)).one()
+    assert activity.raw_json["raw_data"] == {}
+    assert activity.distance_km is None
+    assert activity.duration_min == 45

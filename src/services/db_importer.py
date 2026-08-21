@@ -66,12 +66,15 @@ def import_garmin_raw_file(session: Session, user_id, path: str | Path) -> dict[
             continue
 
         raw_data = activity_data.get("raw_data") or activity_data.get("raw_metrics") or {}
-        strength_sets_fetch_failed = (
+        strength_detail_partial = (
             activity_type == "strength_training"
             and isinstance(raw_data, dict)
-            and raw_data.get("strength_sets_fetch_failed") is True
+            and (
+                raw_data.get("strength_sets_fetch_failed") is True
+                or not raw_data
+            )
         )
-        if strength_sets_fetch_failed:
+        if strength_detail_partial:
             existing = find_activity_by_garmin_id(
                 session,
                 user_id=user_id,
