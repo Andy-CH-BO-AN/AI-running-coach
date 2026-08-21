@@ -407,10 +407,10 @@ class NormalizedActivity:
     avg_hr_bpm: float | None
     max_hr_bpm: float | None
     performance_value: float | None
-    performance_formatted: str
+    performance_formatted: str | None
     processed_activity_type: Any
     processed_performance_value: float | None
-    processed_performance_formatted: str
+    processed_performance_formatted: str | None
     training_load: float | None
     training_effect_aerobic: float | None
     training_effect_anaerobic: float | None
@@ -436,6 +436,8 @@ class NormalizedActivity:
     pool_length_m: float | None
     stroke_style: str | None
     avg_stroke_cadence_spm: float | None
+    strength: Mapping[str, Any] | None
+    strength_sets_available: bool
     invalid_optional_metrics: tuple[str, ...]
     segments: tuple[NormalizedSegment, ...]
     runner_type: str | None
@@ -701,16 +703,24 @@ def _processed_activity_projection(
     processed_swimming_efficiency: Mapping[str, Any] | None,
     processed_cycling_efficiency: Mapping[str, Any] | None,
 ) -> Mapping[str, Any]:
-    distance_km = _number(item.get("distance")) or 0
+    distance_km = _number(item.get("distance"))
     projection: dict[str, Any] = {
         "activity_id": item.get("activity_id"),
         "type": processed_activity_type,
         "date": item.get("date"),
-        "distance_km": round(distance_km, 2),
+        "distance_km": (
+            None
+            if processed_activity_type == "strength_training"
+            else round(distance_km or 0, 2)
+        ),
         "performance_value": processed_performance_value,
-        "performance_formatted": format_pace(
-            processed_performance_value,
-            processed_activity_type,
+        "performance_formatted": (
+            None
+            if processed_activity_type == "strength_training"
+            else format_pace(
+                processed_performance_value,
+                processed_activity_type,
+            )
         ),
         "avg_hr": item.get("average_heart_rate"),
         "max_hr": item.get("max_heart_rate"),
@@ -748,6 +758,10 @@ def _processed_activity_projection(
         projection["cycling_efficiency"] = _thaw_json(
             processed_cycling_efficiency
         )
+    if processed_activity_type == "strength_training":
+        strength = raw_data.get("strength")
+        if isinstance(strength, Mapping):
+            projection["strength"] = _thaw_json(_freeze_json(strength))
     return _freeze_json(projection)
 
 
@@ -765,6 +779,7 @@ def _normalized_activity(
     is_running = family == "running"
     is_swimming = family == "swimming"
     is_cycling = family == "cycling"
+    is_strength = family == "strength_training"
     has_canonical_metrics = is_running or is_swimming or is_cycling
     raw_data_value = item.get("raw_data")
     raw_data: Mapping[str, Any] = (
@@ -836,7 +851,7 @@ def _normalized_activity(
         if is_swimming
         else None
     )
-    processed_distance_km = _number(item.get("distance")) or 0
+    processed_distance_km = _number(item.get("distance"))
     processed_duration_min = _number(item.get("duration"))
     processed_performance_value = calculate_pace(
         duration_ms=(
@@ -844,7 +859,7 @@ def _normalized_activity(
             if processed_duration_min is not None
             else None
         ),
-        distance_m=processed_distance_km * 1000,
+        distance_m=(processed_distance_km or 0) * 1000,
         activity_type=processed_activity_type,
     )
     running_efficiency = _freeze_optional_mapping(
@@ -923,12 +938,20 @@ def _normalized_activity(
         avg_hr_bpm=_number(item.get("average_heart_rate")),
         max_hr_bpm=_number(item.get("max_heart_rate")),
         performance_value=performance_value,
-        performance_formatted=format_pace(performance_value, family),
+        performance_formatted=(
+            None
+            if is_strength
+            else format_pace(performance_value, family)
+        ),
         processed_activity_type=processed_activity_type,
         processed_performance_value=processed_performance_value,
-        processed_performance_formatted=format_pace(
-            processed_performance_value,
-            processed_activity_type,
+        processed_performance_formatted=(
+            None
+            if processed_activity_type == "strength_training"
+            else format_pace(
+                processed_performance_value,
+                processed_activity_type,
+            )
         ),
         training_load=_number(raw_data.get("training_stress_score")),
         training_effect_aerobic=_number(raw_data.get("aerobic_training_effect")),
@@ -999,6 +1022,14 @@ def _normalized_activity(
             _number(raw_data.get("avg_stroke_cadence"))
             if is_swimming
             else None
+        ),
+        strength=(
+            _freeze_json(raw_data.get("strength"))
+            if is_strength and isinstance(raw_data.get("strength"), Mapping)
+            else None
+        ),
+        strength_sets_available=(
+            bool(raw_data.get("strength_sets_available")) if is_strength else False
         ),
         invalid_optional_metrics=tuple(invalid_optional_metrics),
         segments=segments,

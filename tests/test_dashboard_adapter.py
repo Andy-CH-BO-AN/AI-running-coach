@@ -1158,7 +1158,7 @@ def test_evidence_supporting_sessions_include_localized_header_fields(tmp_path):
     assert session["distance_label"] == "2.05 km"
 
 
-def test_evidence_supporting_session_unknown_source_activity_type_uses_generic_label(tmp_path):
+def test_evidence_supporting_strength_session_uses_chinese_label(tmp_path):
     report = {
         "weekly_analysis": [
             {
@@ -1192,7 +1192,7 @@ def test_evidence_supporting_session_unknown_source_activity_type_uses_generic_l
     payload = run_adapter_case(tmp_path, report)
     session = payload["evidence"]["items"][0]["supporting_sessions"][0]
 
-    assert session["type_label"] == "訓練"
+    assert session["type_label"] == "肌力訓練"
 
 
 def test_evidence_metric_display_value_does_not_duplicate_units(tmp_path):

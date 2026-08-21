@@ -74,7 +74,9 @@ def _build_12week_summary(
         weeks.append({
             "week_start": week_start.isoformat(),
             "week_label": _format_week_label(week_start),
-            "derived_total_distance_km": _round_or_none(sum(s["distance_km"] for s in week_sessions), 2) or 0.0,
+            "derived_total_distance_km": _round_or_none(
+                sum(_safe_float(s.get("distance_km")) or 0 for s in week_sessions), 2
+            ) or 0.0,
             "derived_training_load": _round_or_none(sum(s["training_load"] for s in week_sessions), 1) or 0.0,
             "sessions_count": len(week_sessions),
         })
@@ -109,7 +111,9 @@ def _build_weekly_analysis(
             }
         )
         derived = {
-            "derived_total_distance_km": _round_or_none(sum(session["distance_km"] for session in week_sessions), 2) or 0.0,
+            "derived_total_distance_km": _round_or_none(
+                sum(_safe_float(session.get("distance_km")) or 0 for session in week_sessions), 2
+            ) or 0.0,
             "derived_total_duration_min": _round_or_none(sum(session["duration_min"] for session in week_sessions), 1) or 0.0,
             "derived_training_load": _round_or_none(sum(session["training_load"] for session in week_sessions), 1) or 0.0,
         }
@@ -234,6 +238,31 @@ def _build_evidence_facts(
                     "source_path": "deterministic_context.weekly_analysis[0].risk_flags",
                 }
             )
+        for session_index, session in enumerate(current_week.get("sessions", [])):
+            if session.get("source_activity_type") != "strength_training":
+                continue
+            strength = session.get("strength")
+            if not isinstance(strength, dict):
+                continue
+            base_path = (
+                "deterministic_context.weekly_analysis[0].sessions["
+                f"{session_index}].strength"
+            )
+            for key, label, unit in (
+                ("total_sets", "肌力訓練總組數", "sets"),
+                ("total_reps", "肌力訓練總次數", "reps"),
+                ("total_volume_kg", "肌力訓練總容量", "kg"),
+            ):
+                if strength.get(key) is not None:
+                    facts.append(
+                        {
+                            "fact_id": f"strength_{session.get('activity_id')}_{key}",
+                            "label": label,
+                            "value": strength.get(key),
+                            "unit": unit,
+                            "source_path": f"{base_path}.{key}",
+                        }
+                    )
 
     zones = hr_zone_distribution.get("zones") or []
     high_intensity_pct = sum(

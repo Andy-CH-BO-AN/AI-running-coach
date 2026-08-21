@@ -2,6 +2,7 @@ import os
 import time
 import logging
 import random
+import re
 from typing import List, Dict, Any, Optional
 from garminconnect import Garmin
 from dotenv import load_dotenv
@@ -12,6 +13,7 @@ from src.ingestion.garmin_parsers import (
     format_garmin_value,
     get_activity_value,
 )
+from src.ingestion.strength_training import parse_strength_training
 from src.preprocessing.activity_policy import should_skip_short_cycling
 from src.preprocessing.data_processor import calculate_pace
 
@@ -38,7 +40,12 @@ GARMIN_PR_MAPS = {
         13: 'max_ascent', 14: 'monthly_max_steps', 15: 'goal_streak'
     }
 }
-TARGET_ACTIVITY_TYPES = {'running': 'running', 'lap_swimming': 'swimming', 'cycling': 'cycling'}
+TARGET_ACTIVITY_TYPES = {
+    'running': 'running',
+    'lap_swimming': 'swimming',
+    'cycling': 'cycling',
+    'strength_training': 'strength_training',
+}
 _ACTIVITY_SUMMARY_WRAPPERS = ('summaryDTO', 'activity_info', 'activityInfo')
 _find_nested_value = find_nested_value
 _get_activity_value = get_activity_value
@@ -60,6 +67,32 @@ def safe_api_call(func, *args, **kwargs) -> Any:
             else:
                 logger.error(f"API 呼叫徹底失敗: {e}")
                 return None
+
+
+class GarminIngestionError(RuntimeError):
+    """A non-recoverable error during an all-history Garmin import."""
+
+
+def _is_not_found_error(error: BaseException) -> bool:
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None) or getattr(error, "status_code", None)
+    if status is not None:
+        return status == 404
+    message = str(error).strip()
+    return bool(
+        re.match(r"^404\b", message)
+        or re.search(r"\b(?:HTTP|API Error|status(?:\s+code)?)\s*[:=]?\s*404\b", message, re.IGNORECASE)
+    )
+
+
+def _strict_api_call(func, *args, allow_not_found: bool = False, **kwargs) -> Any:
+    """Never turn list/auth/rate-limit failures into a partial backfill."""
+    try:
+        return func(*args, **kwargs)
+    except Exception as error:
+        if allow_not_found and _is_not_found_error(error):
+            return None
+        raise GarminIngestionError(f"Garmin API call failed: {type(error).__name__}") from error
 
 
 def _duration_seconds_to_minutes(value: Any) -> Optional[float]:
@@ -211,6 +244,29 @@ def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -
     details = {}
     full_detail = safe_api_call(client.get_activity, activity_id)
     if not full_detail: return details
+
+    # Strength has no meaningful lap split contract.  Keep its Garmin summary
+    # and exercise-set payload together, then let the deterministic parser
+    # expose only validated facts to later layers.
+    if activity_type == 'strength_training':
+        exercise_sets = safe_api_call(client.get_activity_exercise_sets, activity_id)
+        strength = parse_strength_training(full_detail, exercise_sets)
+        details.update({
+            'training_stress_score': _get_activity_summary_value(
+                full_detail, 'activityTrainingLoad'
+            ),
+            'aerobic_training_effect': _get_activity_summary_value(
+                full_detail, 'aerobicTrainingEffect'
+            ),
+            'anaerobic_training_effect': _get_activity_summary_value(
+                full_detail, 'anaerobicTrainingEffect'
+            ),
+        })
+        details['strength'] = strength
+        details['strength_sets_available'] = bool(strength['sets'])
+        details['strength_raw_summary'] = full_detail
+        details['strength_raw_exercise_sets'] = exercise_sets or []
+        return details
 
     hr_timezones = safe_api_call(client.get_activity_hr_in_timezones, activity_id)
     power_timezones = safe_api_call(client.get_activity_power_in_timezones, activity_id)
@@ -420,6 +476,7 @@ def get_garmin_activities(
     progress: bool = False,
     since_date: Optional[date_cls] = None,
     fallback_max_heart_rate: Optional[float] = None,
+    activity_types: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     email, password = os.getenv('GARMIN_ACCOUNT'), os.getenv('GARMIN_PASSWORD')
     if not email or not password:
@@ -427,7 +484,7 @@ def get_garmin_activities(
         return {'activities': [], 'user_data': {}}
 
     if progress:
-        types = ", ".join(TARGET_ACTIVITY_TYPES.values())
+        types = ", ".join((activity_types or TARGET_ACTIVITY_TYPES).values())
         since_text = f"; since_date>={since_date.isoformat()}" if since_date else ""
         target_count = 999 if n is None else max(n, 0)
         print(f"🔐 Garmin login starting; target activities={target_count}; types={types}{since_text}", flush=True)
@@ -445,7 +502,7 @@ def get_garmin_activities(
 
     collected_activities = []
     start, page_size = 0, 50
-    target_types = TARGET_ACTIVITY_TYPES
+    target_types = activity_types or TARGET_ACTIVITY_TYPES
     target_count = 999 if n is None else max(n, 0)
 
     while len(collected_activities) < target_count:
@@ -486,7 +543,11 @@ def get_garmin_activities(
                 act_id = activity.get('activityId')
                 act_type = target_types[type_key]
                 dist_m, dur_s = activity.get('distance', 0), activity.get('duration', 0)
-                distance_km = dist_m / 1000 if dist_m is not None else None
+                distance_km = (
+                    None
+                    if act_type == 'strength_training'
+                    else dist_m / 1000 if dist_m is not None else None
+                )
                 if should_skip_short_cycling(act_type, distance_km):
                     if progress:
                         print(
@@ -513,10 +574,14 @@ def get_garmin_activities(
                     'started_at': activity.get('startTimeLocal'),
                     'distance': distance_km,
                     'duration': dur_s / 60,
-                    'average_pace': None if act_type == 'cycling' else performance_value,
+                    'average_pace': None if act_type in {'cycling', 'strength_training'} else performance_value,
                     'average_heart_rate': activity.get('averageHR'),
                     'activity_id': act_id,
-                    'splits': get_activity_splits(client, act_id, act_type),
+                    'splits': (
+                        []
+                        if act_type == 'strength_training'
+                        else get_activity_splits(client, act_id, act_type)
+                    ),
                     'raw_data': raw_details,
                 }
                 if act_type == 'swimming':
@@ -552,3 +617,90 @@ def get_garmin_activities(
     collected_activities.sort(key=_collected_activity_recency_key, reverse=True)
     print(f"✅ 成功抓取 {len(collected_activities)} 筆活動並完成數據校正")
     return {'activities': collected_activities, 'user_data': user_data}
+
+
+def get_all_strength_training_activities(
+    *,
+    progress: bool = False,
+) -> Dict[str, Any]:
+    """Fetch every Garmin strength activity without accepting partial imports.
+
+    This intentionally has no resume cursor: a failed list/login/rate-limit
+    call raises before any caller writes or imports artifacts.  A missing
+    exerciseSets endpoint is the sole tolerated detail failure and is marked
+    partial on the activity.
+    """
+    email, password = os.getenv('GARMIN_ACCOUNT'), os.getenv('GARMIN_PASSWORD')
+    if not email or not password:
+        raise GarminIngestionError("Garmin credentials are not configured")
+    client = Garmin(email, password)
+    _strict_api_call(client.login)
+
+    collected: list[dict[str, Any]] = []
+    start, page_size = 0, 50
+    while True:
+        activities = _strict_api_call(client.get_activities, start, page_size)
+        if not isinstance(activities, list):
+            raise GarminIngestionError("Garmin activity list response is invalid")
+        if not activities:
+            break
+        for activity in sorted(activities, key=_activity_recency_key, reverse=True):
+            type_info = activity.get('activityType', {})
+            type_key = type_info.get('typeKey') if isinstance(type_info, dict) else type_info
+            if type_key != 'strength_training':
+                continue
+            activity_id = activity.get('activityId')
+            if isinstance(activity_id, bool):
+                raise GarminIngestionError("Garmin strength activity has invalid activityId")
+            if isinstance(activity_id, float) and not activity_id.is_integer():
+                raise GarminIngestionError("Garmin strength activity has invalid activityId")
+            try:
+                activity_id = int(activity_id)
+            except (TypeError, ValueError):
+                raise GarminIngestionError("Garmin strength activity has invalid activityId") from None
+            if activity_id <= 0:
+                raise GarminIngestionError("Garmin strength activity has invalid activityId")
+            summary = _strict_api_call(client.get_activity, activity_id)
+            if not isinstance(summary, dict):
+                raise GarminIngestionError("Garmin strength summary response is invalid")
+            exercise_sets = _strict_api_call(
+                client.get_activity_exercise_sets,
+                activity_id,
+                allow_not_found=True,
+            )
+            if exercise_sets is not None and not isinstance(exercise_sets, (dict, list)):
+                raise GarminIngestionError("Garmin exerciseSets response is invalid")
+            strength = parse_strength_training(summary, exercise_sets)
+            raw_data = {
+                'training_stress_score': _get_activity_summary_value(
+                    summary, 'activityTrainingLoad'
+                ),
+                'aerobic_training_effect': _get_activity_summary_value(
+                    summary, 'aerobicTrainingEffect'
+                ),
+                'anaerobic_training_effect': _get_activity_summary_value(
+                    summary, 'anaerobicTrainingEffect'
+                ),
+                'strength': strength,
+                'strength_sets_available': bool(strength['sets']),
+                'strength_raw_summary': summary,
+                'strength_raw_exercise_sets': exercise_sets or [],
+            }
+            collected.append({
+                'type': 'strength_training',
+                'date': str(activity.get('startTimeLocal') or '')[:10],
+                'started_at': activity.get('startTimeLocal'),
+                'distance': None,
+                'duration': _duration_seconds_to_minutes(activity.get('duration')),
+                'average_pace': None,
+                'average_heart_rate': activity.get('averageHR'),
+                'activity_id': activity_id,
+                'splits': [],
+                'raw_data': raw_data,
+            })
+            if progress:
+                print(f"  ↳ Fetching strength_training activity={activity_id}", flush=True)
+        start += page_size
+
+    collected.sort(key=_collected_activity_recency_key, reverse=True)
+    return {'activities': collected, 'user_data': {}}

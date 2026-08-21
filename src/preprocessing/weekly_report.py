@@ -20,7 +20,7 @@ from src.preprocessing.coach_context_utils import (
     _week_start_for,
 )
 
-WEEKLY_SUMMARY_VERSION = "weekly:v1"
+WEEKLY_SUMMARY_VERSION = "weekly:v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +45,8 @@ def _sport_name(source_type: str) -> str:
         return "游泳"
     if normalized == "cycling":
         return "自行車"
+    if normalized == "strength_training":
+        return "肌力訓練"
     return source_type or "其他"
 
 
@@ -88,7 +90,11 @@ def _sport_totals(sessions: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
     return [
         {
             **entry,
-            "distance_km": _round_or_none(entry["distance_km"], 2) or 0.0,
+            "distance_km": (
+                None
+                if entry["source_activity_type"] == "strength_training"
+                else _round_or_none(entry["distance_km"], 2) or 0.0
+            ),
             "duration_min": _round_or_none(entry["duration_min"], 1) or 0.0,
             "training_load": _round_or_none(entry["training_load"], 1) or 0.0,
         }
@@ -113,6 +119,48 @@ def _combined_sport_metrics(
         )
         or 0.0,
         "count": sum(int(entry.get("count") or 0) for entry in matching),
+    }
+
+
+def _strength_training_summary(
+    sessions: Sequence[Mapping[str, Any]],
+) -> dict[str, int | float | None]:
+    """Aggregate only complete Garmin strength session facts for weekly AI."""
+    strength_sessions = [
+        session
+        for session in sessions
+        if session.get("source_activity_type") == "strength_training"
+    ]
+    if not strength_sessions:
+        return {
+            "sessions_count": 0,
+            "total_sets": None,
+            "total_reps": None,
+            "total_volume_kg": None,
+        }
+    complete = all(
+        (session.get("data_quality") or {}).get("status") == "complete"
+        and isinstance(session.get("strength"), Mapping)
+        for session in strength_sessions
+    )
+
+    def aggregate(key: str) -> int | float | None:
+        if not complete:
+            return None
+        values = [
+            _safe_float((session.get("strength") or {}).get(key))
+            for session in strength_sessions
+        ]
+        if any(value is None for value in values):
+            return None
+        total = sum(value or 0 for value in values)
+        return int(total) if key != "total_volume_kg" else _round_or_none(total, 2)
+
+    return {
+        "sessions_count": len(strength_sessions),
+        "total_sets": aggregate("total_sets"),
+        "total_reps": aggregate("total_reps"),
+        "total_volume_kg": aggregate("total_volume_kg"),
     }
 
 
@@ -221,6 +269,7 @@ def build_completed_week_summary(
         if isinstance(session, Mapping)
     ]
     sport_totals = _sport_totals(sessions)
+    strength_training = _strength_training_summary(sessions)
     total_distance = _number(week.get("derived_total_distance_km"))
     total_duration = _number(week.get("derived_total_duration_min"))
     training_load = _number(week.get("derived_training_load"))
@@ -252,6 +301,8 @@ def build_completed_week_summary(
             "duration_min": _round_or_none(total_duration, 1) or 0.0,
         },
         "sports": sport_totals,
+        "sessions": sessions,
+        "strength_training": strength_training,
         "training_load": {
             "garmin_weekly_load": _round_or_none(training_load, 1) or 0.0,
             **load_metrics,

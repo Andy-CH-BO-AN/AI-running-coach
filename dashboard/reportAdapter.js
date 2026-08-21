@@ -56,7 +56,8 @@
     running: "跑步",
     swimming: "游泳",
     lap_swimming: "游泳",
-    cycling: "自行車"
+    cycling: "自行車",
+    strength_training: "肌力訓練"
   };
   var SEGMENT_TYPE_LABELS = {
     warmup: "熱身",

@@ -310,6 +310,14 @@ python -m src.scripts.fetch_garmin_raw --limit 999 --import-db
 
 Garmin Connect 可能有 rate limit；遇到 `429` 時不要快速連續重跑。
 
+全歷史肌力訓練 backfill（只抓 `strength_training`，成功後才原子匯入並建立通知 baseline）：
+
+```bash
+python -m src.scripts.fetch_garmin_raw --activity-type strength_training --all --import-db
+```
+
+此命令遇到登入、列表或 429 失敗時不會匯入；冷卻後請從頭重跑。
+
 ## Docker
 
 Dashboard + PostgreSQL：

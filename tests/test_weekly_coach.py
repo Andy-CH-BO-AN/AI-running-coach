@@ -14,9 +14,9 @@ def _spec(*, input_json: dict | None = None) -> AIReportSpec:
         user_id=uuid.uuid4(),
         report_scope="weekly",
         input_json=input_json or {"week_start": "2026-08-03"},
-        prompt_version="weekly-coach:v1",
+        prompt_version="weekly-coach:v2",
         weekly_summary_id=uuid.uuid4(),
-        feature_version="weekly:v1",
+        feature_version="weekly:v2",
     )
 
 

@@ -1,4 +1,6 @@
 import json
+from contextlib import contextmanager
+from datetime import date
 
 import pytest
 
@@ -10,11 +12,13 @@ from src.db.models import (
     Activity,
     ActivityFeature,
     ActivitySplit,
+    LineNotification,
     SwimmingLength,
     UserProfileSnapshot,
 )
 from src.db.repositories import get_or_create_default_user
 from src.services.db_importer import import_garmin_raw_file, import_garmin_user_file, import_processed_csv_file
+from src.services.garmin_import_service import import_strength_backfill
 from tests.db_test_utils import isolated_db_session
 
 
@@ -72,6 +76,91 @@ def test_importing_same_garmin_raw_file_twice_does_not_duplicate_activities(db_s
     assert db_session.scalar(select(func.count()).select_from(SwimmingLength)) == 1
     activity = db_session.scalars(select(Activity)).one()
     assert activity.raw_json["raw_data"]["avg_swolf"] == 47.0
+
+
+def test_strength_raw_payload_is_upserted_without_a_schema_migration(db_session, tmp_path):
+    raw_path = tmp_path / "garmin_raw_strength_20260820.json"
+    strength = {
+        "total_sets": 3,
+        "active_sets": 2,
+        "total_reps": 18,
+        "total_volume_kg": None,
+        "sets": [{"set_index": 1, "set_type": "active", "exercise_names": [], "category": None, "reps": 9, "weight_kg": None, "duration_sec": None}],
+    }
+    _write_json(
+        raw_path,
+        [{
+            "activity_id": 988,
+            "type": "strength_training",
+            "date": "2026-08-20",
+            "distance": None,
+            "duration": 45,
+            "splits": [],
+            "raw_data": {"training_stress_score": 22, "strength": strength},
+        }],
+    )
+    user = get_or_create_default_user(db_session)
+
+    import_garmin_raw_file(db_session, user.id, raw_path)
+    import_garmin_raw_file(db_session, user.id, raw_path)
+
+    activity = db_session.scalars(select(Activity)).one()
+    assert activity.activity_type == "strength_training"
+    assert activity.distance_km is None
+    assert activity.raw_metrics["strength"] == strength
+    assert activity.raw_json["raw_data"]["strength"] == strength
+
+
+def test_strength_backfill_is_idempotent_seeds_old_activities_and_keeps_profile_snapshot(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    profile_path = tmp_path / "garmin_user_20260101.json"
+    raw_path = tmp_path / "garmin_raw_strength_20260820.json"
+    _write_json(profile_path, {"vo2max_running": 53})
+    _write_json(
+        raw_path,
+        [
+            {
+                "activity_id": activity_id,
+                "type": "strength_training",
+                "date": day,
+                "duration": 45,
+                "splits": [],
+                "raw_data": {"strength": {"total_sets": 1, "active_sets": 1, "total_reps": 5, "total_volume_kg": None, "sets": []}},
+            }
+            for activity_id, day in [(1, "2026-07-01"), (2, "2026-08-04"), (3, "2026-08-10"), (4, "2026-08-18"), (5, "2026-08-19")]
+        ],
+    )
+    user = get_or_create_default_user(db_session)
+    import_garmin_user_file(db_session, user.id, profile_path)
+
+    @contextmanager
+    def session_local():
+        yield db_session
+
+    monkeypatch.setattr("src.services.garmin_import_service.SessionLocal", session_local)
+    first = import_strength_backfill(
+        user_path=tmp_path / "garmin_user_20260820.json",
+        raw_path=raw_path,
+        today=date(2026, 8, 20),
+        include_mirror_sync=False,
+    )
+    second = import_strength_backfill(
+        user_path=tmp_path / "garmin_user_20260820.json",
+        raw_path=raw_path,
+        today=date(2026, 8, 20),
+        include_mirror_sync=False,
+    )
+
+    assert first["notification_baseline_seeded"] == 3  # activity 1/2 and sentinel
+    assert first["notification_candidates_unseeded"] == 3
+    assert second["notification_baseline_seeded"] == 0
+    assert db_session.scalar(select(func.count()).select_from(Activity)) == 5
+    assert db_session.scalar(select(func.count()).select_from(LineNotification)) == 3
+    snapshot = db_session.scalars(select(UserProfileSnapshot)).one()
+    assert float(snapshot.vo2max_running) == 53
 
 
 def test_import_garmin_user_file_preserves_raw_profile(db_session, tmp_path):

@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from src.services.artifacts import RAW_DATA_DIR, raw_artifact_paths, write_json
-from src.services.garmin_import_service import import_fetched_raw_artifacts
+from src.services.garmin_import_service import (
+    import_fetched_raw_artifacts,
+    import_strength_backfill,
+)
 
 
 def _build_timestamp() -> str:
@@ -26,17 +29,38 @@ def _get_garmin_activities(
     return get_garmin_activities(limit, progress=progress)
 
 
+def _get_all_strength_training_activities(progress: bool = True) -> dict[str, Any]:
+    from src.ingestion.garmin_client import get_all_strength_training_activities
+
+    return get_all_strength_training_activities(progress=progress)
+
+
 def fetch_garmin_raw_files(
     limit: int = 999,
     timestamp: str | None = None,
     output_dir: Path = RAW_DATA_DIR,
+    activity_type: str | None = None,
+    all_history: bool = False,
 ) -> tuple[Path, Path]:
     print(
         "Starting raw-only Garmin fetch. If Garmin prints two 429 login messages, "
         "wait 3-8 minutes before assuming it is stuck.",
         flush=True,
     )
-    garmin_data = _get_garmin_activities(limit, progress=True)
+    if all_history:
+        if activity_type != "strength_training":
+            raise ValueError("--all is currently supported only with --activity-type strength_training")
+        garmin_data = _get_all_strength_training_activities(progress=True)
+    elif activity_type == "strength_training":
+        from src.ingestion.garmin_client import get_garmin_activities
+
+        garmin_data = get_garmin_activities(
+            limit,
+            progress=True,
+            activity_types={"strength_training": "strength_training"},
+        )
+    else:
+        garmin_data = _get_garmin_activities(limit, progress=True)
     raw_activities = garmin_data.get("activities", [])
     user_data = garmin_data.get("user_data", {})
 
@@ -53,14 +77,28 @@ def fetch_garmin_raw_files(
     return user_path, raw_path
 
 
-def import_raw_files(user_path: Path, raw_path: Path) -> dict[str, Any]:
+def import_raw_files(
+    user_path: Path,
+    raw_path: Path,
+    *,
+    strength_backfill: bool = False,
+) -> dict[str, Any]:
     print("Importing fetched raw files into PostgreSQL", flush=True)
+    if strength_backfill:
+        return import_strength_backfill(user_path=user_path, raw_path=raw_path)
     return import_fetched_raw_artifacts(user_path=user_path, raw_path=raw_path)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch Garmin activities into local raw JSON files only.")
-    parser.add_argument("--limit", type=int, default=999, help="Number of Garmin activities to fetch. Default: 999")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--limit", type=int, help="Number of Garmin activities to fetch. Default: 999")
+    selection.add_argument("--all", action="store_true", help="Scan every page; only supported for strength_training.")
+    parser.add_argument(
+        "--activity-type",
+        choices=("strength_training",),
+        help="Restrict fetching to a supported Garmin activity type.",
+    )
     parser.add_argument("--timestamp", help="Optional YYYYMMDD timestamp for output filenames.")
     parser.add_argument("--output-dir", default=str(RAW_DATA_DIR), help="Directory for garmin_raw/user JSON files.")
     parser.add_argument("--import-db", action="store_true", help="Import the fetched raw files into PostgreSQL.")
@@ -69,17 +107,25 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.all and args.activity_type != "strength_training":
+        raise SystemExit("--all requires --activity-type strength_training")
     user_path, raw_path = fetch_garmin_raw_files(
-        limit=args.limit,
+        limit=args.limit if args.limit is not None else 999,
         timestamp=args.timestamp,
         output_dir=Path(args.output_dir),
+        activity_type=args.activity_type,
+        all_history=args.all,
     )
 
     print(f"user_file: {user_path}")
     print(f"raw_file: {raw_path}")
 
     if args.import_db:
-        results = import_raw_files(user_path=user_path, raw_path=raw_path)
+        results = import_raw_files(
+            user_path=user_path,
+            raw_path=raw_path,
+            strength_backfill=args.all and args.activity_type == "strength_training",
+        )
         for key, value in results.items():
             print(f"{key}: {value}")
 

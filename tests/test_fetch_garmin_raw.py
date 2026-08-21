@@ -1,8 +1,11 @@
 import json
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
-from src.scripts.fetch_garmin_raw import fetch_garmin_raw_files, import_raw_files
+import pytest
+
+from src.scripts.fetch_garmin_raw import fetch_garmin_raw_files, import_raw_files, parse_args
 from src.services.garmin_import_service import import_fetched_raw_artifacts
 
 
@@ -77,3 +80,27 @@ def test_import_fetched_raw_artifacts_preserves_fetch_script_result_keys(tmp_pat
         "user_snapshot_id": "snapshot-1",
         "shadow_import": {"rows_copied": 5},
     }
+
+
+def test_strength_all_cli_contract_requires_the_strength_activity_type(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["fetch_garmin_raw", "--activity-type", "strength_training", "--all", "--import-db"],
+    )
+    args = parse_args()
+
+    assert args.activity_type == "strength_training"
+    assert args.all is True
+    assert args.limit is None
+
+
+def test_strength_cli_rejects_all_and_limit_together(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["fetch_garmin_raw", "--activity-type", "strength_training", "--all", "--limit", "10"],
+    )
+
+    with pytest.raises(SystemExit):
+        parse_args()

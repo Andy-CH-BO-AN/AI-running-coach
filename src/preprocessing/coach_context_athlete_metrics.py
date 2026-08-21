@@ -281,6 +281,11 @@ def _build_cross_training(
         for activity in activities
         if activity.activity_type == "cycling"
     ]
+    strength_records = [
+        activity
+        for activity in activities
+        if activity.activity_type == "strength_training"
+    ]
     processed_swim_records = [
         activity
         for activity in swim_records
@@ -291,6 +296,23 @@ def _build_cross_training(
         for activity in bike_records
         if activity.processed_activity_type == "cycling"
     ]
+    strength_complete = bool(strength_records) and all(
+        activity.strength is not None and activity.strength_sets_available
+        for activity in strength_records
+    )
+
+    def strength_total(key: str) -> int | float | None:
+        if not strength_complete:
+            return None
+        values = [
+            activity.strength.get(key)
+            for activity in strength_records
+            if activity.strength is not None
+        ]
+        if any(_safe_float(value) is None for value in values):
+            return None
+        return _round_or_none(sum(_safe_float(value) or 0 for value in values), 2)
+
     return {
         "swimming": {
             "sessions_count": len(swim_records),
@@ -321,5 +343,11 @@ def _build_cross_training(
                 ),
                 1,
             ),
+        },
+        "strength_training": {
+            "sessions_count": len(strength_records),
+            "total_sets": strength_total("total_sets"),
+            "total_reps": strength_total("total_reps"),
+            "total_volume_kg": strength_total("total_volume_kg"),
         },
     }

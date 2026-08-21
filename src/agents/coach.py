@@ -142,7 +142,7 @@ def _sanitize_processed_activity_data_for_prompt(data: List[Dict[str, Any]]) -> 
             continue
         copy = deepcopy(record)
         activity_type = copy.get("type")
-        if activity_type in {"running", "cycling", "swimming", "lap_swimming"}:
+        if activity_type in {"running", "cycling", "swimming", "lap_swimming", "strength_training"}:
             copy["source_activity_type"] = activity_type
             copy.pop("type", None)
         sanitized.append(copy)

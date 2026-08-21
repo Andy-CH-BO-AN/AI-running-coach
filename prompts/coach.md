@@ -72,7 +72,7 @@
    - 歷史活動文字描述優先用 `source_activity_type` 對應的運動種類（跑步 / 自行車 / 游泳）；不要自行把單次歷史活動改寫成另一組強度 label。
    - 若高溫明顯影響心率，請在文字中說明「心率偏高不等於輸出更高」。
    - 每筆 `intensity_focuses` 都應聚焦一個強度解讀角度，例如 `heart_rate`、`power`、`pace`、`heat`、`load`，並用一句短標題加一句分析說清楚「這週最值得看的強度現象」。
-   - 若該 week bucket 有 `source_activity_type = "swimming" / "lap_swimming"` 或 `"cycling"` 的活動，請額外輸出 `cross_training_focus`。只挑該週最值得看的 1 堂交叉訓練，分析它對跑步訓練的作用：恢復、有氧補量、心肺刺激、腿部疲勞或是否影響下一堂跑步主課。
+   - 若該 week bucket 有 `source_activity_type = "swimming" / "lap_swimming"`、`"cycling"` 或 `"strength_training"` 的活動，請額外輸出 `cross_training_focus`。只挑該週最值得看的 1 堂交叉訓練，分析它對跑步訓練的作用：恢復、有氧補量、心肺刺激、腿部疲勞或是否影響下一堂跑步主課。
    - 交叉訓練不要用距離直接互相比強度；游泳、單車距離不可合併判斷。請優先看 `training_load`、`training_effect_aerobic`、`training_effect_anaerobic`、duration 與它和跑步主課的相對位置。
    - 若要提到「本週做了幾次某種運動」，請直接使用 `session_counts.total` 或 `session_counts.by_source_activity_type`，不要自行用文字估算次數。
    - 對無氧刺激高、分段起伏明顯或配速波動大的跑步活動必須優先分析。不要只看整段平均配速、平均心率或平均步頻；請檢查 `segments[]` 中的快段與恢復段，分別判斷主課表品質、恢復是否過長、速度維持能力、步頻/步幅是否只在快段成立。
@@ -198,14 +198,31 @@
         {
           "activity_id": "string | number | null",
           "date": "YYYY-MM-DD",
-          "source_activity_type": "running | cycling | swimming | lap_swimming | null",
-          "distance_km": number,
+          "source_activity_type": "running | cycling | swimming | lap_swimming | strength_training | null",
+          "distance_km": "number | null",
           "duration_min": number,
           "training_load": number,
           "avg_hr": number,
           "avg_pace": "MM:SS",
           "training_effect_aerobic": number,
           "training_effect_anaerobic": number,
+          "strength": {
+            "total_sets": "number",
+            "active_sets": "number",
+            "total_reps": "number",
+            "total_volume_kg": "number | null",
+            "sets": [
+              {
+                "set_index": "number",
+                "set_type": "active | rest | unknown",
+                "exercise_names": ["string"],
+                "category": "string | null",
+                "reps": "number",
+                "weight_kg": "number | null",
+                "duration_sec": "number | null"
+              }
+            ]
+          },
           "segments": [
             {
               "segment_type": "warmup | main | cooldown | lap", // deterministic；不得自行改寫
@@ -279,6 +296,13 @@
       "sessions_count": number,
       "avg_power_w": number,
       "avg_cadence": number,
+      "benefit_for_running": "string"
+    },
+    "strength_training": {
+      "sessions_count": number,
+      "total_sets": "number | null",
+      "total_reps": "number | null",
+      "total_volume_kg": "number | null",
       "benefit_for_running": "string"
     },
     "overall_assessment": "string"
@@ -380,13 +404,14 @@
       "supporting_sessions": [
         {
           "date": "YYYY-MM-DD",
-          "source_activity_type": "running | cycling | swimming | lap_swimming | null",
+          "source_activity_type": "running | cycling | swimming | lap_swimming | strength_training | null",
           "distance_km": number | null,
           "duration_min": number | null,
           "avg_hr": number | null,
           "avg_pace": "MM:SS | null",
           "training_effect_aerobic": number | null,
           "training_effect_anaerobic": number | null,
+          "strength": "object | null",
           "source_path": "string", // 例："weekly_analysis[0].sessions[1]"
           "activity_id": "string | number | null",
           "reason": "string"       // 為什麼這次活動支持該 claim
@@ -417,3 +442,8 @@
 | 跑步動作雷達圖 | `running_mechanics.*_score` |
 | 週期化甘特圖 | `periodization.phases` |
 | AI 建議依據/展開詳情 | `evidence_links[].supporting_metrics`, `evidence_links[].supporting_sessions` |
+【肌力訓練規則】
+- `source_activity_type = "strength_training"` 一律稱為「肌力訓練」。它可作為跑步主目標下的交叉訓練：分析動作名稱所反映的可能跑步影響、下肢疲勞、跑課間距與恢復。
+- `sessions[].strength` 是唯一的組數、次數、容量與動作事實來源。保留其 set 順序及 rest entries；只在單位可靠時引用 kg 容量。
+- 不得診斷傷病、評論動作品質、猜測肌群、杜撰數字、推算 1RM、或自行建立增肌/漸進超負荷課表。`training_preferences` 未明確安排時，也不得新增肌力課。
+- 肌力沒有距離、配速、跑姿、游泳或自行車效率、zone 資料；不得把這些缺失列為資料品質問題或寫成 0 km。

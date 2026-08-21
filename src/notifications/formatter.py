@@ -25,6 +25,7 @@ _SPORT_EMOJI = {
     "cycling": "🚴",
 }
 _SWIMMING_SOURCE_TYPES = frozenset({"swimming", "lap_swimming"})
+_STRENGTH_SOURCE_TYPE = "strength_training"
 
 
 def _is_swimming_source_type(source_activity_type: str) -> bool:
@@ -44,6 +45,8 @@ def _sport_display_name(source_activity_type: str) -> str:
         return "游泳"
     if sat == "cycling":
         return "自行車"
+    if sat == _STRENGTH_SOURCE_TYPE:
+        return "肌力訓練"
     return source_activity_type
 
 
@@ -394,6 +397,43 @@ def _format_swimming_messages(
     return [overview_message, *_paginate_complete_lines(compact_details)]
 
 
+def _format_strength_messages(
+    activity: dict[str, Any],
+    week: dict[str, Any] | None,
+) -> list[str]:
+    """Show compact strength facts; individual exercise sets stay in the AI input."""
+    lines = [f"{_sport_emoji(_STRENGTH_SOURCE_TYPE)} 肌力訓練｜{activity.get('date', '')}", ""]
+    duration = _format_duration(activity.get("duration_min"))
+    if duration:
+        lines.append(f"時間：{duration}")
+    avg_hr = activity.get("avg_hr")
+    if avg_hr is not None:
+        lines.append(f"平均心率：{avg_hr} bpm")
+    load = _format_load(activity.get("training_load"))
+    if load:
+        lines.append(f"訓練負荷：{load}")
+    strength = activity.get("strength")
+    if isinstance(strength, Mapping):
+        total_sets = strength.get("total_sets")
+        total_reps = strength.get("total_reps")
+        if total_sets is not None:
+            lines.append(f"總組數：{total_sets}")
+        if total_reps is not None:
+            lines.append(f"總次數：{total_reps}")
+        volume = _weekly_number(strength.get("total_volume_kg"), digits=2)
+        if volume is not None:
+            lines.append(f"總容量：{volume} kg")
+    if week is not None and week.get("derived_training_load") is not None:
+        lines.extend(["", "📊 本週累積", f"訓練負荷：{_format_load(week.get('derived_training_load'))}"])
+    url = _garmin_activity_url(activity.get("activity_id"))
+    if url:
+        lines.extend(["", f"🔗 {url}"])
+    message = "\n".join(lines)
+    if utf16_length(message) <= LINE_SAFE_TEXT_LENGTH:
+        return [message]
+    return _paginate_complete_lines(lines)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 主格式化函式
 # ──────────────────────────────────────────────────────────────────────────────
@@ -499,6 +539,8 @@ def format_activity_messages(
     source_type = str(activity.get("source_activity_type") or "").lower()
     if source_type in _SWIMMING_SOURCE_TYPES:
         return _format_swimming_messages(activity, week)
+    if source_type == _STRENGTH_SOURCE_TYPE:
+        return _format_strength_messages(activity, week)
 
     legacy_message = _format_legacy_activity_message(activity, week)
     if utf16_length(legacy_message) <= LINE_SAFE_TEXT_LENGTH:
