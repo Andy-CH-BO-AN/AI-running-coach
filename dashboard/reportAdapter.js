@@ -50,6 +50,7 @@
     race: "比賽",
     swim: "游泳",
     bike: "自行車",
+    strength_training: "肌力訓練",
     rest: "恢復"
   };
   var SOURCE_ACTIVITY_TYPE_LABELS = {
@@ -1500,7 +1501,7 @@
         session_type_label: SESSION_TYPE_LABELS[sessionType] || sessionType,
         title: fallbackText(source.title, intensity === "rest" ? "恢復日" : "未命名課表"),
         description: fallbackText(source.description, ""),
-        distance_km: roundTo(source.distance_km, 2),
+        distance_km: isPresentNumber(source.distance_km) ? roundTo(source.distance_km, 2) : null,
         duration_min: roundTo(source.duration_min, 1),
         intensity: intensity,
         intensity_label: intensityMeta.label,

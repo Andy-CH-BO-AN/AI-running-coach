@@ -65,6 +65,21 @@ def import_garmin_raw_file(session: Session, user_id, path: str | Path) -> dict[
             counts["skipped_short_cycling"] += 1
             continue
 
+        raw_data = activity_data.get("raw_data") or activity_data.get("raw_metrics") or {}
+        strength_sets_fetch_failed = (
+            activity_type == "strength_training"
+            and isinstance(raw_data, dict)
+            and raw_data.get("strength_sets_fetch_failed") is True
+        )
+        if strength_sets_fetch_failed:
+            existing = find_activity_by_garmin_id(
+                session,
+                user_id=user_id,
+                garmin_activity_id=int(activity_data["activity_id"]),
+            )
+            if existing is not None:
+                continue
+
         activity = upsert_activity(session, user_id=user_id, activity_data=activity_data, source_file=str(path))
         counts["activities"] += 1
 

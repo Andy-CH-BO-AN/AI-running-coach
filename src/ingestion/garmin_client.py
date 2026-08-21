@@ -250,6 +250,7 @@ def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -
     # expose only validated facts to later layers.
     if activity_type == 'strength_training':
         exercise_sets = safe_api_call(client.get_activity_exercise_sets, activity_id)
+        strength_sets_fetch_failed = exercise_sets is None
         strength = parse_strength_training(full_detail, exercise_sets)
         details.update({
             'training_stress_score': _get_activity_summary_value(
@@ -264,6 +265,7 @@ def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -
         })
         details['strength'] = strength
         details['strength_sets_available'] = bool(strength['sets'])
+        details['strength_sets_fetch_failed'] = strength_sets_fetch_failed
         details['strength_raw_summary'] = full_detail
         details['strength_raw_exercise_sets'] = exercise_sets or []
         return details
