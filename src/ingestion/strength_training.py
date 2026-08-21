@@ -143,8 +143,9 @@ def _normalize_set(set_payload: Mapping[str, Any], index: int) -> dict[str, Any]
     if normalized_type not in {"active", "rest"}:
         normalized_type = "unknown"
     duration = _first(set_payload, "durationSec", "durationSeconds", "duration", "timeSeconds")
+    set_index = _integer(_first(set_payload, "setIndex", "set_index", "index"))
     return {
-        "set_index": _integer(_first(set_payload, "setIndex", "set_index", "index")) or index,
+        "set_index": index if set_index is None else set_index,
         "set_type": normalized_type,
         "exercise_names": names,
         "category": category.strip() if isinstance(category, str) and category.strip() else None,

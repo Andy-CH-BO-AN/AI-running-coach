@@ -271,6 +271,10 @@ def build_completed_week_summary(
     sport_totals = _sport_totals(sessions)
     strength_training = _strength_training_summary(sessions)
     total_distance = _number(week.get("derived_total_distance_km"))
+    has_distance_bearing_session = any(
+        _safe_float(session.get("distance_km")) is not None
+        for session in sessions
+    )
     total_duration = _number(week.get("derived_total_duration_min"))
     training_load = _number(week.get("derived_training_load"))
     load_metrics = _load_metrics(
@@ -297,7 +301,11 @@ def build_completed_week_summary(
         "week_label": week.get("week_label"),
         "totals": {
             "workout_count": int(counts.get("total", len(sessions))),
-            "distance_km": _round_or_none(total_distance, 2) or 0.0,
+            "distance_km": (
+                _round_or_none(total_distance, 2) or 0.0
+                if has_distance_bearing_session or not sessions
+                else None
+            ),
             "duration_min": _round_or_none(total_duration, 1) or 0.0,
         },
         "sports": sport_totals,

@@ -31,7 +31,7 @@ def _session(
     activity_id: int,
     day: str,
     source_type: str,
-    distance: float,
+    distance: float | None,
     duration: float,
     load: float,
     *,
@@ -56,7 +56,7 @@ def _week(start: str, end: str, sessions: list[dict[str, Any]], load: float) -> 
         "week_start": start,
         "week_end": end,
         "week_label": f"{start[5:]}-{end[5:]}",
-        "derived_total_distance_km": round(sum(item["distance_km"] for item in sessions), 2),
+        "derived_total_distance_km": round(sum(item["distance_km"] or 0.0 for item in sessions), 2),
         "derived_total_duration_min": round(sum(item["duration_min"] for item in sessions), 1),
         "derived_training_load": load,
         "sessions": sessions,
@@ -217,6 +217,21 @@ def test_completed_week_summary_combines_swimming_aliases_and_rest_days_for_load
     assert summary.metrics["swimming_count"] == 2
     assert summary.metrics["monotony"] == pytest.approx(0.62)
     assert summary.metrics["strain"] == pytest.approx(43.4)
+
+
+def test_completed_week_summary_marks_strength_only_distance_unavailable():
+    context = _context()
+    context["weekly_analysis"][1] = _week(
+        "2026-08-03",
+        "2026-08-09",
+        [_session(401, "2026-08-05", "strength_training", None, 45.0, 22.0)],
+        22.0,
+    )
+
+    summary = build_completed_week_summary(context, today=date(2026, 8, 10))
+
+    assert summary.summary_json["totals"]["distance_km"] is None
+    assert summary.metrics["total_distance_km"] is None
 
 
 def test_completed_week_summary_uses_three_prior_weeks_for_chronic_load():

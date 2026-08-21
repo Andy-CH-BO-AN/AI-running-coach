@@ -73,6 +73,20 @@ def test_strength_parser_accepts_nested_garmin_wrapper_aliases():
     assert strength["sets"][0]["weight_kg"] == pytest.approx(4.5359)
 
 
+def test_strength_parser_preserves_zero_based_garmin_set_indices():
+    strength = parse_strength_training(
+        {},
+        {
+            "exerciseSets": [
+                {"setIndex": 0, "setType": "active", "reps": 8},
+                {"setIndex": 1, "setType": "active", "reps": 8},
+            ]
+        },
+    )
+
+    assert [item["set_index"] for item in strength["sets"]] == [0, 1]
+
+
 def test_strength_context_keeps_distance_unavailable_and_adds_load_effect_and_aggregates():
     strength = parse_strength_training(*(_fixture_payload()[key] for key in ("summary", "exercise_sets")))
     context = build_deterministic_coach_context(
@@ -315,7 +329,7 @@ def test_strength_line_and_weekly_line_never_render_zero_kilometres():
         {
             "week_start": "2026-08-17",
             "week_end": "2026-08-23",
-            "totals": {"workout_count": 1, "distance_km": 0, "duration_min": 45},
+            "totals": {"workout_count": 1, "distance_km": None, "duration_min": 45},
             "sports": [{"display_name": "肌力訓練", "count": 1, "distance_km": None, "duration_min": 45}],
             "training_load": {"garmin_weekly_load": 22},
             "next_week_plan_seed": {"days": [{"date": f"2026-08-{24 + day}", "day_of_week": weekday} for day, weekday in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])]},
@@ -329,6 +343,8 @@ def test_strength_line_and_weekly_line_never_render_zero_kilometres():
     )
     assert "肌力訓練：1 次｜45 分" in "\n".join(weekly_messages)
     assert "肌力訓練：1 次｜0 km" not in "\n".join(weekly_messages)
+    assert "總計：1 次｜45 分" in "\n".join(weekly_messages)
+    assert "總計：1 次｜0 km" not in "\n".join(weekly_messages)
 
 
 def test_strength_backfill_baseline_leaves_only_three_newest_in_current_window_unseeded():
