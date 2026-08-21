@@ -229,7 +229,15 @@
     var range = document.createElement("p");
     range.className = "subtle";
     if (load.optimal_tss_range) {
-      range.textContent = "建議範圍: " + load.optimal_tss_range.min + " - " + load.optimal_tss_range.max;
+      var minimum = load.optimal_tss_range.min;
+      var maximum = load.optimal_tss_range.max;
+      if (isAvailableNumber(minimum) && isAvailableNumber(maximum)) {
+        range.textContent = "建議範圍: " + minimum + " - " + maximum;
+      } else if (isAvailableNumber(minimum)) {
+        range.textContent = "建議下限: " + minimum;
+      } else if (isAvailableNumber(maximum)) {
+        range.textContent = "建議上限: " + maximum;
+      }
     }
 
     elements.loadAssessment.appendChild(caption);
@@ -530,7 +538,10 @@
       [
         highlight.distance_label,
         highlight.duration_label,
-        highlight.load_label
+        highlight.load_label,
+        highlight.strength_sets_label,
+        highlight.strength_reps_label,
+        highlight.strength_volume_label
       ].forEach(function(value) {
         if (value) {
           stats.appendChild(textElement("span", "", value));

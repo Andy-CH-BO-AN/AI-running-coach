@@ -20,7 +20,7 @@ from src.preprocessing.coach_context_utils import (
     _week_start_for,
 )
 
-WEEKLY_SUMMARY_VERSION = "weekly:v4"
+WEEKLY_SUMMARY_VERSION = "weekly:v5"
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +81,7 @@ def _sport_totals(sessions: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
                 "duration_min": 0.0,
                 "training_load": 0.0,
                 "has_training_load": False,
+                "has_unknown_training_load": False,
             },
         )
         entry["count"] += 1
@@ -90,6 +91,8 @@ def _sport_totals(sessions: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
         if load is not None:
             entry["training_load"] += load
             entry["has_training_load"] = True
+        else:
+            entry["has_unknown_training_load"] = True
 
     return [
         {
@@ -104,7 +107,7 @@ def _sport_totals(sessions: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
             "duration_min": _round_or_none(entry["duration_min"], 1) or 0.0,
             "training_load": (
                 _round_or_none(entry["training_load"], 1)
-                if entry["has_training_load"]
+                if entry["has_training_load"] and not entry["has_unknown_training_load"]
                 else None
             ),
         }

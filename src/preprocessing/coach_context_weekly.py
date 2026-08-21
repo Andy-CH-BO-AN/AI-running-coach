@@ -59,16 +59,12 @@ def _build_week_session_counts(week_sessions: Sequence[CoachSession]) -> CoachSe
 def _known_training_load_total(
     sessions: Sequence[CoachSession],
 ) -> float | None:
-    values = [
-        value
-        for session in sessions
-        if (value := _safe_float(session.get("training_load"))) is not None
-    ]
     if not sessions:
         return 0.0
-    if not values:
+    values = [_safe_float(session.get("training_load")) for session in sessions]
+    if any(value is None for value in values):
         return None
-    return _round_or_none(sum(values), 1)
+    return _round_or_none(sum(value for value in values if value is not None), 1)
 
 
 def _build_12week_summary(

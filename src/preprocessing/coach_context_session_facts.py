@@ -986,11 +986,7 @@ def _session_from_normalized(activity: NormalizedActivity) -> SessionFacts:
         source_activity_type=source_activity_type,
         distance_km=None if is_strength else distance if distance is not None else 0,
         duration_min=duration if duration is not None else 0,
-        training_load=(
-            training_load
-            if training_load is not None
-            else None if is_strength else 0
-        ),
+        training_load=training_load,
         avg_hr=_round_or_none(activity.avg_hr_bpm, 0),
         avg_pace=(
             None

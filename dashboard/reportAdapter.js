@@ -1000,7 +1000,7 @@
       derived_swim_distance_km: roundTo(swimDistance, 2),
       derived_bike_distance_km: roundTo(bikeDistance, 2),
       derived_total_duration_min: roundTo(duration, 1),
-      derived_training_load: sessions.length === 0 ? 0 : hasTrainingLoad ? roundTo(load, 1) : null,
+      derived_training_load: sessions.length === 0 ? 0 : missingFields.training_load ? null : hasTrainingLoad ? roundTo(load, 1) : null,
       data_quality: qualityStatus,
       missing_fields: missingFieldNames,
       sessions_count: sessions.length
@@ -1130,6 +1130,10 @@
       if (load >= 80 || aerobic >= 3 || anaerobic >= 2) return "這堂單車負荷偏高，對心肺有幫助，但隔天跑步主課要留意腿部殘留疲勞。";
       return "這堂單車主要扮演有氧補量，不應搶走跑步主課的恢復資源。";
     }
+    if (sourceType === "strength_training") {
+      if (isPresentNumber(session.training_load)) return "這堂肌力訓練提供跑步以外的刺激，安排下一堂跑步主課時應連同腿部恢復一起評估。";
+      return "這堂肌力訓練的 Garmin 負荷資料不足；可依時長與已知肌力內容保守安排跑課間距。";
+    }
     return sessionTypeLabel + " 是本週負荷最高的交叉訓練，可當作跑步以外的補量刺激。";
   }
 
@@ -1137,11 +1141,14 @@
     return safeArray(report.weekly_analysis).map(function buildWeekHighlight(week, index) {
       var sessions = safeArray(week && week.sessions).map(adaptSession).filter(function keep(session) {
         var sourceType = normalizedSourceActivityType(session);
-        return sourceType === "swimming" || sourceType === "lap_swimming" || sourceType === "cycling";
+        return sourceType === "swimming" || sourceType === "lap_swimming" || sourceType === "cycling" || sourceType === "strength_training";
       });
       if (!sessions.length) return null;
       var picked = sessions.slice().sort(function sortByLoad(a, b) {
-        var loadDiff = toNumber(b.training_load) - toNumber(a.training_load);
+        var aHasLoad = isPresentNumber(a.training_load);
+        var bHasLoad = isPresentNumber(b.training_load);
+        if (aHasLoad !== bHasLoad) return bHasLoad ? 1 : -1;
+        var loadDiff = aHasLoad ? Number(b.training_load) - Number(a.training_load) : 0;
         if (loadDiff !== 0) return loadDiff;
         return fallbackText(b.date, "").localeCompare(fallbackText(a.date, ""));
       })[0];
@@ -1163,7 +1170,10 @@
         session_label: formatDateLabel(picked.date) + " " + picked.type_label,
         distance_label: picked.distance_km !== null && picked.distance_km > 0 ? picked.distance_km + " km" : "",
         duration_label: picked.duration_min !== null && picked.duration_min > 0 ? picked.duration_min + " min" : "",
-        load_label: picked.training_load !== null && picked.training_load > 0 ? picked.training_load + " TSS" : "",
+        load_label: picked.training_load !== null ? picked.training_load + " TSS" : "",
+        strength_sets_label: picked.strength.total_sets !== null ? picked.strength.total_sets + " 組" : "",
+        strength_reps_label: picked.strength.total_reps !== null ? picked.strength.total_reps + " 次" : "",
+        strength_volume_label: picked.strength.total_volume_kg !== null ? picked.strength.total_volume_kg + " kg" : "",
         analysis: aiAnalysis || crossTrainingAnalysis(picked),
         has_ai_analysis: Boolean(aiAnalysis)
       };

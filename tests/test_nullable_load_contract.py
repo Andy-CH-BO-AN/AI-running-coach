@@ -75,3 +75,19 @@ def test_coach_prompt_declares_nullable_load_contract():
     assert '"current_tss_weekly": "number | null"' in prompt
     assert '"status": "undertraining | optimal | overreaching | overtraining | unknown"' in prompt
     assert "不得以 0 代替未知值" in prompt
+
+
+def test_all_coaching_prompts_declare_nullable_metric_contracts():
+    activity_prompt = Path("prompts/activity_coach.md").read_text(encoding="utf-8")
+    weekly_prompt = Path("prompts/weekly_coach.md").read_text(encoding="utf-8")
+    coach_prompt = Path("prompts/coach.md").read_text(encoding="utf-8")
+
+    assert "training_load" in activity_prompt and "絕不是實測 0" in activity_prompt
+    assert "任一納入活動的負荷未知時，週總負荷也未知" in weekly_prompt
+    assert '"avg_hr": "number | null"' in coach_prompt
+    assert '"training_effect_aerobic": "number | null"' in coach_prompt
+    assert '"stride_length_m": "number | null"' in coach_prompt
+    assert '"estimated_temp_c": "number | null"' in coach_prompt
+    assert '"humidity_pct": "number | null"' in coach_prompt
+    assert '"hr_impact": "string | null"' in coach_prompt
+    assert "swim/bike/strength_training" in coach_prompt

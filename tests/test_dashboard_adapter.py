@@ -83,7 +83,7 @@ def test_weekly_metrics_are_derived_from_sessions_and_mark_partial_data(tmp_path
     assert metrics["derived_swim_distance_km"] == 1.2
     assert metrics["derived_bike_distance_km"] == 12
     assert metrics["derived_total_duration_min"] == 93.0
-    assert metrics["derived_training_load"] == 86.4
+    assert metrics["derived_training_load"] is None
     assert metrics["data_quality"] == "部分資料不足"
     assert set(metrics["missing_fields"]) == {"duration_min", "training_load"}
 
@@ -410,6 +410,39 @@ def test_cross_training_highlights_prefer_ai_analysis_when_present(tmp_path):
     assert highlight["session_label"] == "5/14 自行車"
     assert highlight["analysis"] == "這堂單車有明確有氧刺激，隔天跑步應避免再堆高強度。"
     assert highlight["has_ai_analysis"] is True
+
+
+def test_strength_cross_training_highlight_preserves_ai_focus_and_unknown_load(tmp_path):
+    report = {
+        "weekly_analysis": [{
+            "week_label": "05/11-05/17",
+            "cross_training_focus": {
+                "activity_id": 33,
+                "headline": "肌力課後保留恢復間距",
+                "analysis": "已知組數可協助安排跑課間距，未知負荷不作高低判斷。",
+            },
+            "sessions": [{
+                "activity_id": 33,
+                "date": "2026-05-13",
+                "source_activity_type": "strength_training",
+                "distance_km": None,
+                "duration_min": 45,
+                "training_load": None,
+                "strength": {"total_sets": 12, "total_reps": 80, "total_volume_kg": None},
+            }],
+        }],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    highlight = run_adapter_case(tmp_path, report)["crossTraining"][0]
+
+    assert highlight["session_type_label"] == "肌力訓練"
+    assert highlight["title"] == "肌力課後保留恢復間距"
+    assert highlight["analysis"] == "已知組數可協助安排跑課間距，未知負荷不作高低判斷。"
+    assert highlight["load_label"] == ""
+    assert highlight["strength_sets_label"] == "12 組"
+    assert highlight["strength_reps_label"] == "80 次"
+    assert highlight["strength_volume_label"] == ""
 
 
 def test_cross_training_highlights_match_ai_focus_activity_id_before_load(tmp_path):

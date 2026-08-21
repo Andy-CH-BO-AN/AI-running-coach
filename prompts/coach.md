@@ -53,6 +53,7 @@
    - `meta.today` 必須等於 `deterministic_context.meta.today`。
    - `weekly_analysis[].week_start`、`weekly_analysis[].week_label`、`weekly_analysis[].session_counts`、`weekly_analysis[].sessions[]`、`hr_zone_distribution.zones[]`、`power_zone_distribution.zones[]`、`physio_metrics.pace_zones[]`、`running_mechanics`、`load_assessment.current_tss_weekly` 與 `next_week_plan_seed.week_start/days[].date` 優先沿用 deterministic_context。
    - `sessions[].training_load` 與 `load_assessment.current_tss_weekly` 可以是 `null`。`null` 表示 Garmin 負荷資料不可得，不是 0；只有 deterministic_context 明確提供數值 0 時，才可輸出 0。
+   - `avg_hr`、`avg_pace`、Training Effect 與 segment metrics 也可能是 `null`；不得補值或在 `coaching_note`、`cross_training_focus` 等敘事中引用不存在的數字。肌力活動的配速固定不可用，跑步 Training Effect 缺失時也不得杜撰。
    - 當 `deterministic_context.load_assessment.status = "unknown"` 或 `current_tss_weekly = null` 時，最終 `load_assessment.status` 必須為 `unknown`，`label` 與 `recommendation` 必須使用「資料不足」的中性語意；不得寫成 0 TSS、負荷偏低、undertraining，也不得僅依未知 TSS 建議增加或減少訓練量。
    - 你可以在各自允許的分析欄位新增自然語言評估，例如 `assessment`、`recommendation`、`label`；Session facts 只允許寫入非空 `coaching_note` 與同位置的 `segments[].note`，不得把已計算值改成另一組值。
    - 如果 deterministic_context 的某週 `data_quality.message` 為「部分資料不足」，最終報告也必須在該週 assessment 或 evidence 中說明資料限制。
@@ -195,7 +196,7 @@
       "cross_training_focus": {
         "activity_id": "string | number | null",
         "headline": "string",          // 短標題，例：「游泳作為低衝擊有氧補量」
-        "analysis": "string"           // 一句教練解讀；若該週無 swim/bike，輸出 null 或省略此欄
+        "analysis": "string"           // 一句教練解讀；若該週無 swim/bike/strength_training，輸出 null 或省略此欄
       },
       "sessions": [
         {
@@ -205,10 +206,10 @@
           "distance_km": "number | null",
           "duration_min": number,
           "training_load": "number | null",
-          "avg_hr": number,
-          "avg_pace": "MM:SS",
-          "training_effect_aerobic": number,
-          "training_effect_anaerobic": number,
+          "avg_hr": "number | null",
+          "avg_pace": "MM:SS | null",
+          "training_effect_aerobic": "number | null",
+          "training_effect_anaerobic": "number | null",
           "strength": {
             "total_sets": "number | null",
             "active_sets": "number | null",
@@ -229,18 +230,18 @@
           "segments": [
             {
               "segment_type": "warmup | main | cooldown | lap", // deterministic；不得自行改寫
-              "distance_km": number,
-              "avg_pace": "MM:SS",
-              "avg_hr": number,
-              "cadence": number,          // deterministic_context 提供的跑步步頻；游泳/自行車不得填入
-              "stride_length_m": number,  // deterministic_context 提供的跑步步幅；游泳/自行車不得填入
+              "distance_km": "number | null",
+              "avg_pace": "MM:SS | null",
+              "avg_hr": "number | null",
+              "cadence": "number | null",          // deterministic_context 提供的跑步步頻；游泳/自行車不得填入
+              "stride_length_m": "number | null",  // deterministic_context 提供的跑步步幅；游泳/自行車不得填入
               "note": "string"              // 唯一可寫的 Segment annotation slot
             }
           ],
           "environment": {
-            "estimated_temp_c": number,
-            "humidity_pct": number,
-            "hr_impact": "string"   // 例：「高溫使心率偏高約5bpm」
+            "estimated_temp_c": "number | null",
+            "humidity_pct": "number | null",
+            "hr_impact": "string | null"   // 例：「高溫使心率偏高約5bpm」
           },
           "coaching_note": "string"          // 唯一可寫的 Session annotation slot
         }

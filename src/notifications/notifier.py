@@ -43,7 +43,7 @@ from src.services.ai_report_resolution import (
 
 logger = logging.getLogger(__name__)
 
-ACTIVITY_CONTEXT_VERSION = "activity-context:v4"
+ACTIVITY_CONTEXT_VERSION = "activity-context:v5"
 
 
 @dataclass
