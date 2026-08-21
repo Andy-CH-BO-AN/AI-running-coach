@@ -202,7 +202,7 @@ def test_builds_monday_week_buckets_and_derived_weekly_metrics():
     assert current_week["week_end"] == "2026-05-17"
     assert current_week["derived_total_distance_km"] == 6.12
     assert current_week["derived_total_duration_min"] == 36.3
-    assert current_week["derived_training_load"] is None
+    assert current_week["derived_training_load"] == 42.3
     assert current_week["session_counts"] == {
         "total": 2,
         "by_source_activity_type": {"running": 2},
