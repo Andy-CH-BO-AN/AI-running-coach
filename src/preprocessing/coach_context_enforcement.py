@@ -25,6 +25,9 @@ WEEKLY_TOTAL_KEYS = {
     "derived_training_load",
 }
 
+UNKNOWN_LOAD_LABEL = "負荷資料不足"
+UNKNOWN_LOAD_RECOMMENDATION = "目前訓練負荷資料不足，避免僅依 TSS 判斷增減訓練量。"
+
 
 def overlay_deterministic(ai_value: Any, deterministic_value: Any) -> Any:
     if isinstance(ai_value, dict) and isinstance(deterministic_value, dict):
@@ -56,6 +59,30 @@ def _enforce_running_mechanics(
     mechanics["improvement_tips"] = _mechanics_tips(mechanics)
 
     result["running_mechanics"] = mechanics
+
+
+def _enforce_load_assessment(
+    result: Dict[str, Any],
+    deterministic_context: Dict[str, Any],
+) -> None:
+    load_context = deterministic_context.get("load_assessment") or {}
+    if not load_context:
+        return
+
+    load_assessment = deepcopy(result.get("load_assessment") or {})
+    for key in ("current_tss_weekly", "optimal_tss_range", "status"):
+        if key in load_context:
+            load_assessment[key] = deepcopy(load_context[key])
+
+    if (
+        load_context.get("status") == "unknown"
+        or load_context.get("current_tss_weekly") is None
+    ):
+        load_assessment["status"] = "unknown"
+        load_assessment["label"] = UNKNOWN_LOAD_LABEL
+        load_assessment["recommendation"] = UNKNOWN_LOAD_RECOMMENDATION
+
+    result["load_assessment"] = load_assessment
 
 
 def _enforce_weekly_analysis(
@@ -177,7 +204,10 @@ def _enforce_next_week_plan(
         ai_day.setdefault("session_type", "rest")
         ai_day.setdefault("title", "恢復日")
         ai_day.setdefault("description", "")
-        ai_day.setdefault("distance_km", 0)
+        if str(ai_day["session_type"]).strip().lower() == "strength_training":
+            ai_day["distance_km"] = None
+        else:
+            ai_day.setdefault("distance_km", 0)
         ai_day.setdefault("duration_min", 0)
         ai_day.setdefault("intensity", "rest")
         ai_day.setdefault("key_workout", False)
@@ -318,13 +348,7 @@ def enforce_deterministic_report_fields(
             deterministic_context["cross_training"],
         )
 
-    load_context = deterministic_context.get("load_assessment") or {}
-    if load_context:
-        load_assessment = deepcopy(result.get("load_assessment") or {})
-        for key in ("current_tss_weekly", "optimal_tss_range", "status"):
-            if key in load_context:
-                load_assessment[key] = deepcopy(load_context[key])
-        result["load_assessment"] = load_assessment
+    _enforce_load_assessment(result, deterministic_context)
 
     result["next_week_plan"] = _enforce_next_week_plan(result, deterministic_context)
     session_references = build_session_evidence_index(

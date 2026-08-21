@@ -141,7 +141,7 @@ def test_session_facts_distinguish_missing_core_values_from_zero():
     )
     missing, zero = fact_set.context_payloads()
 
-    assert (missing["distance_km"], missing["duration_min"], missing["training_load"]) == (0, 0, 0)
+    assert (missing["distance_km"], missing["duration_min"], missing["training_load"]) == (0, 0, None)
     assert missing["data_quality"] == {
         "status": "partial",
         "missing_fields": ["distance_km", "duration_min", "training_load"],

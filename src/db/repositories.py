@@ -818,7 +818,12 @@ def mark_notification_sent(
     return notification
 
 
-def seed_baseline_notifications(session: Session, activity_ids: list[int]) -> int:
+def seed_baseline_notifications(
+    session: Session,
+    activity_ids: list[int],
+    *,
+    commit: bool = True,
+) -> int:
     """批量建立 baseline seed 紀錄，並寫入系統初始化標記（SYSTEM_INITIALIZED_MARKER_ID = -1）。
 
     使用 INSERT ... ON CONFLICT DO NOTHING 確保冪等。
@@ -845,7 +850,10 @@ def seed_baseline_notifications(session: Session, activity_ids: list[int]) -> in
         .returning(LineNotification.id)
     )
     inserted_ids = session.execute(stmt).scalars().all()
-    session.commit()
+    if commit:
+        session.commit()
+    else:
+        session.flush()
     return len(inserted_ids)
 
 

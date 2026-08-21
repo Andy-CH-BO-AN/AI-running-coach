@@ -54,18 +54,19 @@ class CoachSession(TypedDict, total=False):
     activity_id: Any
     date: Any
     source_activity_type: str | None
-    distance_km: float
+    distance_km: float | None
     duration_min: float
     elapsed_duration_min: float
     swim_duration_min: float
     rest_duration_min: float
     swim_pace_seconds_per_100m: int
     elapsed_pace_seconds_per_100m: int
-    training_load: float
+    training_load: float | None
     avg_hr: int | None
     avg_pace: str | None
     training_effect_aerobic: float | None
     training_effect_anaerobic: float | None
+    strength: dict[str, Any]
     segments: list[CoachSegment]
     environment: CoachEnvironment
     coaching_note: str | None
@@ -78,6 +79,10 @@ def _is_running_source_activity(source_activity_type: str | None) -> bool:
 
 def _is_swimming_source_activity(source_activity_type: str | None) -> bool:
     return (source_activity_type or "").lower() in {"swimming", "lap_swimming"}
+
+
+def _is_strength_source_activity(source_activity_type: str | None) -> bool:
+    return (source_activity_type or "").lower() == "strength_training"
 
 
 def _pace_seconds_per_100m(
@@ -176,6 +181,84 @@ def _safe_canonical_activity_id(value: Any) -> str | None:
 class RunningSessionFacts:
     training_effect_aerobic: float | None
     training_effect_anaerobic: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class StrengthSessionFacts:
+    total_sets: int | None
+    active_sets: int | None
+    total_reps: int | None
+    total_volume_kg: float | None
+    sets: tuple[dict[str, Any], ...]
+
+    def projection(self) -> dict[str, Any]:
+        return {
+            "total_sets": self.total_sets,
+            "active_sets": self.active_sets,
+            "total_reps": self.total_reps,
+            "total_volume_kg": self.total_volume_kg,
+            "sets": deepcopy(list(self.sets)),
+        }
+
+
+def _nonnegative_integer(value: Any, location: str) -> int:
+    number = _number(value, location)
+    if number < 0 or int(number) != number:
+        raise SessionFactContractError(f"{location}: expected a non-negative integer")
+    return int(number)
+
+
+def _nonnegative_integer_or_none(value: Any, location: str) -> int | None:
+    return None if value is None else _nonnegative_integer(value, location)
+
+
+def _strength_from_context_payload(
+    payload: Mapping[str, Any],
+    *,
+    location: str,
+) -> StrengthSessionFacts:
+    for key in ("total_sets", "active_sets", "total_reps", "total_volume_kg", "sets"):
+        _required(payload, key, location)
+    total_volume = _number_or_none(
+        payload["total_volume_kg"], f"{location}.total_volume_kg"
+    )
+    if total_volume is not None and total_volume < 0:
+        raise SessionFactContractError(f"{location}.total_volume_kg: expected non-negative")
+    raw_sets = _required(payload, "sets", location)
+    if not isinstance(raw_sets, (list, tuple)):
+        raise SessionFactContractError(f"{location}.sets: expected a list")
+    normalized_sets: list[dict[str, Any]] = []
+    for index, raw_set in enumerate(raw_sets):
+        if not isinstance(raw_set, Mapping):
+            raise SessionFactContractError(f"{location}.sets[{index}]: expected an object")
+        set_location = f"{location}.sets[{index}]"
+        set_type = _required(raw_set, "set_type", set_location)
+        if set_type not in {"active", "rest", "unknown"}:
+            raise SessionFactContractError(f"{set_location}.set_type: invalid value")
+        names = _required(raw_set, "exercise_names", set_location)
+        if not isinstance(names, (list, tuple)) or not all(isinstance(name, str) for name in names):
+            raise SessionFactContractError(f"{set_location}.exercise_names: expected strings")
+        category = _string_or_none(_required(raw_set, "category", set_location), f"{set_location}.category")
+        weight = _number_or_none(_required(raw_set, "weight_kg", set_location), f"{set_location}.weight_kg")
+        duration = _number_or_none(_required(raw_set, "duration_sec", set_location), f"{set_location}.duration_sec")
+        if (weight is not None and weight < 0) or (duration is not None and duration < 0):
+            raise SessionFactContractError(f"{set_location}: expected non-negative values")
+        normalized_sets.append({
+            "set_index": _nonnegative_integer(_required(raw_set, "set_index", set_location), f"{set_location}.set_index"),
+            "set_type": set_type,
+            "exercise_names": list(names),
+            "category": category,
+            "reps": _nonnegative_integer_or_none(_required(raw_set, "reps", set_location), f"{set_location}.reps"),
+            "weight_kg": weight,
+            "duration_sec": duration,
+        })
+    return StrengthSessionFacts(
+        total_sets=_nonnegative_integer_or_none(payload["total_sets"], f"{location}.total_sets"),
+        active_sets=_nonnegative_integer_or_none(payload["active_sets"], f"{location}.active_sets"),
+        total_reps=_nonnegative_integer_or_none(payload["total_reps"], f"{location}.total_reps"),
+        total_volume_kg=total_volume,
+        sets=tuple(normalized_sets),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -444,13 +527,14 @@ class SessionFacts:
     activity_id: Any
     date: Any
     source_activity_type: str | None
-    distance_km: float
+    distance_km: float | None
     duration_min: float
-    training_load: float
+    training_load: float | None
     avg_hr: int | None
     avg_pace: str | None
     running: RunningSessionFacts | None
     swimming: SwimmingSessionFacts | None
+    strength: StrengthSessionFacts | None
     segments: tuple[SegmentFacts, ...]
     environment: SessionEnvironmentFacts
     data_quality: SessionDataQualityFacts
@@ -484,6 +568,8 @@ class SessionFacts:
         }
         if self.swimming is not None:
             payload.update(self.swimming.projection())
+        if self.strength is not None:
+            payload["strength"] = self.strength.projection()
         return payload
 
     def report_payload(
@@ -525,6 +611,8 @@ class SessionFacts:
         }
         if self.swimming is not None:
             payload.update(self.swimming.projection())
+        if self.strength is not None:
+            payload["strength"] = self.strength.projection()
         return payload
 
     @classmethod
@@ -580,6 +668,7 @@ class SessionFacts:
                 ),
             )
             if _is_running_source_activity(source_activity_type)
+            or _is_strength_source_activity(source_activity_type)
             else None
         )
         if running is None:
@@ -589,7 +678,7 @@ class SessionFacts:
             ):
                 if _required(payload, key, location) is not None:
                     raise SessionFactContractError(
-                        f"{location}.{key}: non-running fact must be null"
+                        f"{location}.{key}: unsupported activity fact must be null"
                     )
 
         swimming: SwimmingSessionFacts | None = None
@@ -653,6 +742,19 @@ class SessionFacts:
                 f"{location}: non-swimming Session facts contain swimming fields"
             )
 
+        strength = (
+            _strength_from_context_payload(
+                _required_mapping(payload, "strength", location),
+                location=f"{location}.strength",
+            )
+            if _is_strength_source_activity(source_activity_type)
+            else None
+        )
+        if strength is None and "strength" in payload:
+            raise SessionFactContractError(
+                f"{location}: non-strength Session facts contain strength fields"
+            )
+
         environment = SessionEnvironmentFacts.from_context_payload(
             _required_mapping(payload, "environment", location),
             location=f"{location}.environment",
@@ -669,7 +771,7 @@ class SessionFacts:
                 f"{location}.date",
             ),
             source_activity_type=source_activity_type,
-            distance_km=_number(
+            distance_km=_number_or_none(
                 _required(payload, "distance_km", location),
                 f"{location}.distance_km",
             ),
@@ -677,7 +779,7 @@ class SessionFacts:
                 _required(payload, "duration_min", location),
                 f"{location}.duration_min",
             ),
-            training_load=_number(
+            training_load=_number_or_none(
                 _required(payload, "training_load", location),
                 f"{location}.training_load",
             ),
@@ -691,6 +793,7 @@ class SessionFacts:
             ),
             running=running,
             swimming=swimming,
+            strength=strength,
             segments=tuple(segments),
             environment=environment,
             data_quality=data_quality,
@@ -793,20 +896,23 @@ def _session_from_normalized(activity: NormalizedActivity) -> SessionFacts:
     )
     duration = _round_or_none(activity.duration_min, 1)
     training_load = _round_or_none(activity.training_load, 1)
+    source_activity_type = activity.activity_type or None
+    is_strength = _is_strength_source_activity(source_activity_type)
     missing_fields = tuple(
         field_name
         for field_name, value in (
-            ("distance_km", distance),
+            *((() if is_strength else (("distance_km", distance),))),
             ("duration_min", duration),
             ("training_load", training_load),
         )
         if value is None
     )
 
-    source_activity_type = activity.activity_type or None
     include_running_metrics = _is_running_source_activity(source_activity_type)
     include_swimming_timing = _is_swimming_source_activity(source_activity_type)
-    include_training_effect = activity.processed_activity_type == "running"
+    include_training_effect = activity.processed_activity_type in {
+        "running", "strength_training"
+    }
     running = (
         RunningSessionFacts(
             training_effect_aerobic=_round_or_none(
@@ -820,7 +926,7 @@ def _session_from_normalized(activity: NormalizedActivity) -> SessionFacts:
             if include_training_effect
             else None,
         )
-        if include_running_metrics
+        if include_training_effect
         else None
     )
 
@@ -844,6 +950,24 @@ def _session_from_normalized(activity: NormalizedActivity) -> SessionFacts:
             ),
         )
 
+    strength: StrengthSessionFacts | None = None
+    if is_strength:
+        if activity.strength is None or not activity.strength_sets_available:
+            missing_fields = tuple((*missing_fields, "strength.sets"))
+        if isinstance(activity.strength, Mapping):
+            strength = _strength_from_context_payload(
+                activity.strength,
+                location="normalized strength",
+            )
+        else:
+            strength = StrengthSessionFacts(
+                total_sets=None,
+                active_sets=None,
+                total_reps=None,
+                total_volume_kg=None,
+                sets=(),
+            )
+
     temp = _round_or_none(activity.temperature_c, 1)
     humidity = _round_or_none(activity.humidity_pct, 0)
     environment = SessionEnvironmentFacts(
@@ -860,16 +984,21 @@ def _session_from_normalized(activity: NormalizedActivity) -> SessionFacts:
         activity_id=deepcopy(activity.activity_id),
         date=deepcopy(activity.date),
         source_activity_type=source_activity_type,
-        distance_km=distance if distance is not None else 0,
+        distance_km=None if is_strength else distance if distance is not None else 0,
         duration_min=duration if duration is not None else 0,
-        training_load=training_load if training_load is not None else 0,
+        training_load=training_load,
         avg_hr=_round_or_none(activity.avg_hr_bpm, 0),
-        avg_pace=_format_pace_minutes(
-            activity.processed_performance_formatted
-            or activity.processed_performance_value
+        avg_pace=(
+            None
+            if is_strength
+            else _format_pace_minutes(
+                activity.processed_performance_formatted
+                or activity.processed_performance_value
+            )
         ),
         running=running,
         swimming=swimming,
+        strength=strength,
         segments=tuple(
             _segment_from_normalized(
                 segment,
@@ -1031,6 +1160,8 @@ class SessionEvidenceIndex:
         target["training_effect_anaerobic"] = deepcopy(
             source.get("training_effect_anaerobic")
         )
+        if source.get("source_activity_type") == "strength_training":
+            target["strength"] = deepcopy(source.get("strength"))
         target["activity_id"] = deepcopy(source.get("activity_id"))
 
 

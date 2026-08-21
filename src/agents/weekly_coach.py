@@ -10,7 +10,7 @@ from src.notifications.text_utils import utf16_length
 from src.services.ai_report_resolution import AIReportDraft, AIReportSpec
 
 WEEKLY_PROMPT_PATH = Path("prompts/weekly_coach.md")
-WEEKLY_PROMPT_VERSION = "weekly-coach:v1"
+WEEKLY_PROMPT_VERSION = "weekly-coach:v5"
 MIN_ANALYSIS_UTF16_LENGTH = 140
 MAX_ANALYSIS_UTF16_LENGTH = 320
 MAX_RECOMMENDATION_UTF16_LENGTH = 320

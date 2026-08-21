@@ -202,7 +202,7 @@ def test_builds_monday_week_buckets_and_derived_weekly_metrics():
     assert current_week["week_end"] == "2026-05-17"
     assert current_week["derived_total_distance_km"] == 6.12
     assert current_week["derived_total_duration_min"] == 36.3
-    assert current_week["derived_training_load"] == 42.3
+    assert current_week["derived_training_load"] is None
     assert current_week["session_counts"] == {
         "total": 2,
         "by_source_activity_type": {"running": 2},
@@ -1454,3 +1454,35 @@ def test_enforce_deterministic_report_fields_restores_pruned_sessions_and_metric
     assert report["next_week_plan"]["week_start"] == "2026-05-18"
     assert report["next_week_plan"]["days"][0]["day_of_week"] == "Mon"
     assert report["next_week_plan"]["total_distance_km"] == 3
+
+
+def test_enforced_plan_keeps_planned_strength_distance_unavailable():
+    report = enforce_deterministic_report_fields(
+        {
+            "next_week_plan": {
+                "days": [{
+                    "date": "2026-05-18",
+                    "day_of_week": "Mon",
+                    "session_type": "strength_training",
+                    "title": "固定肌力訓練",
+                    "description": "45 分鐘，注意隔天跑課恢復。",
+                    "distance_km": 5,
+                    "duration_min": 45,
+                    "intensity": "moderate",
+                }],
+            },
+        },
+        {
+            "weekly_analysis": [],
+            "next_week_plan_seed": {
+                "week_start": "2026-05-18",
+                "days": [{"date": "2026-05-18", "day_of_week": "Mon"}],
+            },
+        },
+    )
+
+    strength_day = report["next_week_plan"]["days"][0]
+    assert strength_day["session_type"] == "strength_training"
+    assert strength_day["distance_km"] is None
+    assert strength_day["duration_min"] == 45
+    assert report["next_week_plan"]["total_distance_km"] == 0

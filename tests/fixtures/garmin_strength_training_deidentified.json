@@ -1,0 +1,37 @@
+{
+  "summary": {
+    "summaryDTO": {
+      "totalSets": 3,
+      "activeSets": 2,
+      "totalReps": 18,
+      "totalVolume": 5400,
+      "totalVolumeUnit": "g"
+    }
+  },
+  "exercise_sets": {
+    "exerciseSets": [
+      {
+        "setIndex": 1,
+        "setType": "ACTIVE",
+        "exerciseName": "DEIDENTIFIED_EXERCISE_A",
+        "category": "STRENGTH",
+        "reps": 10,
+        "weight": 20,
+        "weightUnit": "kg",
+        "durationSec": 45
+      },
+      {
+        "setIndex": 2,
+        "setType": "REST",
+        "durationSeconds": 60
+      },
+      {
+        "setIndex": 3,
+        "setType": "ACTIVE",
+        "exerciseName": "DEIDENTIFIED_EXERCISE_B",
+        "repetitionCount": 8,
+        "weightInGrams": 25000
+      }
+    ]
+  }
+}

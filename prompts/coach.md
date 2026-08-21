@@ -52,6 +52,9 @@
 0. Deterministic context 一致性：
    - `meta.today` 必須等於 `deterministic_context.meta.today`。
    - `weekly_analysis[].week_start`、`weekly_analysis[].week_label`、`weekly_analysis[].session_counts`、`weekly_analysis[].sessions[]`、`hr_zone_distribution.zones[]`、`power_zone_distribution.zones[]`、`physio_metrics.pace_zones[]`、`running_mechanics`、`load_assessment.current_tss_weekly` 與 `next_week_plan_seed.week_start/days[].date` 優先沿用 deterministic_context。
+   - `sessions[].training_load` 與 `load_assessment.current_tss_weekly` 可以是 `null`。`null` 表示 Garmin 負荷資料不可得，不是 0；只有 deterministic_context 明確提供數值 0 時，才可輸出 0。
+   - `avg_hr`、`avg_pace`、Training Effect 與 segment metrics 也可能是 `null`；不得補值或在 `coaching_note`、`cross_training_focus` 等敘事中引用不存在的數字。肌力活動的配速固定不可用，跑步 Training Effect 缺失時也不得杜撰。
+   - 當 `deterministic_context.load_assessment.status = "unknown"` 或 `current_tss_weekly = null` 時，最終 `load_assessment.status` 必須為 `unknown`，`label` 與 `recommendation` 必須使用「資料不足」的中性語意；不得寫成 0 TSS、負荷偏低、undertraining，也不得僅依未知 TSS 建議增加或減少訓練量。
    - 你可以在各自允許的分析欄位新增自然語言評估，例如 `assessment`、`recommendation`、`label`；Session facts 只允許寫入非空 `coaching_note` 與同位置的 `segments[].note`，不得把已計算值改成另一組值。
    - 如果 deterministic_context 的某週 `data_quality.message` 為「部分資料不足」，最終報告也必須在該週 assessment 或 evidence 中說明資料限制。
    - `meta.today`、4 週 bucket、`week_label`、`next_week_plan.week_start`、`next_week_plan.days[].date` 皆視為 deterministic output；請直接沿用，不要重算。
@@ -72,7 +75,7 @@
    - 歷史活動文字描述優先用 `source_activity_type` 對應的運動種類（跑步 / 自行車 / 游泳）；不要自行把單次歷史活動改寫成另一組強度 label。
    - 若高溫明顯影響心率，請在文字中說明「心率偏高不等於輸出更高」。
    - 每筆 `intensity_focuses` 都應聚焦一個強度解讀角度，例如 `heart_rate`、`power`、`pace`、`heat`、`load`，並用一句短標題加一句分析說清楚「這週最值得看的強度現象」。
-   - 若該 week bucket 有 `source_activity_type = "swimming" / "lap_swimming"` 或 `"cycling"` 的活動，請額外輸出 `cross_training_focus`。只挑該週最值得看的 1 堂交叉訓練，分析它對跑步訓練的作用：恢復、有氧補量、心肺刺激、腿部疲勞或是否影響下一堂跑步主課。
+   - 若該 week bucket 有 `source_activity_type = "swimming" / "lap_swimming"`、`"cycling"` 或 `"strength_training"` 的活動，請額外輸出 `cross_training_focus`。只挑該週最值得看的 1 堂交叉訓練，分析它對跑步訓練的作用：恢復、有氧補量、心肺刺激、腿部疲勞或是否影響下一堂跑步主課。
    - 交叉訓練不要用距離直接互相比強度；游泳、單車距離不可合併判斷。請優先看 `training_load`、`training_effect_aerobic`、`training_effect_anaerobic`、duration 與它和跑步主課的相對位置。
    - 若要提到「本週做了幾次某種運動」，請直接使用 `session_counts.total` 或 `session_counts.by_source_activity_type`，不要自行用文字估算次數。
    - 對無氧刺激高、分段起伏明顯或配速波動大的跑步活動必須優先分析。不要只看整段平均配速、平均心率或平均步頻；請檢查 `segments[]` 中的快段與恢復段，分別判斷主課表品質、恢復是否過長、速度維持能力、步頻/步幅是否只在快段成立。
@@ -86,7 +89,8 @@
    - `next_week_plan.days` 必須固定輸出 7 天，且順序固定為 `Mon | Tue | Wed | Thu | Fri | Sat | Sun`。
    - `next_week_plan.days[].date` 與 `day_of_week` 必須直接沿用 `deterministic_context.next_week_plan_seed.days[]`；模型只補上課表內容、強度、距離與訓練描述。
    - 沒安排訓練的日期也必須輸出，`intensity` 為 `rest`，`distance_km` 與 `duration_min` 為 0，`key_workout` 為 false。
-   - 所有非休息日都必須輸出 `distance_km > 0` 與 `duration_min > 0`；`description` 也必須明寫總距離或主課表距離，避免 dashboard 只看得到課名。
+   - 距離型的非休息日必須輸出 `distance_km > 0` 與 `duration_min > 0`；`description` 也必須明寫總距離或主課表距離，避免 dashboard 只看得到課名。
+   - 只有 `training_preferences` 明確安排的肌力日可輸出 `session_type = "strength_training"`。這類日子沒有距離：`distance_km` 必須為 `null`、`duration_min > 0`，`description` 改明寫時長與恢復重點，不得寫成 0 km 或補距離。
    - `session_type = "long"` 的日子必須同時提供 `distance_km`、`duration_min`、`target_pace`，且 `description` 必須包含距離與配速（例：「10km，配速 5:30-5:45/km」）。
    - `session_type = "interval"` 的日子必須提供 `interval_distance`（例：「400m × 8」）、`target_pace`（例：「3:30-3:40/km」或「84-88s/rep」）、`rest_time`（例：「90s」）與 `rest_type`（`stand`、`walk`、`jog` 三選一），並在 `description` 明寫是站休、走休或跑休。
    - 間歇課的 `distance_km` 必須是整堂課總距離，包含熱身、主課表、恢復段與收操；不要只填主課表距離。
@@ -108,7 +112,7 @@
    - 不得把 `activity_id` 塞在 `source_path` 裡；如果依據來自特定活動，請放在獨立的 `activity_id` 欄位。
    - 如果 evidence 引用的是最近 4 週內的活動，該活動必須也出現在 `weekly_analysis[].sessions[]` 中。
 
-在輸出 JSON 前，請自行檢查以上一致性規則；若數字無法確認，使用 0、null 或空陣列，但不得產生彼此矛盾的總量與明細。
+在輸出 JSON 前，請自行檢查以上一致性規則；若 deterministic_context 無法確認某個數值，使用 `null` 而不是 0。只有 deterministic_context 明確提供實測 0 時才輸出 0；不得以 0 代替未知值，也不得產生彼此矛盾的總量與明細。
 
 【輸出 JSON Schema】
 
@@ -192,35 +196,52 @@
       "cross_training_focus": {
         "activity_id": "string | number | null",
         "headline": "string",          // 短標題，例：「游泳作為低衝擊有氧補量」
-        "analysis": "string"           // 一句教練解讀；若該週無 swim/bike，輸出 null 或省略此欄
+        "analysis": "string"           // 一句教練解讀；若該週無 swim/bike/strength_training，輸出 null 或省略此欄
       },
       "sessions": [
         {
           "activity_id": "string | number | null",
           "date": "YYYY-MM-DD",
-          "source_activity_type": "running | cycling | swimming | lap_swimming | null",
-          "distance_km": number,
+          "source_activity_type": "running | cycling | swimming | lap_swimming | strength_training | null",
+          "distance_km": "number | null",
           "duration_min": number,
-          "training_load": number,
-          "avg_hr": number,
-          "avg_pace": "MM:SS",
-          "training_effect_aerobic": number,
-          "training_effect_anaerobic": number,
+          "training_load": "number | null",
+          "avg_hr": "number | null",
+          "avg_pace": "MM:SS | null",
+          "training_effect_aerobic": "number | null",
+          "training_effect_anaerobic": "number | null",
+          "strength": {
+            "total_sets": "number | null",
+            "active_sets": "number | null",
+            "total_reps": "number | null",
+            "total_volume_kg": "number | null",
+            "sets": [
+              {
+                "set_index": "number",
+                "set_type": "active | rest | unknown",
+                "exercise_names": ["string"],
+                "category": "string | null",
+                "reps": "number | null",
+                "weight_kg": "number | null",
+                "duration_sec": "number | null"
+              }
+            ]
+          },
           "segments": [
             {
               "segment_type": "warmup | main | cooldown | lap", // deterministic；不得自行改寫
-              "distance_km": number,
-              "avg_pace": "MM:SS",
-              "avg_hr": number,
-              "cadence": number,          // deterministic_context 提供的跑步步頻；游泳/自行車不得填入
-              "stride_length_m": number,  // deterministic_context 提供的跑步步幅；游泳/自行車不得填入
+              "distance_km": "number | null",
+              "avg_pace": "MM:SS | null",
+              "avg_hr": "number | null",
+              "cadence": "number | null",          // deterministic_context 提供的跑步步頻；游泳/自行車不得填入
+              "stride_length_m": "number | null",  // deterministic_context 提供的跑步步幅；游泳/自行車不得填入
               "note": "string"              // 唯一可寫的 Segment annotation slot
             }
           ],
           "environment": {
-            "estimated_temp_c": number,
-            "humidity_pct": number,
-            "hr_impact": "string"   // 例：「高溫使心率偏高約5bpm」
+            "estimated_temp_c": "number | null",
+            "humidity_pct": "number | null",
+            "hr_impact": "string | null"   // 例：「高溫使心率偏高約5bpm」
           },
           "coaching_note": "string"          // 唯一可寫的 Session annotation slot
         }
@@ -281,13 +302,20 @@
       "avg_cadence": number,
       "benefit_for_running": "string"
     },
+    "strength_training": {
+      "sessions_count": number,
+      "total_sets": "number | null",
+      "total_reps": "number | null",
+      "total_volume_kg": "number | null",
+      "benefit_for_running": "string"
+    },
     "overall_assessment": "string"
   },
 
   "load_assessment": {
-    "current_tss_weekly": number,
-    "optimal_tss_range": { "min": number, "max": number },
-    "status": "undertraining | optimal | overreaching | overtraining",
+    "current_tss_weekly": "number | null",
+    "optimal_tss_range": { "min": "number | null", "max": "number | null" },
+    "status": "undertraining | optimal | overreaching | overtraining | unknown",
     "label": "string",
     "recommendation": "string"
   },
@@ -339,7 +367,7 @@
         "session_type": "string",
         "title": "string",
         "description": "string",
-        "distance_km": number,
+        "distance_km": "number | null",
         "duration_min": number,
         "target_pace": "string | null",
         "interval_distance": "string | null",
@@ -380,13 +408,14 @@
       "supporting_sessions": [
         {
           "date": "YYYY-MM-DD",
-          "source_activity_type": "running | cycling | swimming | lap_swimming | null",
+          "source_activity_type": "running | cycling | swimming | lap_swimming | strength_training | null",
           "distance_km": number | null,
           "duration_min": number | null,
           "avg_hr": number | null,
           "avg_pace": "MM:SS | null",
           "training_effect_aerobic": number | null,
           "training_effect_anaerobic": number | null,
+          "strength": "object | null",
           "source_path": "string", // 例："weekly_analysis[0].sessions[1]"
           "activity_id": "string | number | null",
           "reason": "string"       // 為什麼這次活動支持該 claim
@@ -417,3 +446,10 @@
 | 跑步動作雷達圖 | `running_mechanics.*_score` |
 | 週期化甘特圖 | `periodization.phases` |
 | AI 建議依據/展開詳情 | `evidence_links[].supporting_metrics`, `evidence_links[].supporting_sessions` |
+【肌力訓練規則】
+- `source_activity_type = "strength_training"` 一律稱為「肌力訓練」。它可作為跑步主目標下的交叉訓練：分析動作名稱所反映的可能跑步影響、下肢疲勞、跑課間距與恢復。
+- `sessions[].strength` 是唯一的組數、次數、容量與動作事實來源。保留其 set 順序及 rest entries；只在單位可靠時引用 kg 容量。
+- `sessions[].strength` 的組數、次數、容量或每個 `sets[].reps` 為 `null` 表示 Garmin 資料不可得，不是 0；不得補算、猜測或以此做訓練結論。
+- `sessions[].training_load` 為 `null` 時同樣表示 Garmin 負荷資料不可得，不是 0；不得把未知負荷寫成 0、偏低或 undertraining。
+- 不得診斷傷病、評論動作品質、猜測肌群、杜撰數字、推算 1RM、或自行建立增肌/漸進超負荷課表。`training_preferences` 未明確安排時，也不得新增肌力課。
+- 肌力沒有距離、配速、跑姿、游泳或自行車效率、zone 資料；不得把這些缺失列為資料品質問題或寫成 0 km。

@@ -49,10 +49,15 @@ class GarminClientActivityTypeTests(unittest.TestCase):
         self.assertEqual(biometrics["pr_running"]["5km"], "20:00 (4:00 /km)")
         self.assertNotIn("marathon", biometrics["pr_running"])
 
-    def test_default_target_types_include_running_swimming_and_cycling(self):
+    def test_default_target_types_include_strength_training(self):
         self.assertEqual(
             TARGET_ACTIVITY_TYPES,
-            {"running": "running", "lap_swimming": "swimming", "cycling": "cycling"},
+            {
+                "running": "running",
+                "lap_swimming": "swimming",
+                "cycling": "cycling",
+                "strength_training": "strength_training",
+            },
         )
 
     def test_swimming_splits_preserve_order_and_only_mark_strict_rest(self):

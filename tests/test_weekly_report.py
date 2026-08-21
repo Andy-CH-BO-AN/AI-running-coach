@@ -31,7 +31,7 @@ def _session(
     activity_id: int,
     day: str,
     source_type: str,
-    distance: float,
+    distance: float | None,
     duration: float,
     load: float,
     *,
@@ -56,7 +56,7 @@ def _week(start: str, end: str, sessions: list[dict[str, Any]], load: float) -> 
         "week_start": start,
         "week_end": end,
         "week_label": f"{start[5:]}-{end[5:]}",
-        "derived_total_distance_km": round(sum(item["distance_km"] for item in sessions), 2),
+        "derived_total_distance_km": round(sum(item["distance_km"] or 0.0 for item in sessions), 2),
         "derived_total_duration_min": round(sum(item["duration_min"] for item in sessions), 1),
         "derived_training_load": load,
         "sessions": sessions,
@@ -219,6 +219,21 @@ def test_completed_week_summary_combines_swimming_aliases_and_rest_days_for_load
     assert summary.metrics["strain"] == pytest.approx(43.4)
 
 
+def test_completed_week_summary_marks_strength_only_distance_unavailable():
+    context = _context()
+    context["weekly_analysis"][1] = _week(
+        "2026-08-03",
+        "2026-08-09",
+        [_session(401, "2026-08-05", "strength_training", None, 45.0, 22.0)],
+        22.0,
+    )
+
+    summary = build_completed_week_summary(context, today=date(2026, 8, 10))
+
+    assert summary.summary_json["totals"]["distance_km"] is None
+    assert summary.metrics["total_distance_km"] is None
+
+
 def test_completed_week_summary_uses_three_prior_weeks_for_chronic_load():
     context = _context()
     context["weekly_analysis"].append(
@@ -279,9 +294,33 @@ def test_weekly_runner_adds_goal_preferences_and_compact_profile_to_ai_input(
         captured.append(spec)
         return _draft(spec)
 
+    context = _context()
+    strength = {
+        "total_sets": 3,
+        "active_sets": 2,
+        "total_reps": 18,
+        "total_volume_kg": 5.4,
+        "sets": [{"set_index": 1, "set_type": "active", "exercise_names": ["DEIDENTIFIED"], "category": None, "reps": 9, "weight_kg": 20, "duration_sec": None}],
+    }
+    context["weekly_analysis"][1]["sessions"].append({
+        "activity_id": 104,
+        "date": "2026-08-09",
+        "source_activity_type": "strength_training",
+        "distance_km": None,
+        "duration_min": 45,
+        "training_load": 22,
+        "training_effect_aerobic": 1.4,
+        "training_effect_anaerobic": 0.8,
+        "strength": strength,
+        "data_quality": {"status": "complete", "missing_fields": []},
+    })
+    context["weekly_analysis"][1]["session_counts"] = {
+        "total": 4,
+        "by_source_activity_type": {"cycling": 1, "running": 1, "swimming": 1, "strength_training": 1},
+    }
     result = _runner(db_session, generate=generate).run(
         user_id=user.id,
-        deterministic_context=_context(),
+        deterministic_context=context,
         today=date(2026, 8, 10),
         core_goal="10 公里 45 分鐘",
         training_preferences="週二游泳、週五重訓",
@@ -292,6 +331,15 @@ def test_weekly_runner_adds_goal_preferences_and_compact_profile_to_ai_input(
     input_json = captured[0].input_json
     assert input_json["core_goal"] == "10 公里 45 分鐘"
     assert input_json["training_preferences"] == "週二游泳、週五重訓"
+    assert input_json["sessions"][-1]["strength"] == strength
+    assert input_json["strength_training"] == {
+        "sessions_count": 1,
+        "total_sets": 3,
+        "total_reps": 18,
+        "total_volume_kg": 5.4,
+    }
+    assert captured[0].prompt_version == "weekly-coach:v5"
+    assert captured[0].feature_version == "weekly:v5"
     assert input_json["athlete_profile"] == {
         "vo2max": {"value": 52, "unit": "ml/kg/min"},
         "max_heart_rate": {"value": 190, "unit": "bpm"},
@@ -511,9 +559,9 @@ def test_weekly_runner_preserves_persisted_cross_training_on_unavailable_day(db_
             user_id=user.id,
             report_scope="weekly",
             input_json=input_json,
-            prompt_version="weekly-coach:v1",
+                prompt_version="weekly-coach:v5",
             weekly_summary_id=summary.id,
-            feature_version="weekly:v1",
+                feature_version="weekly:v5",
         )
     )
     persisted = db_session.get(AIReport, report.id)

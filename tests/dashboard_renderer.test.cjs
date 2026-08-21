@@ -17,6 +17,31 @@ function reportWithSession(session, extra = {}) {
   };
 }
 
+function strengthLoadReport(trainingLoad) {
+  return reportWithSession({
+    date: "2026-05-12",
+    source_activity_type: "strength_training",
+    distance_km: null,
+    duration_min: 45,
+    training_load: trainingLoad,
+    strength: { total_sets: 4, total_reps: 32, total_volume_kg: null },
+  }, {
+    meta: { today: "2026-05-12" },
+    load_assessment: {
+      current_tss_weekly: trainingLoad,
+      status: trainingLoad === null ? "unknown" : "undertraining",
+      label: trainingLoad === null ? "負荷資料不足" : "本週負荷偏低",
+      optimal_tss_range: null,
+    },
+    twelve_week_summary: [{
+      week_start: "2026-05-11",
+      week_label: "第1週",
+      derived_total_distance_km: 0,
+      derived_training_load: trainingLoad,
+    }],
+  });
+}
+
 async function waitForRender(window) {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (window.document.getElementById("appStatus").textContent === "") {
@@ -131,6 +156,93 @@ test("latest activity renders splits without requiring an interval layout", asyn
 
   assert.match(dom.window.document.getElementById("latestActivity").textContent, /分段明細/);
   assert.equal(dom.window.document.querySelectorAll("#latestActivity tbody tr").length, 1);
+  dom.window.close();
+});
+
+test("latest strength activity renders strength facts instead of distance and pace", async () => {
+  const dom = await renderReport(reportWithSession({
+    date: "2026-05-12",
+    source_activity_type: "Strength_Training",
+    distance_km: null,
+    duration_min: 45,
+    training_load: 31,
+    avg_hr: 122,
+    strength: { total_sets: 16, total_reps: 120, total_volume_kg: 2400 },
+  }));
+
+  const latestActivity = dom.window.document.getElementById("latestActivity");
+  assert.match(latestActivity.textContent, /時間\s*45\s*分/);
+  assert.match(latestActivity.textContent, /訓練負荷\s*31/);
+  assert.match(latestActivity.textContent, /總組數\s*16\s*組/);
+  assert.match(latestActivity.textContent, /總次數\s*120\s*次/);
+  assert.match(latestActivity.textContent, /總容量\s*2400\s*kg/);
+  assert.doesNotMatch(latestActivity.textContent, /距離/);
+  assert.doesNotMatch(latestActivity.textContent, /配速/);
+  dom.window.close();
+});
+
+test("strength cross-training highlight renders available strength facts only", async () => {
+  const report = reportWithSession({
+    activity_id: 33,
+    date: "2026-05-12",
+    source_activity_type: "strength_training",
+    distance_km: null,
+    duration_min: 45,
+    training_load: null,
+    strength: { total_sets: 12, total_reps: 80, total_volume_kg: null },
+  });
+  report.weekly_analysis[0].cross_training_focus = {
+    activity_id: 33,
+    headline: "肌力課後保留恢復間距",
+    analysis: "依已知組數保守安排下一堂跑步主課。",
+  };
+  const dom = await renderReport(report);
+  const text = dom.window.document.getElementById("crossTrainingHighlights").textContent;
+
+  assert.match(text, /肌力訓練/);
+  assert.match(text, /12 組/);
+  assert.match(text, /80 次/);
+  assert.doesNotMatch(text, /0 TSS|null|undefined/);
+  dom.window.close();
+});
+
+test("unknown strength load stays unavailable across dashboard load surfaces", async () => {
+  const dom = await renderReport(strengthLoadReport(null));
+  const { document } = dom.window;
+
+  assert.match(document.getElementById("loadAssessment").textContent, /資料不足/);
+  assert.match(document.getElementById("weeklyChart").textContent, /資料不足/);
+  assert.match(document.getElementById("weeklyChart").textContent, /部分資料不足/);
+  assert.match(document.getElementById("weeklyNarratives").textContent, /資料不足/);
+  assert.match(document.getElementById("twelveWeekContent").textContent, /資料不足/);
+  assert.doesNotMatch(document.getElementById("weeklyChart").textContent, /0\s*TSS/);
+  assert.doesNotMatch(document.getElementById("weeklyNarratives").textContent, /0\s*TSS/);
+  assert.doesNotMatch(document.getElementById("twelveWeekContent").textContent, /0\s*TSS/);
+  assert.equal(document.querySelectorAll(".trend-hit-area.load").length, 0);
+  dom.window.close();
+});
+
+test("load assessment omits a fully unknown recommended range", async () => {
+  const report = strengthLoadReport(null);
+  report.load_assessment.optimal_tss_range = { min: null, max: null };
+  const dom = await renderReport(report);
+  const text = dom.window.document.getElementById("loadAssessment").textContent;
+
+  assert.doesNotMatch(text, /建議範圍/);
+  assert.doesNotMatch(text, /null|undefined|0\s*-\s*0/);
+  dom.window.close();
+});
+
+test("explicit zero strength load remains measured zero across dashboard", async () => {
+  const dom = await renderReport(strengthLoadReport(0));
+  const { document } = dom.window;
+
+  assert.match(document.getElementById("loadAssessment").textContent, /本週訓練量 \(TSS\)\s*0/);
+  assert.match(document.getElementById("weeklyChart").textContent, /0\s*TSS/);
+  assert.doesNotMatch(document.getElementById("weeklyChart").textContent, /部分資料不足/);
+  assert.match(document.getElementById("weeklyNarratives").textContent, /0\s*TSS/);
+  assert.match(document.getElementById("twelveWeekContent").textContent, /0\s*TSS/);
+  assert.equal(document.querySelectorAll(".trend-hit-area.load").length, 1);
   dom.window.close();
 });
 

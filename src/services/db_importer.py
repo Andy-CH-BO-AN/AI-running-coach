@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import csv
+from copy import deepcopy
 import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from sqlalchemy.orm import Session
 
@@ -32,6 +33,117 @@ def _infer_captured_at(path: str | Path) -> datetime:
     if match:
         return datetime.strptime(match.group(1), "%Y%m%d").replace(tzinfo=timezone.utc)
     return datetime.now(timezone.utc)
+
+
+def _strength_deterministic_facts_changed(
+    existing_raw: Mapping[str, Any],
+    incoming_raw: Mapping[str, Any],
+) -> bool:
+    """Return whether a partial fetch carries a new or corrected deterministic fact."""
+    for key in (
+        "training_stress_score",
+        "aerobic_training_effect",
+        "anaerobic_training_effect",
+    ):
+        value = incoming_raw.get(key)
+        if value is not None and value != existing_raw.get(key):
+            return True
+
+    incoming_summary = incoming_raw.get("strength_raw_summary")
+    if incoming_summary and incoming_summary != existing_raw.get("strength_raw_summary"):
+        return True
+
+    existing_strength = existing_raw.get("strength")
+    if not isinstance(existing_strength, Mapping):
+        existing_strength = {}
+    incoming_strength = incoming_raw.get("strength")
+    if isinstance(incoming_strength, Mapping):
+        for key in ("total_sets", "active_sets", "total_reps", "total_volume_kg"):
+            value = incoming_strength.get(key)
+            if value is not None and value != existing_strength.get(key):
+                return True
+        incoming_sets = incoming_strength.get("sets")
+        if incoming_sets and incoming_sets != existing_strength.get("sets"):
+            return True
+
+    incoming_raw_sets = incoming_raw.get("strength_raw_exercise_sets")
+    if incoming_raw_sets and incoming_raw_sets != existing_raw.get("strength_raw_exercise_sets"):
+        return True
+    return False
+
+
+def _merge_partial_strength_activity(
+    existing_raw_json: Any,
+    incoming: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Monotonically enrich strength facts without replacing known facts with gaps."""
+    if not isinstance(existing_raw_json, Mapping):
+        return incoming
+
+    existing_raw = existing_raw_json.get("raw_data") or existing_raw_json.get("raw_metrics") or {}
+    incoming_raw = incoming.get("raw_data") or incoming.get("raw_metrics") or {}
+    if not isinstance(existing_raw, Mapping) or not isinstance(incoming_raw, Mapping):
+        return incoming
+
+    # A summary/detail failure contributes no new deterministic facts. Preserve
+    # any existing row exactly; first-seen failures are handled by the caller.
+    if not incoming_raw:
+        return None
+
+    existing_raw_dict = dict(existing_raw)
+    if not _strength_deterministic_facts_changed(existing_raw_dict, incoming_raw):
+        return None
+
+    merged_raw = deepcopy(existing_raw_dict)
+
+    # Overlay new non-null summary facts, while never replacing known values
+    # with null/empty retry artifacts.
+    for key, value in incoming_raw.items():
+        if key in {"strength", "strength_raw_exercise_sets"}:
+            continue
+        if value is not None:
+            merged_raw[key] = deepcopy(value)
+
+    existing_strength = existing_raw_dict.get("strength")
+    incoming_strength = incoming_raw.get("strength")
+    if isinstance(existing_strength, Mapping) or isinstance(incoming_strength, Mapping):
+        merged_strength = (
+            deepcopy(dict(existing_strength))
+            if isinstance(existing_strength, Mapping)
+            else {}
+        )
+        if isinstance(incoming_strength, Mapping):
+            for key, value in incoming_strength.items():
+                if key == "sets":
+                    if value:
+                        merged_strength[key] = deepcopy(value)
+                elif value is not None:
+                    merged_strength[key] = deepcopy(value)
+        merged_raw["strength"] = merged_strength
+
+    incoming_sets = incoming_raw.get("strength_raw_exercise_sets")
+    if incoming_sets:
+        merged_raw["strength_raw_exercise_sets"] = deepcopy(incoming_sets)
+    elif existing_raw_dict.get("strength_raw_exercise_sets"):
+        merged_raw["strength_raw_exercise_sets"] = deepcopy(
+            existing_raw_dict["strength_raw_exercise_sets"]
+        )
+
+    if (
+        existing_raw_dict.get("strength_sets_available") is True
+        and not incoming_raw.get("strength_raw_exercise_sets")
+    ):
+        merged_raw["strength_sets_available"] = True
+
+    merged = deepcopy(dict(existing_raw_json))
+    for key, value in incoming.items():
+        if key in {"raw_data", "raw_metrics"}:
+            continue
+        if value is not None:
+            merged[key] = deepcopy(value)
+    merged["raw_data"] = merged_raw
+    merged.pop("raw_metrics", None)
+    return merged
 
 
 def import_garmin_user_file(session: Session, user_id, path: str | Path):
@@ -64,6 +176,35 @@ def import_garmin_raw_file(session: Session, user_id, path: str | Path) -> dict[
         if should_skip_short_cycling(activity_type, distance_km):
             counts["skipped_short_cycling"] += 1
             continue
+
+        raw_data = activity_data.get("raw_data") or activity_data.get("raw_metrics") or {}
+        # Missing set details must use the monotonic merge path even when the
+        # all-history fetch tolerated a 404 without a transient-failure marker.
+        # A successful-empty first observation is still inserted; this only
+        # prevents a later incomplete payload from erasing already-known sets.
+        strength_detail_partial = (
+            activity_type == "strength_training"
+            and isinstance(raw_data, dict)
+            and (
+                raw_data.get("strength_sets_fetch_failed") is True
+                or not raw_data
+                or raw_data.get("strength_sets_available") is False
+            )
+        )
+        if strength_detail_partial:
+            existing = find_activity_by_garmin_id(
+                session,
+                user_id=user_id,
+                garmin_activity_id=int(activity_data["activity_id"]),
+            )
+            if existing is not None:
+                merged_activity_data = _merge_partial_strength_activity(
+                    existing.raw_json,
+                    activity_data,
+                )
+                if merged_activity_data is None:
+                    continue
+                activity_data = merged_activity_data
 
         activity = upsert_activity(session, user_id=user_id, activity_data=activity_data, source_file=str(path))
         counts["activities"] += 1

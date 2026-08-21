@@ -83,9 +83,68 @@ def test_weekly_metrics_are_derived_from_sessions_and_mark_partial_data(tmp_path
     assert metrics["derived_swim_distance_km"] == 1.2
     assert metrics["derived_bike_distance_km"] == 12
     assert metrics["derived_total_duration_min"] == 93.0
-    assert metrics["derived_training_load"] == 86.4
+    assert metrics["derived_training_load"] is None
     assert metrics["data_quality"] == "部分資料不足"
     assert set(metrics["missing_fields"]) == {"duration_min", "training_load"}
+
+
+def test_weekly_metrics_do_not_require_distance_for_strength_sessions(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "type": "easy",
+                        "source_activity_type": "running",
+                        "distance_km": 5.0,
+                        "duration_min": 30.0,
+                        "training_load": 44.0,
+                    },
+                    {
+                        "type": "strength_training",
+                        "source_activity_type": "strength_training",
+                        "distance_km": None,
+                        "duration_min": 45.0,
+                        "training_load": 31.0,
+                    },
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    metrics = payload["weekly"][0]["metrics"]
+
+    assert metrics["derived_total_distance_km"] == 5.0
+    assert metrics["data_quality"] == "完整"
+    assert metrics["missing_fields"] == []
+
+
+def test_weekly_metrics_require_distance_for_legacy_sessions_without_source_type(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "type": "easy",
+                        "distance_km": None,
+                        "duration_min": 30.0,
+                        "training_load": 44.0,
+                    }
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    metrics = payload["weekly"][0]["metrics"]
+
+    assert metrics["data_quality"] == "部分資料不足"
+    assert metrics["missing_fields"] == ["distance_km"]
 
 
 def test_12_week_trend_uses_db_weeks_and_hides_single_profile_snapshot(tmp_path):
@@ -351,6 +410,39 @@ def test_cross_training_highlights_prefer_ai_analysis_when_present(tmp_path):
     assert highlight["session_label"] == "5/14 自行車"
     assert highlight["analysis"] == "這堂單車有明確有氧刺激，隔天跑步應避免再堆高強度。"
     assert highlight["has_ai_analysis"] is True
+
+
+def test_strength_cross_training_highlight_preserves_ai_focus_and_unknown_load(tmp_path):
+    report = {
+        "weekly_analysis": [{
+            "week_label": "05/11-05/17",
+            "cross_training_focus": {
+                "activity_id": 33,
+                "headline": "肌力課後保留恢復間距",
+                "analysis": "已知組數可協助安排跑課間距，未知負荷不作高低判斷。",
+            },
+            "sessions": [{
+                "activity_id": 33,
+                "date": "2026-05-13",
+                "source_activity_type": "strength_training",
+                "distance_km": None,
+                "duration_min": 45,
+                "training_load": None,
+                "strength": {"total_sets": 12, "total_reps": 80, "total_volume_kg": None},
+            }],
+        }],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    highlight = run_adapter_case(tmp_path, report)["crossTraining"][0]
+
+    assert highlight["session_type_label"] == "肌力訓練"
+    assert highlight["title"] == "肌力課後保留恢復間距"
+    assert highlight["analysis"] == "已知組數可協助安排跑課間距，未知負荷不作高低判斷。"
+    assert highlight["load_label"] == ""
+    assert highlight["strength_sets_label"] == "12 組"
+    assert highlight["strength_reps_label"] == "80 次"
+    assert highlight["strength_volume_label"] == ""
 
 
 def test_cross_training_highlights_match_ai_focus_activity_id_before_load(tmp_path):
@@ -1158,7 +1250,7 @@ def test_evidence_supporting_sessions_include_localized_header_fields(tmp_path):
     assert session["distance_label"] == "2.05 km"
 
 
-def test_evidence_supporting_session_unknown_source_activity_type_uses_generic_label(tmp_path):
+def test_evidence_supporting_strength_session_uses_chinese_label(tmp_path):
     report = {
         "weekly_analysis": [
             {
@@ -1192,7 +1284,7 @@ def test_evidence_supporting_session_unknown_source_activity_type_uses_generic_l
     payload = run_adapter_case(tmp_path, report)
     session = payload["evidence"]["items"][0]["supporting_sessions"][0]
 
-    assert session["type_label"] == "訓練"
+    assert session["type_label"] == "肌力訓練"
 
 
 def test_evidence_metric_display_value_does_not_duplicate_units(tmp_path):
@@ -1647,6 +1739,45 @@ def test_latest_activity_without_session_type_uses_source_activity_type(tmp_path
 
     assert payload["latest"]["type_label"] == "跑步"
     assert payload["latest"]["layout"] == "easy"
+
+
+def test_latest_strength_activity_keeps_distance_and_pace_unavailable(tmp_path):
+    report = {
+        "weekly_analysis": [
+            {
+                "week_start": "2026-05-11",
+                "sessions": [
+                    {
+                        "date": "2026-05-12",
+                        "source_activity_type": "strength_training",
+                        "distance_km": None,
+                        "duration_min": 45.0,
+                        "training_load": 31.0,
+                        "avg_hr": 122.0,
+                        "strength": {
+                            "total_sets": 16,
+                            "total_reps": 120,
+                            "total_volume_kg": 2400.0,
+                        },
+                    }
+                ],
+            }
+        ],
+        "next_week_plan": {"week_start": "2026-05-18", "days": []},
+    }
+
+    payload = run_adapter_case(tmp_path, report)
+    latest = payload["latest"]
+
+    assert latest["type_label"] == "肌力訓練"
+    assert latest["distance_km"] is None
+    assert latest["avg_pace"] is None
+    assert latest["duration_min"] == 45.0
+    assert latest["strength"] == {
+        "total_sets": 16,
+        "total_reps": 120,
+        "total_volume_kg": 2400.0,
+    }
 
 
 def test_latest_activity_uses_most_recent_session_day(tmp_path):

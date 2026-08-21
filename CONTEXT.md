@@ -28,6 +28,15 @@ The deterministic coaching representation of one Activity. AI coaching notes are
 annotations on Session facts; they never replace or reorder the underlying facts.
 _Avoid_: AI session, inferred workout
 
+**Muscle-strength training (肌力訓練)**:
+Garmin `strength_training` activity.  Its deterministic facts are activity duration,
+Garmin load and Training Effect plus Garmin-provided exercise sets, repetitions
+when Garmin provides them (otherwise `null`), and only explicit-unit volume.  It
+has no distance or pace and remains secondary to the
+runner's `core_goal`; it may inform running-session spacing and recovery, not a
+diagnosis, form assessment, or self-created hypertrophy plan.
+_Avoid_: weight workout, gym distance, inferred 1RM
+
 **Activity notification**:
 The complete LINE delivery for one Activity. Partial delivery never counts as
 complete and must not be recorded as notified.
