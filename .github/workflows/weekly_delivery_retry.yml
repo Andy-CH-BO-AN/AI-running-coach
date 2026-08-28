@@ -2,8 +2,12 @@ name: Weekly Training Report Delivery Retry
 
 on:
   schedule:
-    # Reuse an accepted LINE payload within its 24-hour retry-key window.
-    - cron: '0 */6 * * *'
+    # 台灣時間（UTC+8）週一 09:30 週報執行後的 23 小時重試窗口：
+    # - 週一 14:00 / 20:00（UTC 06:00, 12:00）
+    # - 週二 02:00（UTC 週一 18:00）
+    # - 週二 08:00（UTC 週二 00:00）
+    - cron: '0 6,12,18 * * 1'
+    - cron: '0 0 * * 2'
 
 concurrency:
   # Also serialize against Garmin sync and the weekly report workflow.
