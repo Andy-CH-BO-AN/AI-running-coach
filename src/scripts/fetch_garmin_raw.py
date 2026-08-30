@@ -8,6 +8,7 @@ from src.services.artifacts import (
     RAW_DATA_DIR,
     raw_artifact_paths,
     strength_backfill_artifact_paths,
+    treadmill_backfill_artifact_paths,
     write_json,
 )
 from src.services.garmin_import_service import (
@@ -40,6 +41,12 @@ def _get_all_strength_training_activities(progress: bool = True) -> dict[str, An
     return get_all_strength_training_activities(progress=progress)
 
 
+def _get_all_treadmill_running_activities(progress: bool = True) -> dict[str, Any]:
+    from src.ingestion.garmin_client import get_all_treadmill_running_activities
+
+    return get_all_treadmill_running_activities(progress=progress)
+
+
 def fetch_garmin_raw_files(
     limit: int = 999,
     timestamp: str | None = None,
@@ -49,7 +56,12 @@ def fetch_garmin_raw_files(
     force: bool = False,
 ) -> tuple[Path, Path]:
     stamp = timestamp or _build_timestamp()
-    artifact_paths = strength_backfill_artifact_paths if all_history else raw_artifact_paths
+    if all_history and activity_type == "strength_training":
+        artifact_paths = strength_backfill_artifact_paths
+    elif all_history and activity_type == "treadmill_running":
+        artifact_paths = treadmill_backfill_artifact_paths
+    else:
+        artifact_paths = raw_artifact_paths
     user_path, raw_path = artifact_paths(stamp, output_dir=output_dir)
     existing_paths = [path for path in (user_path, raw_path) if path.exists()]
     if existing_paths and not force:
@@ -62,16 +74,27 @@ def fetch_garmin_raw_files(
         flush=True,
     )
     if all_history:
-        if activity_type != "strength_training":
-            raise ValueError("--all is currently supported only with --activity-type strength_training")
-        garmin_data = _get_all_strength_training_activities(progress=True)
-    elif activity_type == "strength_training":
+        if activity_type == "strength_training":
+            garmin_data = _get_all_strength_training_activities(progress=True)
+        elif activity_type == "treadmill_running":
+            garmin_data = _get_all_treadmill_running_activities(progress=True)
+        else:
+            raise ValueError(
+                "--all requires --activity-type strength_training or treadmill_running"
+            )
+    elif activity_type in {"strength_training", "treadmill_running"}:
         from src.ingestion.garmin_client import get_garmin_activities
 
         garmin_data = get_garmin_activities(
             limit,
             progress=True,
-            activity_types={"strength_training": "strength_training"},
+            activity_types={
+                activity_type: (
+                    "strength_training"
+                    if activity_type == "strength_training"
+                    else "running"
+                )
+            },
         )
     else:
         garmin_data = _get_garmin_activities(limit, progress=True)
@@ -89,14 +112,17 @@ def fetch_garmin_raw_files(
 
 
 def import_raw_files(
-    user_path: Path,
+    user_path: Path | None,
     raw_path: Path,
     *,
     strength_backfill: bool = False,
+    treadmill_backfill: bool = False,
 ) -> dict[str, Any]:
     print("Importing fetched raw files into PostgreSQL", flush=True)
     if strength_backfill:
         return import_strength_backfill(user_path=user_path, raw_path=raw_path)
+    if treadmill_backfill:
+        return import_fetched_raw_artifacts(user_path=None, raw_path=raw_path)
     return import_fetched_raw_artifacts(user_path=user_path, raw_path=raw_path)
 
 
@@ -104,10 +130,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch Garmin activities into local raw JSON files only.")
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--limit", type=int, help="Number of Garmin activities to fetch. Default: 999")
-    selection.add_argument("--all", action="store_true", help="Scan every page; only supported for strength_training.")
+    selection.add_argument(
+        "--all",
+        action="store_true",
+        help="Scan every page; supported for strength_training and treadmill_running.",
+    )
     parser.add_argument(
         "--activity-type",
-        choices=("strength_training",),
+        choices=("strength_training", "treadmill_running"),
         help="Restrict fetching to a supported Garmin activity type.",
     )
     parser.add_argument("--timestamp", help="Optional YYYYMMDD timestamp for output filenames.")
@@ -119,8 +149,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if args.all and args.activity_type != "strength_training":
-        raise SystemExit("--all requires --activity-type strength_training")
+    if args.all and args.activity_type not in {"strength_training", "treadmill_running"}:
+        raise SystemExit(
+            "--all requires --activity-type strength_training or treadmill_running"
+        )
     user_path, raw_path = fetch_garmin_raw_files(
         limit=args.limit if args.limit is not None else 999,
         timestamp=args.timestamp,
@@ -138,6 +170,7 @@ def main() -> None:
             user_path=user_path,
             raw_path=raw_path,
             strength_backfill=args.all and args.activity_type == "strength_training",
+            treadmill_backfill=args.all and args.activity_type == "treadmill_running",
         )
         for key, value in results.items():
             print(f"{key}: {value}")

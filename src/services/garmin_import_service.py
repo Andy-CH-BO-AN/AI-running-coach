@@ -100,7 +100,10 @@ def import_fetched_garmin_payload(
     return results
 
 
-def import_fetched_raw_artifacts(user_path: Path, raw_path: Path) -> dict[str, Any]:
+def import_fetched_raw_artifacts(
+    user_path: str | Path | None,
+    raw_path: str | Path,
+) -> dict[str, Any]:
     results = import_fetched_garmin_payload(user_path=user_path, raw_path=raw_path)
     return {
         key: value

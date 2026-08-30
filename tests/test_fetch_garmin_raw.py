@@ -73,6 +73,52 @@ def test_strength_backfill_uses_distinct_artifacts_without_overwriting_normal_fe
     assert json.loads(backfill_raw_path.read_text(encoding="utf-8"))[0]["type"] == "strength_training"
 
 
+def test_treadmill_backfill_uses_isolated_artifacts_and_canonical_running_type(tmp_path):
+    treadmill_payload = {
+        "activities": [{"activity_id": 456, "type": "running", "date": "2026-05-10"}],
+        "user_data": {},
+    }
+
+    with patch(
+        "src.scripts.fetch_garmin_raw._get_all_treadmill_running_activities",
+        return_value=treadmill_payload,
+    ) as fetch:
+        user_path, raw_path = fetch_garmin_raw_files(
+            timestamp="20260510",
+            output_dir=tmp_path,
+            activity_type="treadmill_running",
+            all_history=True,
+        )
+
+    fetch.assert_called_once_with(progress=True)
+    assert user_path == tmp_path / "garmin_user_20260510_treadmill_backfill.json"
+    assert raw_path == tmp_path / "garmin_raw_20260510_treadmill_backfill.json"
+    assert json.loads(raw_path.read_text(encoding="utf-8"))[0]["type"] == "running"
+
+
+def test_treadmill_activity_filter_uses_only_treadmill_garmin_key(tmp_path):
+    payload = {
+        "activities": [{"activity_id": 457, "type": "running", "date": "2026-05-10"}],
+        "user_data": {},
+    }
+
+    with patch(
+        "src.ingestion.garmin_client.get_garmin_activities",
+        return_value=payload,
+    ) as fetch:
+        fetch_garmin_raw_files(
+            timestamp="20260510",
+            output_dir=tmp_path,
+            activity_type="treadmill_running",
+        )
+
+    fetch.assert_called_once_with(
+        999,
+        progress=True,
+        activity_types={"treadmill_running": "running"},
+    )
+
+
 @pytest.mark.parametrize("timestamp", ["20260230", "2026-05-10", "../20260510"])
 def test_fetch_rejects_invalid_artifact_timestamp_before_calling_garmin(tmp_path, timestamp):
     with patch("src.scripts.fetch_garmin_raw._get_garmin_activities") as fetch:
@@ -122,6 +168,23 @@ def test_import_raw_files_delegates_to_garmin_import_service(tmp_path):
 
     import_payload.assert_called_once_with(user_path=user_path, raw_path=raw_path)
     assert results == expected
+
+
+def test_import_raw_files_treadmill_backfill_skips_empty_profile_sidecar(tmp_path):
+    raw_path = tmp_path / "garmin_raw_20260510_treadmill_backfill.json"
+
+    with patch(
+        "src.scripts.fetch_garmin_raw.import_fetched_raw_artifacts",
+        return_value={"raw_import": {"activities": 1}},
+    ) as import_payload:
+        results = import_raw_files(
+            user_path=tmp_path / "garmin_user_20260510_treadmill_backfill.json",
+            raw_path=raw_path,
+            treadmill_backfill=True,
+        )
+
+    import_payload.assert_called_once_with(user_path=None, raw_path=raw_path)
+    assert results == {"raw_import": {"activities": 1}}
 
 
 def test_import_fetched_raw_artifacts_preserves_fetch_script_result_keys(tmp_path):
@@ -174,3 +237,16 @@ def test_strength_cli_rejects_all_and_limit_together(monkeypatch):
 
     with pytest.raises(SystemExit):
         parse_args()
+
+
+def test_treadmill_all_cli_contract_accepts_treadmill_running(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["fetch_garmin_raw", "--activity-type", "treadmill_running", "--all"],
+    )
+
+    args = parse_args()
+
+    assert args.activity_type == "treadmill_running"
+    assert args.all is True

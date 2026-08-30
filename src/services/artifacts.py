@@ -60,6 +60,17 @@ def strength_backfill_artifact_paths(
     return user_path, raw_path
 
 
+def treadmill_backfill_artifact_paths(
+    timestamp: str,
+    output_dir: Path = RAW_DATA_DIR,
+) -> tuple[Path, Path]:
+    """Return isolated artifact names for a treadmill-running history backfill."""
+    timestamp = _validated_artifact_timestamp(timestamp)
+    raw_path = output_dir / f"garmin_raw_{timestamp}_treadmill_backfill.json"
+    user_path = output_dir / f"garmin_user_{timestamp}_treadmill_backfill.json"
+    return user_path, raw_path
+
+
 def persist_raw_artifacts(
     timestamp: str,
     raw_activities: list[dict[str, Any]],

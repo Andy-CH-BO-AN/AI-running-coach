@@ -78,6 +78,48 @@ def test_importing_same_garmin_raw_file_twice_does_not_duplicate_activities(db_s
     assert activity.raw_json["raw_data"]["avg_swolf"] == 47.0
 
 
+def test_reimporting_canonical_treadmill_activity_is_idempotent(db_session, tmp_path):
+    raw_path = tmp_path / "garmin_raw_20260510_treadmill_backfill.json"
+    _write_json(
+        raw_path,
+        [{
+            "activity_id": 989,
+            "type": "running",
+            "date": "2026-05-10",
+            "distance": 5.0,
+            "duration": 25.0,
+            "average_pace": 5.0,
+            "splits": [{
+                "split_index": 1,
+                "distance": 1.0,
+                "duration": 5.0,
+                "pace": 5.0,
+                "avg_cadence": 178,
+                "stride_length": 126,
+                "power_avg": 240,
+            }],
+            "raw_data": {
+                "cadence": 176,
+                "stride_length": 125,
+                "power_avg": 238,
+                "vertical_oscillation": 7.8,
+                "ground_contact_time": 214,
+            },
+        }],
+    )
+    user = get_or_create_default_user(db_session)
+
+    import_garmin_raw_file(db_session, user.id, raw_path)
+    import_garmin_raw_file(db_session, user.id, raw_path)
+
+    assert db_session.scalar(select(func.count()).select_from(Activity)) == 1
+    assert db_session.scalar(select(func.count()).select_from(ActivitySplit)) == 1
+    activity = db_session.scalars(select(Activity)).one()
+    assert activity.activity_type == "running"
+    assert float(activity.average_pace_min_per_km) == 5.0
+    assert activity.raw_metrics["cadence"] == 176
+
+
 def test_strength_raw_payload_is_upserted_without_a_schema_migration(db_session, tmp_path):
     raw_path = tmp_path / "garmin_raw_strength_20260820.json"
     strength = {
