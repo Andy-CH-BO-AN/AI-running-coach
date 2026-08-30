@@ -156,7 +156,7 @@ def _normalize_set(set_payload: Mapping[str, Any], index: int) -> dict[str, Any]
         "set_type": normalized_type,
         "exercise_names": names,
         "category": category.strip() if isinstance(category, str) and category.strip() else None,
-        "reps": _integer(_first(set_payload, "reps", "repCount", "repetitionCount", "totalReps")),
+        "reps": _integer(_first(set_payload, "reps", "repCount", "repetitionCount", "totalReps")) or 0,
         "weight_kg": _weight_kg(set_payload),
         "duration_sec": _number(duration),
     }
