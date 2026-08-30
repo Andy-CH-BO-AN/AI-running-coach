@@ -79,6 +79,16 @@ def _string_list(value: Any) -> list[str]:
     return [item.strip() for item in values if isinstance(item, str) and item.strip()]
 
 
+def _exercise_names(set_payload: Mapping[str, Any]) -> list[str]:
+    """Read concrete exercise names from Garmin's candidate list."""
+    exercises = set_payload.get("exercises")
+    if not isinstance(exercises, Sequence) or isinstance(exercises, (str, bytes, bytearray)):
+        return []
+    return _string_list(
+        [item.get("name") for item in exercises if isinstance(item, Mapping)]
+    )
+
+
 def _weight_kg(set_payload: Mapping[str, Any]) -> float | None:
     """Return weight in kg only for a source that explicitly names its unit."""
     nested = _nested_mapping(set_payload, "weight", "weightDTO", "weightInfo")
@@ -131,10 +141,7 @@ def _set_payloads(payload: Any) -> list[Mapping[str, Any]]:
 
 def _normalize_set(set_payload: Mapping[str, Any], index: int) -> dict[str, Any]:
     exercise = _nested_mapping(set_payload, "exercise", "exerciseDTO", "exerciseInfo")
-    names = _string_list(
-        _first(set_payload, "exerciseNames", "exerciseName", "exercise_name")
-        or _first(exercise, "exerciseNames", "exerciseName", "name")
-    )
+    names = _exercise_names(set_payload)
     category = _first(set_payload, "category", "exerciseCategory", "categoryName")
     if category is None:
         category = _first(exercise, "category", "exerciseCategory", "categoryName")
@@ -149,7 +156,7 @@ def _normalize_set(set_payload: Mapping[str, Any], index: int) -> dict[str, Any]
         "set_type": normalized_type,
         "exercise_names": names,
         "category": category.strip() if isinstance(category, str) and category.strip() else None,
-        "reps": _integer(_first(set_payload, "reps", "repCount", "repetitionCount", "totalReps")) or 0,
+        "reps": _integer(_first(set_payload, "reps", "repCount", "repetitionCount", "totalReps")),
         "weight_kg": _weight_kg(set_payload),
         "duration_sec": _number(duration),
     }

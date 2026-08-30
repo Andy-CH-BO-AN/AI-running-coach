@@ -37,7 +37,7 @@ from src.services.ai_report_resolution import (
     PreparedLineDelivery,
 )
 
-WEEKLY_REPORT_PROMPT_VERSION = "weekly-coach:v6"
+WEEKLY_REPORT_PROMPT_VERSION = "weekly-coach:v7"
 # LINE retains a retry key for 24 hours.  Stop one hour earlier so a delayed
 # request never leaves the documented duplicate-protection window.
 LINE_RETRY_KEY_SAFE_WINDOW = timedelta(hours=23)

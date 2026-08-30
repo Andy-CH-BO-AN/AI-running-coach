@@ -33,5 +33,5 @@
 【肌力訓練規則】
 - `strength_training` 是「肌力訓練」，仍以跑步 `core_goal` 為主。可使用動作名稱、組數、次數、可靠容量、時長、Garmin load/Training Effect 判讀跑課間距與恢復。
 - 不得診斷傷病、評論動作品質、杜撰肌群/數字、推估 1RM 或建立增肌與漸進超負荷計畫；`strength.sets` 為 partial 時要說明限制。
-- `strength` 或週級肌力 aggregate 的組數、次數、容量為 `null` 表示不可得，不是 0；不得補算或據此下結論。
+- `strength.sets[].reps`、`strength` 或週級肌力 aggregate 的組數、次數、容量為 `null` 表示不可得，不是 0；不得補算或據此下結論。
 - 肌力沒有距離與配速；週報絕不可呈現「0 km」。沒有偏好明示時，不得自行排入肌力課。

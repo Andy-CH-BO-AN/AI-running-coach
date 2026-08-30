@@ -110,6 +110,29 @@ def test_strength_parser_accepts_nested_garmin_wrapper_aliases():
     assert strength["sets"][0]["weight_kg"] == pytest.approx(4.5359)
 
 
+def test_strength_parser_preserves_names_from_garmin_exercise_candidates():
+    strength = parse_strength_training(
+        {},
+        {
+            "activityId": 123,
+            "exerciseSets": [
+                {
+                    "setType": "ACTIVE",
+                    "repetitionCount": 15,
+                    "exercises": [
+                        {"category": "UNKNOWN", "name": None},
+                        {"category": "LATERAL_RAISE", "name": "SEATED_REAR_LATERAL_RAISE"},
+                    ],
+                },
+                {"setType": "REST", "duration": 30, "exercises": []},
+            ],
+        },
+    )
+
+    assert strength["sets"][0]["exercise_names"] == ["SEATED_REAR_LATERAL_RAISE"]
+    assert strength["sets"][1]["exercise_names"] == []
+
+
 def test_strength_parser_preserves_zero_based_garmin_set_indices():
     strength = parse_strength_training(
         {},

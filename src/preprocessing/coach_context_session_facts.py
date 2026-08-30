@@ -248,7 +248,10 @@ def _strength_from_context_payload(
             "set_type": set_type,
             "exercise_names": list(names),
             "category": category,
-            "reps": _nonnegative_integer(_required(raw_set, "reps", set_location), f"{set_location}.reps"),
+            "reps": _nonnegative_integer_or_none(
+                _required(raw_set, "reps", set_location),
+                f"{set_location}.reps",
+            ),
             "weight_kg": weight,
             "duration_sec": duration,
         })
