@@ -280,8 +280,20 @@ def get_activity_details(
         details['strength_raw_exercise_sets'] = exercise_sets or []
         return details
 
-    hr_timezones = api_call(client.get_activity_hr_in_timezones, activity_id)
-    power_timezones = api_call(client.get_activity_power_in_timezones, activity_id)
+    if strict:
+        hr_timezones = _strict_api_call(
+            client.get_activity_hr_in_timezones,
+            activity_id,
+            allow_not_found=True,
+        )
+        power_timezones = _strict_api_call(
+            client.get_activity_power_in_timezones,
+            activity_id,
+            allow_not_found=True,
+        )
+    else:
+        hr_timezones = safe_api_call(client.get_activity_hr_in_timezones, activity_id)
+        power_timezones = safe_api_call(client.get_activity_power_in_timezones, activity_id)
 
     sources = {
         'activity': full_detail,
@@ -377,8 +389,14 @@ def get_activity_splits(
     strict: bool = False,
 ) -> List[Dict[str, Any]]:
     splits = []
-    api_call = _strict_api_call if strict else safe_api_call
-    splits_data = api_call(client.get_activity_splits, activity_id)
+    if strict:
+        splits_data = _strict_api_call(
+            client.get_activity_splits,
+            activity_id,
+            allow_not_found=True,
+        )
+    else:
+        splits_data = safe_api_call(client.get_activity_splits, activity_id)
     if not splits_data: return splits
     if strict and not isinstance(splits_data, dict):
         raise GarminIngestionError("Garmin activity splits response is invalid")
