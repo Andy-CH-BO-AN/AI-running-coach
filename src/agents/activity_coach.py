@@ -10,7 +10,7 @@ from src.notifications.text_utils import utf16_length
 from src.services.ai_report_resolution import AIReportDraft, AIReportSpec
 
 ACTIVITY_PROMPT_PATH = Path("prompts/activity_coach.md")
-ACTIVITY_PROMPT_VERSION = "activity-coach:v6"
+ACTIVITY_PROMPT_VERSION = "activity-coach:v7"
 MIN_ANALYSIS_UTF16_LENGTH = 100
 MAX_ANALYSIS_UTF16_LENGTH = 600
 
