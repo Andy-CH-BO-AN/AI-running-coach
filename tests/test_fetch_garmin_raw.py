@@ -170,12 +170,17 @@ def test_import_raw_files_delegates_to_garmin_import_service(tmp_path):
     assert results == expected
 
 
-def test_import_raw_files_treadmill_backfill_skips_empty_profile_sidecar(tmp_path):
+def test_import_raw_files_treadmill_backfill_uses_baseline_importer(tmp_path):
     raw_path = tmp_path / "garmin_raw_20260510_treadmill_backfill.json"
+    expected = {
+        "raw_import": {"activities": 1},
+        "notification_baseline_seeded": 1,
+        "notification_candidates_unseeded": 0,
+    }
 
     with patch(
-        "src.scripts.fetch_garmin_raw.import_fetched_raw_artifacts",
-        return_value={"raw_import": {"activities": 1}},
+        "src.scripts.fetch_garmin_raw.import_treadmill_backfill",
+        return_value=expected,
     ) as import_payload:
         results = import_raw_files(
             user_path=tmp_path / "garmin_user_20260510_treadmill_backfill.json",
@@ -183,8 +188,8 @@ def test_import_raw_files_treadmill_backfill_skips_empty_profile_sidecar(tmp_pat
             treadmill_backfill=True,
         )
 
-    import_payload.assert_called_once_with(user_path=None, raw_path=raw_path)
-    assert results == {"raw_import": {"activities": 1}}
+    import_payload.assert_called_once_with(raw_path=raw_path)
+    assert results == expected
 
 
 def test_import_fetched_raw_artifacts_preserves_fetch_script_result_keys(tmp_path):
