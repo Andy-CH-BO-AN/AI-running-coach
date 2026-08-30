@@ -42,6 +42,7 @@ GARMIN_PR_MAPS = {
 }
 TARGET_ACTIVITY_TYPES = {
     'running': 'running',
+    'treadmill_running': 'running',
     'lap_swimming': 'swimming',
     'cycling': 'cycling',
     'strength_training': 'strength_training',
@@ -240,9 +241,18 @@ def _log_activity_payload_debug(activity_id: int, activity_type: str, sources: D
     print(f"[garmin_debug] hr_timezones normalized: {hr_map}")
     print(f"[garmin_debug] power_timezones normalized: {power_map}")
 
-def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -> Dict[str, Any]:
+def get_activity_details(
+    client: Garmin,
+    activity_id: int,
+    activity_type: str,
+    *,
+    strict: bool = False,
+) -> Dict[str, Any]:
     details = {}
-    full_detail = safe_api_call(client.get_activity, activity_id)
+    api_call = _strict_api_call if strict else safe_api_call
+    full_detail = api_call(client.get_activity, activity_id)
+    if strict and not isinstance(full_detail, dict):
+        raise GarminIngestionError("Garmin activity detail response is invalid")
     if not full_detail: return details
 
     # Strength has no meaningful lap split contract.  Keep its Garmin summary
@@ -270,8 +280,20 @@ def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -
         details['strength_raw_exercise_sets'] = exercise_sets or []
         return details
 
-    hr_timezones = safe_api_call(client.get_activity_hr_in_timezones, activity_id)
-    power_timezones = safe_api_call(client.get_activity_power_in_timezones, activity_id)
+    if strict:
+        hr_timezones = _strict_api_call(
+            client.get_activity_hr_in_timezones,
+            activity_id,
+            allow_not_found=True,
+        )
+        power_timezones = _strict_api_call(
+            client.get_activity_power_in_timezones,
+            activity_id,
+            allow_not_found=True,
+        )
+    else:
+        hr_timezones = safe_api_call(client.get_activity_hr_in_timezones, activity_id)
+        power_timezones = safe_api_call(client.get_activity_power_in_timezones, activity_id)
 
     sources = {
         'activity': full_detail,
@@ -359,10 +381,25 @@ def get_activity_details(client: Garmin, activity_id: int, activity_type: str) -
         })
     return details
 
-def get_activity_splits(client: Garmin, activity_id: int, activity_type: str = 'running') -> List[Dict[str, Any]]:
+def get_activity_splits(
+    client: Garmin,
+    activity_id: int,
+    activity_type: str = 'running',
+    *,
+    strict: bool = False,
+) -> List[Dict[str, Any]]:
     splits = []
-    splits_data = safe_api_call(client.get_activity_splits, activity_id)
+    if strict:
+        splits_data = _strict_api_call(
+            client.get_activity_splits,
+            activity_id,
+            allow_not_found=True,
+        )
+    else:
+        splits_data = safe_api_call(client.get_activity_splits, activity_id)
     if not splits_data: return splits
+    if strict and not isinstance(splits_data, dict):
+        raise GarminIngestionError("Garmin activity splits response is invalid")
 
     lap_dtos = splits_data.get('lapDTOs', [])
     for idx, lap in enumerate(lap_dtos, 1):
@@ -473,6 +510,78 @@ def _collected_activity_recency_key(activity: Dict[str, Any]) -> tuple[str, int]
     return (str(activity.get('started_at') or activity.get('date') or ''), activity_id)
 
 
+def _collect_garmin_activity(
+    client: Garmin,
+    activity: Dict[str, Any],
+    activity_type: str,
+    *,
+    strict: bool = False,
+) -> Dict[str, Any]:
+    """Build one canonical activity using the existing sport extraction path."""
+    act_id = activity.get('activityId')
+    dist_m, dur_s = activity.get('distance', 0), activity.get('duration', 0)
+    distance_km = (
+        None
+        if activity_type == 'strength_training'
+        else dist_m / 1000 if dist_m is not None else None
+    )
+    performance_value = calculate_pace(dur_s * 1000, dist_m, activity_type)
+    raw_details = get_activity_details(
+        client,
+        act_id,
+        activity_type,
+        strict=strict,
+    )
+    if activity_type == 'cycling':
+        raw_details['average_speed_kmh'] = performance_value
+
+    collected_activity = {
+        'type': activity_type,
+        'date': str(activity.get('startTimeLocal') or '')[:10],
+        'started_at': activity.get('startTimeLocal'),
+        'distance': distance_km,
+        'duration': dur_s / 60,
+        'average_pace': None if activity_type in {'cycling', 'strength_training'} else performance_value,
+        'average_heart_rate': activity.get('averageHR'),
+        'activity_id': act_id,
+        'splits': (
+            []
+            if activity_type == 'strength_training'
+            else get_activity_splits(
+                client,
+                act_id,
+                activity_type,
+                strict=strict,
+            )
+        ),
+        'raw_data': raw_details,
+    }
+    if activity_type == 'swimming':
+        elapsed_duration = _duration_seconds_to_minutes(activity.get('elapsedDuration'))
+        moving_duration = _duration_seconds_to_minutes(activity.get('movingDuration'))
+        rest_seconds = activity.get('restTime')
+        if rest_seconds is None:
+            rest_seconds = activity.get('restDuration')
+        rest_duration = _duration_seconds_to_minutes(rest_seconds)
+        swimming_durations = {
+            'elapsed_duration': elapsed_duration
+            if elapsed_duration is not None
+            else raw_details.get('elapsed_duration'),
+            'moving_duration': moving_duration
+            if moving_duration is not None
+            else raw_details.get('moving_duration'),
+            'rest_duration': rest_duration
+            if rest_duration is not None
+            else raw_details.get('rest_duration'),
+        }
+        collected_activity.update(
+            (key, value)
+            for key, value in swimming_durations.items()
+            if value is not None
+        )
+    return collected_activity
+
+
 def get_garmin_activities(
     n: Optional[int] = 30,
     progress: bool = False,
@@ -559,55 +668,13 @@ def get_garmin_activities(
                         )
                     continue
 
-                performance_value = calculate_pace(dur_s * 1000, dist_m, act_type)
-                raw_details = get_activity_details(client, act_id, act_type)
-                if act_type == 'cycling':
-                    raw_details['average_speed_kmh'] = performance_value
+                collected_activity = _collect_garmin_activity(client, activity, act_type)
 
                 if progress:
                     print(
                         f"  ↳ Fetching {act_type} activity={act_id} date={activity.get('startTimeLocal', '')[:10]} "
                         f"({len(collected_activities) + 1}/{target_count})",
                         flush=True,
-                    )
-                collected_activity = {
-                    'type': act_type,
-                    'date': activity.get('startTimeLocal', '')[:10],
-                    'started_at': activity.get('startTimeLocal'),
-                    'distance': distance_km,
-                    'duration': dur_s / 60,
-                    'average_pace': None if act_type in {'cycling', 'strength_training'} else performance_value,
-                    'average_heart_rate': activity.get('averageHR'),
-                    'activity_id': act_id,
-                    'splits': (
-                        []
-                        if act_type == 'strength_training'
-                        else get_activity_splits(client, act_id, act_type)
-                    ),
-                    'raw_data': raw_details,
-                }
-                if act_type == 'swimming':
-                    elapsed_duration = _duration_seconds_to_minutes(activity.get('elapsedDuration'))
-                    moving_duration = _duration_seconds_to_minutes(activity.get('movingDuration'))
-                    rest_seconds = activity.get('restTime')
-                    if rest_seconds is None:
-                        rest_seconds = activity.get('restDuration')
-                    rest_duration = _duration_seconds_to_minutes(rest_seconds)
-                    swimming_durations = {
-                        'elapsed_duration': elapsed_duration
-                        if elapsed_duration is not None
-                        else raw_details.get('elapsed_duration'),
-                        'moving_duration': moving_duration
-                        if moving_duration is not None
-                        else raw_details.get('moving_duration'),
-                        'rest_duration': rest_duration
-                        if rest_duration is not None
-                        else raw_details.get('rest_duration'),
-                    }
-                    collected_activity.update(
-                        (key, value)
-                        for key, value in swimming_durations.items()
-                        if value is not None
                     )
                 collected_activities.append(collected_activity)
         
@@ -702,6 +769,71 @@ def get_all_strength_training_activities(
             })
             if progress:
                 print(f"  ↳ Fetching strength_training activity={activity_id}", flush=True)
+        start += page_size
+
+    collected.sort(key=_collected_activity_recency_key, reverse=True)
+    return {'activities': collected, 'user_data': {}}
+
+
+def get_all_treadmill_running_activities(
+    *,
+    progress: bool = False,
+) -> Dict[str, Any]:
+    """Fetch every Garmin treadmill activity as canonical running data."""
+    email, password = os.getenv('GARMIN_ACCOUNT'), os.getenv('GARMIN_PASSWORD')
+    if not email or not password:
+        raise GarminIngestionError("Garmin credentials are not configured")
+
+    client = Garmin(email, password)
+    _strict_api_call(client.login)
+
+    collected: list[dict[str, Any]] = []
+    start, page_size = 0, 50
+    while True:
+        activities = _strict_api_call(client.get_activities, start, page_size)
+        if not isinstance(activities, list):
+            raise GarminIngestionError("Garmin activity list response is invalid")
+        if not activities:
+            break
+
+        for activity in sorted(activities, key=_activity_recency_key, reverse=True):
+            type_info = activity.get('activityType', {})
+            type_key = type_info.get('typeKey') if isinstance(type_info, dict) else type_info
+            if type_key != 'treadmill_running':
+                continue
+
+            activity_id = activity.get('activityId')
+            if isinstance(activity_id, bool):
+                raise GarminIngestionError(
+                    "Garmin treadmill_running activity has invalid activityId"
+                )
+            if isinstance(activity_id, float) and not activity_id.is_integer():
+                raise GarminIngestionError(
+                    "Garmin treadmill_running activity has invalid activityId"
+                )
+            try:
+                activity_id = int(activity_id)
+            except (TypeError, ValueError):
+                raise GarminIngestionError(
+                    "Garmin treadmill_running activity has invalid activityId"
+                ) from None
+            if activity_id <= 0:
+                raise GarminIngestionError(
+                    "Garmin treadmill_running activity has invalid activityId"
+                )
+
+            collected_activity = _collect_garmin_activity(
+                client,
+                {**activity, 'activityId': activity_id},
+                TARGET_ACTIVITY_TYPES['treadmill_running'],
+                strict=True,
+            )
+            collected.append(collected_activity)
+            if progress:
+                print(
+                    f"  ↳ Fetching running treadmill activity={activity_id}",
+                    flush=True,
+                )
         start += page_size
 
     collected.sort(key=_collected_activity_recency_key, reverse=True)

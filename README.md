@@ -17,7 +17,7 @@
 ## 目前能做什麼
 
 - 從 Garmin Connect 抓取 profile、PR、近期活動、活動詳細資料、splits 與 swimming lengths。
-- 支援 `running`、`lap_swimming`、`cycling`。
+- 支援 `running`、Garmin `treadmill_running`（匯入後 canonical type 為 `running`）、`lap_swimming`、`cycling`。
 - 計算週訓練量、training load、心率 / 功率 Z1-Z5、跑姿、配速與交叉訓練摘要。
 - 產生 deterministic `coach_context`，再交給 Gemini 產生 AI coach JSON report。
 - Dashboard 顯示訓練回顧、週期化脈絡、四週訓練、強度分佈、下週課表與 evidence。
@@ -315,6 +315,16 @@ Garmin Connect 可能有 rate limit；遇到 `429` 時不要快速連續重跑�
 ```bash
 python -m src.scripts.fetch_garmin_raw --activity-type strength_training --all --import-db
 ```
+
+若啟用 treadmill 支援前已有較舊 treadmill 活動，執行一次全歷史 backfill：
+
+```bash
+python -m src.scripts.fetch_garmin_raw --activity-type treadmill_running --all --import-db
+```
+
+此命令只掃描 Garmin `treadmill_running`，寫入獨立的
+`*_treadmill_backfill.json` artifacts，並沿用既有 Garmin activity ID / split
+upsert；重跑不會建立重複活動。匯入時不寫入空的 user profile sidecar。
 
 此命令遇到登入、列表或 429 失敗時不會匯入；冷卻後請從頭重跑。
 

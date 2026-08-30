@@ -100,7 +100,10 @@ def import_fetched_garmin_payload(
     return results
 
 
-def import_fetched_raw_artifacts(user_path: Path, raw_path: Path) -> dict[str, Any]:
+def import_fetched_raw_artifacts(
+    user_path: str | Path | None,
+    raw_path: str | Path,
+) -> dict[str, Any]:
     results = import_fetched_garmin_payload(user_path=user_path, raw_path=raw_path)
     return {
         key: value
@@ -162,6 +165,29 @@ def strength_backfill_baseline_ids(
     ]
 
 
+def treadmill_backfill_baseline_ids(
+    activities: list[dict[str, Any]],
+) -> list[int]:
+    """Seed every historical treadmill activity so a backfill never re-notifies it."""
+    treadmill_ids: list[int] = []
+    for activity in activities:
+        if activity.get("type") != "running":
+            continue
+        raw_id = activity.get("activity_id")
+        if isinstance(raw_id, bool):
+            raise ValueError("Treadmill backfill activity_id must be a positive integer")
+        if isinstance(raw_id, float) and not raw_id.is_integer():
+            raise ValueError("Treadmill backfill activity_id must be a positive integer")
+        try:
+            activity_id = int(raw_id)
+        except (TypeError, ValueError):
+            raise ValueError("Treadmill backfill activity_id must be a positive integer") from None
+        if activity_id <= 0:
+            raise ValueError("Treadmill backfill activity_id must be a positive integer")
+        treadmill_ids.append(activity_id)
+    return treadmill_ids
+
+
 def import_strength_backfill(
     *,
     user_path: str | Path,
@@ -197,5 +223,42 @@ def import_strength_backfill(
     results = _shape_fetched_payload_results(import_results)
     results["notification_baseline_seeded"] = seeded
     results["notification_candidates_unseeded"] = len(activities) - len(baseline_ids)
+    _add_mirror_sync_results(results, include_mirror_sync=include_mirror_sync)
+    return results
+
+
+def import_treadmill_backfill(
+    *,
+    raw_path: str | Path,
+    include_mirror_sync: bool = True,
+) -> dict[str, Any]:
+    """Atomically import treadmill history and seed every activity as notified."""
+    with Path(raw_path).open(encoding="utf-8") as raw_file:
+        activities = json.load(raw_file)
+    if not isinstance(activities, list) or any(
+        not isinstance(activity, dict) or activity.get("type") != "running"
+        for activity in activities
+    ):
+        raise ValueError(
+            "Treadmill backfill raw artifact must contain only canonical running activities"
+        )
+
+    baseline_ids = treadmill_backfill_baseline_ids(activities)
+    with SessionLocal() as session:
+        user = get_or_create_default_user(session)
+        # The all-history treadmill fetch has no profile payload. Import the
+        # activities and their notification baseline in one transaction so a
+        # partial rollout cannot make old runs look newly discovered.
+        import_results = import_artifact_bundle(
+            session,
+            user.id,
+            raw_file=raw_path,
+        )
+        seeded = seed_baseline_notifications(session, baseline_ids, commit=False)
+        session.commit()
+
+    results = _shape_fetched_payload_results(import_results)
+    results["notification_baseline_seeded"] = seeded
+    results["notification_candidates_unseeded"] = 0
     _add_mirror_sync_results(results, include_mirror_sync=include_mirror_sync)
     return results
