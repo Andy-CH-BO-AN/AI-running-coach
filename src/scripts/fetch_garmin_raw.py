@@ -14,6 +14,7 @@ from src.services.artifacts import (
 from src.services.garmin_import_service import (
     import_fetched_raw_artifacts,
     import_strength_backfill,
+    import_treadmill_backfill,
 )
 from src.services.training_calendar import resolve_training_calendar_date
 
@@ -122,7 +123,7 @@ def import_raw_files(
     if strength_backfill:
         return import_strength_backfill(user_path=user_path, raw_path=raw_path)
     if treadmill_backfill:
-        return import_fetched_raw_artifacts(user_path=None, raw_path=raw_path)
+        return import_treadmill_backfill(raw_path=raw_path)
     return import_fetched_raw_artifacts(user_path=user_path, raw_path=raw_path)
 
 
