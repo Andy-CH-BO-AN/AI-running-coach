@@ -258,6 +258,67 @@ class CoachTests(unittest.TestCase):
         self.assertEqual(call_counts["model-b"], 1)
         sleep_mock.assert_not_called()
 
+    def test_coach_falls_back_immediately_after_request_timeout(self):
+        call_counts = {"model-a": 0, "model-b": 0}
+
+        def fake_generate_content(*, model, contents, **kwargs):
+            call_counts[model] += 1
+            if model == "model-a":
+                raise TimeoutError("request timed out")
+            return types.SimpleNamespace(text='{"headline": "fallback report"}')
+
+        fake_client = types.SimpleNamespace(
+            models=types.SimpleNamespace(generate_content=fake_generate_content)
+        )
+
+        with patch.object(coach, "client", fake_client), patch.object(
+            coach, "MODEL_FALLBACKS", ("model-a", "model-b")
+        ), patch.object(coach.time, "sleep") as sleep_mock:
+            report = coach.coach(data=[{"activity_id": 1}])
+
+        self.assertEqual(report, {"headline": "fallback report"})
+        self.assertEqual(call_counts["model-a"], 1)
+        self.assertEqual(call_counts["model-b"], 1)
+        sleep_mock.assert_not_called()
+
+    def test_gemini_3_generation_bounds_output_and_uses_medium_thinking(self):
+        generated = Mock(return_value=types.SimpleNamespace(text='{"headline": "report"}'))
+        fake_client = types.SimpleNamespace(
+            models=types.SimpleNamespace(generate_content=generated)
+        )
+
+        with patch.object(coach, "client", fake_client):
+            report = coach._generate_content_with_retries("gemini-3.7-flash", "prompt")
+
+        self.assertEqual(report, {"headline": "report"})
+        self.assertEqual(
+            generated.call_args.kwargs["config"],
+            {
+                "response_mime_type": "application/json",
+                "max_output_tokens": 65_536,
+                "thinking_config": {"thinking_level": "medium"},
+            },
+        )
+
+    def test_gemini_2_5_generation_omits_gemini_3_thinking_level(self):
+        generated = Mock(return_value=types.SimpleNamespace(text='{"headline": "report"}'))
+        fake_client = types.SimpleNamespace(
+            models=types.SimpleNamespace(generate_content=generated)
+        )
+
+        with patch.object(coach, "client", fake_client):
+            report = coach._generate_content_with_retries("gemini-2.5-flash", "prompt")
+
+        self.assertEqual(report, {"headline": "report"})
+        self.assertEqual(
+            generated.call_args.kwargs["config"],
+            {
+                "response_mime_type": "application/json",
+                "max_output_tokens": 65_536,
+                "temperature": 0,
+            },
+        )
+
     def test_build_genai_client_prefers_google_api_key_over_legacy_gemini_key(self):
         fake_client = object()
 
@@ -274,7 +335,7 @@ class CoachTests(unittest.TestCase):
         self.assertIs(built_client, fake_client)
         client_mock.assert_called_once_with(
             api_key="new-gcp-key",
-            http_options={"api_version": "v1"},
+            http_options={"api_version": "v1", "timeout": 300_000},
         )
 
     def test_client_construction_is_deferred_until_a_model_request(self):
@@ -307,7 +368,7 @@ class CoachTests(unittest.TestCase):
         self.assertIs(built_client, fake_client)
         client_mock.assert_called_once_with(
             api_key="legacy-key",
-            http_options={"api_version": "v1"},
+            http_options={"api_version": "v1", "timeout": 300_000},
         )
 
     def test_build_genai_client_omits_project_location_for_vertexai_api_key(self):
@@ -328,7 +389,7 @@ class CoachTests(unittest.TestCase):
         self.assertIs(built_client, fake_client)
         client_mock.assert_called_once_with(
             api_key="gcp-key",
-            http_options={"api_version": "v1"},
+            http_options={"api_version": "v1", "timeout": 300_000},
             vertexai=True,
         )
 

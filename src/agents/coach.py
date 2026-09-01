@@ -26,6 +26,9 @@ MODEL_FALLBACKS = (
 )
 MAX_RETRIES_PER_MODEL = 3
 RETRY_BACKOFF_SECONDS = 1
+MODEL_REQUEST_TIMEOUT_MS = 300_000
+MODEL_MAX_OUTPUT_TOKENS = 65_536
+GEMINI_3_THINKING_LEVEL = "medium"
 
 
 def _env_flag(name: str) -> bool:
@@ -43,7 +46,10 @@ def _build_genai_client(*, vertexai: bool | None = None) -> genai.Client:
 
     client_kwargs: Dict[str, Any] = {
         "api_key": api_key,
-        "http_options": {"api_version": "v1"},
+        "http_options": {
+            "api_version": "v1",
+            "timeout": MODEL_REQUEST_TIMEOUT_MS,
+        },
     }
 
     if vertexai:
@@ -178,6 +184,20 @@ def _is_vertexai_payload_mismatch(exc: Exception) -> bool:
     )
 
 
+def _generation_config(model_name: str) -> Dict[str, Any]:
+    config: Dict[str, Any] = {
+        "response_mime_type": "application/json",
+        "max_output_tokens": MODEL_MAX_OUTPUT_TOKENS,
+    }
+    if model_name.startswith("gemini-3"):
+        config["thinking_config"] = {
+            "thinking_level": GEMINI_3_THINKING_LEVEL,
+        }
+    else:
+        config["temperature"] = 0
+    return config
+
+
 def _extract_json_document(text: str) -> str:
     cleaned = text.strip()
     if cleaned.startswith("```"):
@@ -229,10 +249,7 @@ def _generate_content_with_retries(model_name: str, full_prompt: str) -> Dict[st
             response = _get_genai_client().models.generate_content(
                 model=model_name,
                 contents=full_prompt,
-                config={
-                    "response_mime_type": "application/json",
-                    "temperature": 0,
-                },
+                config=_generation_config(model_name),
             )
             response_text = getattr(response, "text", "") or ""
             return _parse_report_json(response_text)
