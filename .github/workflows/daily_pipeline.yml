@@ -13,6 +13,7 @@ concurrency:
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -34,6 +35,7 @@ jobs:
           GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_GENAI_USE_VERTEXAI: "true"
+          PYTHONUNBUFFERED: "1"
           DATABASE_MODE: cloud
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           NEON_DATABASE_DIRECT_URL: ${{ secrets.NEON_DATABASE_DIRECT_URL }}
