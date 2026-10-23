@@ -450,4 +450,6 @@ Canonical workflow / reviewer / QA / security / skills 都維護在 `ai/`，不�
 
 ## License
 
-目前 repository 未另外聲明 license；使用或散布前請先確認專案授權方式。
+本專案採用 [MIT License](LICENSE)。
+
+第三方內容的授權與著作權聲明見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
