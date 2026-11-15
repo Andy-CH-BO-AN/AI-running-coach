@@ -17,18 +17,15 @@ PROMPT_PATH = Path("prompts/coach.md")
 DEFAULT_GOAL_PATH = Path("prompts/goal.md")
 OUTPUT_DIR = Path("output")
 MODEL_FALLBACKS = (
+    "gemini-4-hydrogen",
+    "gemini-3.8-flash",
     "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-3-flash-preview",
-    "gemini-3.1-flash-lite",
-    "gemini-2.5-flash",
 )
 MAX_RETRIES_PER_MODEL = 3
 RETRY_BACKOFF_SECONDS = 1
 MODEL_REQUEST_TIMEOUT_MS = 300_000
 MODEL_MAX_OUTPUT_TOKENS = 65_536
-GEMINI_3_THINKING_LEVEL = "medium"
+MODEL_THINKING_LEVEL = "medium"
 
 
 def _env_flag(name: str) -> bool:
@@ -189,9 +186,9 @@ def _generation_config(model_name: str) -> Dict[str, Any]:
         "response_mime_type": "application/json",
         "max_output_tokens": MODEL_MAX_OUTPUT_TOKENS,
     }
-    if model_name.startswith("gemini-3"):
+    if model_name.startswith(("gemini-3", "gemini-4")):
         config["thinking_config"] = {
-            "thinking_level": GEMINI_3_THINKING_LEVEL,
+            "thinking_level": MODEL_THINKING_LEVEL,
         }
     else:
         config["temperature"] = 0
@@ -246,10 +243,21 @@ def _generate_content_with_retries(model_name: str, full_prompt: str) -> Dict[st
     for attempt in range(1, MAX_RETRIES_PER_MODEL + 1):
         try:
             print(f"正在嘗試使用模型: {model_name} (第 {attempt}/{MAX_RETRIES_PER_MODEL} 次)...")
-            response = _get_genai_client().models.generate_content(
-                model=model_name,
+            model_client = _get_genai_client()
+            request_model = model_name
+            config = _generation_config(model_name)
+            if model_name == "gemini-4-hydrogen" and getattr(model_client, "vertexai", False):
+                # Hydrogen isn't available on regional endpoints or every API
+                # key's default route. Specify both the global resource and host.
+                project = os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()
+                if not project:
+                    raise ValueError("GOOGLE_CLOUD_PROJECT is required for Hydrogen on Vertex AI")
+                request_model = f"projects/{project}/locations/global/publishers/google/models/{model_name}"
+                config["http_options"] = {"base_url": "https://aiplatform.googleapis.com/"}
+            response = model_client.models.generate_content(
+                model=request_model,
                 contents=full_prompt,
-                config=_generation_config(model_name),
+                config=config,
             )
             response_text = getattr(response, "text", "") or ""
             return _parse_report_json(response_text)

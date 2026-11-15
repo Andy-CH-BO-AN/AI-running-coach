@@ -97,6 +97,7 @@ GARMIN_ACCOUNT=your_garmin_email
 GARMIN_PASSWORD=your_garmin_password
 GOOGLE_API_KEY=your_gcp_api_key
 GOOGLE_GENAI_USE_VERTEXAI=true
+GOOGLE_CLOUD_PROJECT=your_gcp_project_id
 ```
 
 Gemini client 支援：
@@ -105,6 +106,8 @@ Gemini client 支援：
 - `GEMINI_KEY`
 - `GEMINI_API_KEY`
 - Vertex AI / ADC：搭配 `GOOGLE_CLOUD_PROJECT`、`GOOGLE_CLOUD_LOCATION`
+
+活動分析、週報與一般教練分析依序使用 `gemini-4-hydrogen` → `gemini-3.8-flash` → `gemini-3.7-flash`。Vertex AI 的 Hydrogen 請求需要 `GOOGLE_CLOUD_PROJECT`，並固定指向 `global`；備援模型沿用原本區域設定。
 
 Gemini client 不會因為單純 import pipeline 就被建立；只有真正進 AI generation boundary 才需要 provider credentials。
 
@@ -143,6 +146,8 @@ DATABASE_MODE=cloud python -m src.scripts.run_daily_pipeline \
 Cloud Daily Run 不接受 `--activity-limit` 或 `--fetch-limit`，window 由 run policy 決定，caller 不能自行切換 mode。
 
 GitHub Actions workflow：`.github/workflows/daily_pipeline.yml`。
+
+每日與週報排程都需要 Repository variable `GOOGLE_CLOUD_PROJECT`（GCP 專案 ID），以及既有的 Secret `GOOGLE_API_KEY`，才能使用 Hydrogen。未設定專案時會改用 Flash 備援。
 
 ### 5. 開 Dashboard
 
