@@ -33,6 +33,7 @@ jobs:
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_GENAI_USE_VERTEXAI: "true"
+          GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT }}
           DATABASE_MODE: cloud
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           NEON_DATABASE_DIRECT_URL: ${{ secrets.NEON_DATABASE_DIRECT_URL }}

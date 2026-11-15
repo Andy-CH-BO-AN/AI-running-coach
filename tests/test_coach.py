@@ -281,24 +281,84 @@ class CoachTests(unittest.TestCase):
         self.assertEqual(call_counts["model-b"], 1)
         sleep_mock.assert_not_called()
 
-    def test_gemini_3_generation_bounds_output_and_uses_medium_thinking(self):
+    def test_current_models_bound_output_and_use_medium_thinking(self):
+        for model_name in ("gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.7-flash"):
+            with self.subTest(model=model_name):
+                generated = Mock(return_value=types.SimpleNamespace(text='{"headline": "report"}'))
+                fake_client = types.SimpleNamespace(
+                    models=types.SimpleNamespace(generate_content=generated)
+                )
+
+                with patch.object(coach, "client", fake_client):
+                    report = coach._generate_content_with_retries(model_name, "prompt")
+
+                self.assertEqual(report, {"headline": "report"})
+                self.assertEqual(
+                    generated.call_args.kwargs["config"],
+                    {
+                        "response_mime_type": "application/json",
+                        "max_output_tokens": 65_536,
+                        "thinking_config": {"thinking_level": "medium"},
+                    },
+                )
+
+    def test_vertex_hydrogen_uses_global_resource_and_host(self):
         generated = Mock(return_value=types.SimpleNamespace(text='{"headline": "report"}'))
         fake_client = types.SimpleNamespace(
-            models=types.SimpleNamespace(generate_content=generated)
+            vertexai=True,
+            models=types.SimpleNamespace(generate_content=generated),
         )
-
-        with patch.object(coach, "client", fake_client):
-            report = coach._generate_content_with_retries("gemini-3.7-flash", "prompt")
+        with patch.object(coach, "client", fake_client), patch.dict(
+            os.environ,
+            {"GOOGLE_CLOUD_PROJECT": "demo-project", "GOOGLE_CLOUD_LOCATION": "asia-southeast1"},
+        ):
+            report = coach._generate_content_with_retries("gemini-4-hydrogen", "prompt")
+            self.assertEqual(os.environ["GOOGLE_CLOUD_LOCATION"], "asia-southeast1")
 
         self.assertEqual(report, {"headline": "report"})
         self.assertEqual(
-            generated.call_args.kwargs["config"],
-            {
-                "response_mime_type": "application/json",
-                "max_output_tokens": 65_536,
-                "thinking_config": {"thinking_level": "medium"},
-            },
+            generated.call_args.kwargs["model"],
+            "projects/demo-project/locations/global/publishers/google/models/gemini-4-hydrogen",
         )
+        self.assertEqual(
+            generated.call_args.kwargs["config"]["http_options"]["base_url"],
+            "https://aiplatform.googleapis.com/",
+        )
+
+    def test_default_policy_falls_back_to_flash_models_in_order(self):
+        generated = Mock(side_effect=[
+            RuntimeError("404 NOT_FOUND"),
+            RuntimeError("404 NOT_FOUND"),
+            types.SimpleNamespace(text='{"headline": "fallback report"}'),
+        ])
+        fake_client = types.SimpleNamespace(
+            vertexai=False,
+            models=types.SimpleNamespace(generate_content=generated),
+        )
+        with patch.object(coach, "client", fake_client):
+            report = coach.coach(data=[])
+
+        self.assertEqual(report, {"headline": "fallback report"})
+        self.assertEqual(
+            [request.kwargs["model"] for request in generated.call_args_list],
+            ["gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.7-flash"],
+        )
+
+    def test_vertex_hydrogen_without_project_falls_back_without_invalid_request(self):
+        generated = Mock(return_value=types.SimpleNamespace(text='{"headline": "fallback report"}'))
+        fake_client = types.SimpleNamespace(
+            vertexai=True,
+            models=types.SimpleNamespace(generate_content=generated),
+        )
+        with patch.object(coach, "client", fake_client), patch.dict(
+            os.environ, {"GOOGLE_CLOUD_PROJECT": ""},
+        ):
+            report = coach.coach(data=[])
+
+        self.assertEqual(report, {"headline": "fallback report"})
+        generated.assert_called_once()
+        self.assertEqual(generated.call_args.kwargs["model"], "gemini-3.8-flash")
+        self.assertNotIn("http_options", generated.call_args.kwargs["config"])
 
     def test_gemini_2_5_generation_omits_gemini_3_thinking_level(self):
         generated = Mock(return_value=types.SimpleNamespace(text='{"headline": "report"}'))
