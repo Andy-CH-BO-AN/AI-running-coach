@@ -142,7 +142,17 @@ test("latest strength activity renders strength facts instead of distance and pa
     duration_min: 45,
     training_load: 31,
     avg_hr: 122,
-    strength: { total_sets: 16, total_reps: 120, total_volume_kg: 2400 },
+    strength: {
+      total_sets: 16,
+      total_reps: 120,
+      total_volume_kg: 2400,
+      sets: [
+        { set_type: "active", exercise_names: ["CURL"], reps: 8, weight_kg: 7.5 },
+        { set_type: "rest", exercise_names: [], reps: 0, weight_kg: null },
+        { set_type: "active", exercise_names: ["SQUAT"], reps: 10, weight_kg: 0 },
+        { set_type: "active", exercise_names: [], reps: 10, weight_kg: null },
+      ],
+    },
   }));
 
   const latestActivity = dom.window.document.getElementById("latestActivity");
@@ -153,6 +163,29 @@ test("latest strength activity renders strength facts instead of distance and pa
   assert.match(latestActivity.textContent, /總容量\s*2400\s*kg/);
   assert.doesNotMatch(latestActivity.textContent, /距離/);
   assert.doesNotMatch(latestActivity.textContent, /配速/);
+  const details = latestActivity.querySelector("details");
+  assert.equal(details.querySelector("summary").textContent, "逐組重量");
+  details.open = true;
+  assert.deepEqual(
+    Array.from(details.querySelectorAll("tbody tr"), row =>
+      Array.from(row.cells, cell => cell.textContent)),
+    [["1", "CURL", "8", "7.5 kg"], ["2", "SQUAT", "10", "0 kg"], ["3", "未辨識", "10", "未記錄"]]
+  );
+  dom.window.close();
+});
+
+test("recent strength weights stay available after a later run", async () => {
+  const report = reportWithSession({
+    date: "2026-05-12",
+    source_activity_type: "strength_training",
+    strength: { sets: [{ set_type: "active", exercise_names: ["CURL"], reps: 8, weight_kg: 7.5 }] },
+  });
+  report.weekly_analysis[0].sessions.push({ date: "2026-05-14", source_activity_type: "running" });
+  const dom = await renderReport(report);
+  const latest = dom.window.document.getElementById("latestActivity");
+  assert.match(latest.querySelector("summary").textContent, /肌力訓練 · 逐組重量/);
+  assert.match(latest.querySelector("tbody").textContent, /CURL.*7\.5 kg/);
+  assert.match(latest.textContent, /配速/);
   dom.window.close();
 });
 

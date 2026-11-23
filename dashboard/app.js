@@ -300,6 +300,40 @@
     appendActivityStatWhenPresent(container, "總容量", strength.total_volume_kg, "kg");
   }
 
+  function renderStrengthSets(sets, title) {
+    var details = document.createElement("details");
+    details.className = "rep-trend-details";
+    details.appendChild(textElement("summary", "", title));
+
+    var wrap = document.createElement("div");
+    wrap.className = "evidence-splits-wrap";
+    var table = document.createElement("table");
+    table.className = "evidence-splits-table";
+    table.setAttribute("aria-label", "肌力訓練逐組明細");
+    var thead = table.createTHead();
+    var header = thead.insertRow();
+    ["組別", "動作", "次數", "重量"].forEach(function addHeader(label) {
+      var cell = textElement("th", "", label);
+      cell.scope = "col";
+      header.appendChild(cell);
+    });
+    var body = table.createTBody();
+    sets.forEach(function addSet(set, index) {
+      var row = body.insertRow();
+      [
+        index + 1,
+        set.exercise_names.join(" / ") || "未辨識",
+        set.reps === null ? "—" : set.reps,
+        set.weight_kg === null ? "未記錄" : set.weight_kg + " kg"
+      ].forEach(function addCell(value) {
+        row.appendChild(textElement("td", "", String(value)));
+      });
+    });
+    wrap.appendChild(table);
+    details.appendChild(wrap);
+    return details;
+  }
+
   function renderLatestActivity(model) {
     clear(elements.latestActivity);
     var latest = model.latest_activity;
@@ -325,7 +359,8 @@
 
     var stats = document.createElement("div");
     stats.className = "activity-stat-grid";
-    if (String(latest.source_activity_type || "").toLowerCase() === "strength_training") {
+    var isStrength = String(latest.source_activity_type || "").toLowerCase() === "strength_training";
+    if (isStrength) {
       renderStrengthActivityStats(stats, latest);
     } else {
       stats.appendChild(renderActivityStat("距離", latest.distance_km || "0", "km"));
@@ -334,6 +369,10 @@
       stats.appendChild(renderActivityStat("氣溫", latest.temperature_c !== null ? latest.temperature_c : "--", "°C"));
     }
     elements.latestActivity.appendChild(stats);
+    if (latest.strength_sets.length > 0) {
+      var strengthTitle = isStrength ? "逐組重量" : latest.strength_date_label + " 肌力訓練 · 逐組重量";
+      elements.latestActivity.appendChild(renderStrengthSets(latest.strength_sets, strengthTitle));
+    }
 
     if (latest.work_reps.length > 0) {
       var trend = document.createElement("details");

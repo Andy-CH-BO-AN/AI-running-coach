@@ -615,13 +615,13 @@
     );
   }
 
-  function findLatestSession(report) {
+  function findLatestSession(report, filter) {
     var latestDate = "";
     var allSessions = [];
     safeArray(report.weekly_analysis).forEach(function scanWeek(week) {
       safeArray(week && week.sessions).forEach(function scanSession(session) {
         var sessionDate = normalizeSessionDateKey(session && session.date);
-        if (!sessionDate) {
+        if (!sessionDate || (filter && !filter(session))) {
           return;
         }
 
@@ -674,6 +674,9 @@
       return compareActivityIdDesc(a && a.activity_id, b && b.activity_id);
     });
     var latestSameDaySession = latestDaySessions[0] || null;
+    if (filter) {
+      return latestSameDaySession;
+    }
 
     var candidateSessions = allSessions.filter(function keepRecentCandidate(session) {
       return dayDiffFromLatest(session && session.date, latestDate) <= 2;
@@ -722,6 +725,11 @@
     var layout = sessionType === "interval" ? "interval" : sessionType === "long" ? "long" : sessionType === "race" ? "race" : "easy";
     var environment = session.environment || {};
     var workReps = adaptWorkReps(session);
+    var strengthSession = normalizedSourceActivityType(session) === "strength_training"
+      ? session
+      : findLatestSession(report, function isStrength(candidate) {
+        return normalizedSourceActivityType(candidate) === "strength_training";
+      });
 
     return {
       has_data: true,
@@ -738,6 +746,8 @@
       temperature_c: isPresentNumber(environment.estimated_temp_c) ? roundTo(environment.estimated_temp_c, 1) : null,
       training_load: adapted.training_load,
       strength: adapted.strength,
+      strength_sets: adaptStrengthSets(strengthSession && strengthSession.strength),
+      strength_date_label: strengthSession ? formatDateLabel(strengthSession.date) : "",
       work_reps: workReps,
       coaching_notes: {
         observation: fallbackText(session.observation, ""),
@@ -1013,6 +1023,18 @@
       total_reps: isPresentNumber(strength && strength.total_reps) ? roundTo(strength.total_reps, 0) : null,
       total_volume_kg: isPresentNumber(strength && strength.total_volume_kg) ? roundTo(strength.total_volume_kg, 1) : null
     };
+  }
+
+  function adaptStrengthSets(strength) {
+    return safeArray(strength && strength.sets).filter(function isActive(set) {
+      return set && set.set_type === "active";
+    }).map(function adaptSet(set) {
+      return {
+        exercise_names: safeArray(set.exercise_names),
+        reps: isPresentNumber(set.reps) ? Number(set.reps) : null,
+        weight_kg: isPresentNumber(set.weight_kg) ? Number(set.weight_kg) : null
+      };
+    });
   }
 
   function adaptSession(session) {
