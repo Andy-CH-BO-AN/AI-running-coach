@@ -401,7 +401,7 @@ def _format_strength_messages(
     activity: dict[str, Any],
     week: dict[str, Any] | None,
 ) -> list[str]:
-    """Show compact strength facts; individual exercise sets stay in the AI input."""
+    """Show strength totals and group identical working sets in the message."""
     lines = [f"{_sport_emoji(_STRENGTH_SOURCE_TYPE)} 肌力訓練｜{activity.get('date', '')}", ""]
     duration = _format_duration(activity.get("duration_min"))
     if duration:
@@ -423,6 +423,20 @@ def _format_strength_messages(
         volume = _weekly_number(strength.get("total_volume_kg"), digits=2)
         if volume is not None:
             lines.append(f"總容量：{volume} kg")
+        weighted_sets: dict[tuple[str, int, str], int] = {}
+        for item in strength.get("sets") or []:
+            if not isinstance(item, Mapping) or item.get("set_type") != "active":
+                continue
+            weight = _weekly_number(item.get("weight_kg"), digits=4)
+            if weight is None:
+                continue
+            names = " / ".join(item.get("exercise_names") or []) or "未辨識動作"
+            key = (names, item.get("reps", 0), weight)
+            weighted_sets[key] = weighted_sets.get(key, 0) + 1
+        if weighted_sets:
+            lines.extend(["", "🏋 肌力重量"])
+            for (names, reps, weight), count in weighted_sets.items():
+                lines.append(f"• {names}｜{weight} kg · {reps} 次 × {count} 組")
     if week is not None and week.get("derived_training_load") is not None:
         lines.extend(["", "📊 本週累積", f"訓練負荷：{_format_load(week.get('derived_training_load'))}"])
     url = _garmin_activity_url(activity.get("activity_id"))

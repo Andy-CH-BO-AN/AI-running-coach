@@ -20,6 +20,7 @@ from src.preprocessing.coach_context import (
     enforce_deterministic_report_fields,
 )
 from src.preprocessing.coach_context_session_facts import SessionFacts
+from src.scripts.backfill_strength_weights import recover_strength_weights
 from src.services.garmin_import_service import strength_backfill_baseline_ids
 
 
@@ -76,6 +77,29 @@ def test_strength_parser_defaults_omitted_per_set_reps_to_zero():
     assert strength["total_sets"] == 2
     assert strength["active_sets"] == 2
     assert strength["total_reps"] == 0
+
+
+def test_garmin_exercise_weights_display_in_kg_and_can_be_recovered_from_saved_sets():
+    raw = {"exerciseSets": [
+        {"setType": "ACTIVE", "weight": 7500, "repetitionCount": 8, "exercises": [{"name": "CURL"}]},
+        {"setType": "REST", "weight": -1},
+        {"setType": "ACTIVE", "weight": 7500, "repetitionCount": 8, "exercises": [{"name": "CURL"}]},
+        {"setType": "ACTIVE", "weight": None, "repetitionCount": 8},
+        {"setType": "ACTIVE", "weight": 0, "repetitionCount": 8},
+    ]}
+    strength = parse_strength_training({}, raw)
+    assert [item["weight_kg"] for item in strength["sets"]] == [7.5, None, 7.5, None, 0]
+    assert strength["total_volume_kg"] is None
+    saved = {**strength, "sets": [{**item, "weight_kg": None} for item in strength["sets"]]}
+    saved["sets"][1]["reps"] = None
+    metrics = {"strength_raw_exercise_sets": raw, "strength": saved}
+    assert recover_strength_weights(metrics) == ("recoverable", strength)
+    assert recover_strength_weights({**metrics, "strength": strength}) == ("already_current", None)
+
+    message = format_activity_message({"source_activity_type": "strength_training", "strength": strength}, None)
+    assert "CURL｜7.5 kg · 8 次 × 2 組" in message
+    assert "0 kg · 8 次 × 1 組" in message
+    assert "總容量" not in message
 
 
 def test_strength_parser_derives_reps_only_when_every_active_set_has_a_valid_source_count():

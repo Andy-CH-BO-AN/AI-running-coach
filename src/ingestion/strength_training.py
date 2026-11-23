@@ -2,7 +2,8 @@
 
 Garmin has used more than one wrapper and field spelling for exercise sets.
 This module deliberately keeps the accepted surface small: values must be
-finite and non-negative and weight is usable only when its unit is explicit.
+finite and non-negative. Garmin's exerciseSets endpoint expresses bare
+numeric weight in grams.
 """
 from __future__ import annotations
 
@@ -89,8 +90,9 @@ def _exercise_names(set_payload: Mapping[str, Any]) -> list[str]:
     )
 
 
-def _weight_kg(set_payload: Mapping[str, Any]) -> float | None:
-    """Return weight in kg only for a source that explicitly names its unit."""
+def _weight_kg(
+    set_payload: Mapping[str, Any], *, bare_weight_unit: str | None = None
+) -> float | None:
     nested = _nested_mapping(set_payload, "weight", "weightDTO", "weightInfo")
     raw = _first(set_payload, "weightKg", "weight_kg")
     unit: Any = "kg" if raw is not None else None
@@ -106,6 +108,8 @@ def _weight_kg(set_payload: Mapping[str, Any]) -> float | None:
     if raw is None:
         raw = _first(set_payload, "weight", "weightValue", "weightValueInUnit")
         unit = unit or _first(set_payload, "weightUnit", "unit", "weightUnitKey")
+        if unit is None and isinstance(set_payload.get("weight"), (int, float)):
+            unit = bare_weight_unit
     value = _number(raw)
     if value is None or not isinstance(unit, str):
         return None
@@ -157,7 +161,7 @@ def _normalize_set(set_payload: Mapping[str, Any], index: int) -> dict[str, Any]
         "exercise_names": names,
         "category": category.strip() if isinstance(category, str) and category.strip() else None,
         "reps": _integer(_first(set_payload, "reps", "repCount", "repetitionCount", "totalReps")) or 0,
-        "weight_kg": _weight_kg(set_payload),
+        "weight_kg": _weight_kg(set_payload, bare_weight_unit="g"),
         "duration_sec": _number(duration),
     }
 

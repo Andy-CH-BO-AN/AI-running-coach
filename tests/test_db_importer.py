@@ -16,7 +16,8 @@ from src.db.models import (
     SwimmingLength,
     UserProfileSnapshot,
 )
-from src.db.repositories import get_or_create_default_user
+from src.db.repositories import get_or_create_default_user, upsert_user
+from src.scripts.backfill_strength_weights import backfill_strength_weights
 from src.services.db_importer import import_garmin_raw_file, import_garmin_user_file, import_processed_csv_file
 from src.services.garmin_import_service import import_strength_backfill
 from tests.db_test_utils import isolated_db_session
@@ -29,6 +30,46 @@ def db_session():
 
 def _write_json(path, payload):
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_strength_weight_backfill_repairs_only_matching_garmin_activities(db_session, tmp_path):
+    raw_path = tmp_path / "garmin_raw.json"
+    raw_metrics = {
+        "strength_raw_exercise_sets": {"exerciseSets": [{"setType": "ACTIVE", "weight": 2500}]},
+        "strength": {"sets": [{"set_index": 1, "set_type": "active", "weight_kg": None}]},
+        "training_stress_score": 10,
+    }
+    user = get_or_create_default_user(db_session)
+    other_user = upsert_user(db_session, external_user_id="another-athlete")
+    _write_json(raw_path, [
+        {"activity_id": 1, "type": "strength_training", "date": "2026-08-23", "raw_data": raw_metrics},
+        {"activity_id": 2, "type": "strength_training", "date": "2026-08-22", "raw_data": raw_metrics},
+        {"activity_id": 3, "type": "running", "date": "2026-11-23", "raw_data": raw_metrics},
+    ])
+    import_garmin_raw_file(db_session, user.id, raw_path)
+    _write_json(raw_path, [
+        {"activity_id": 4, "type": "strength_training", "date": "2026-11-23", "raw_data": raw_metrics},
+    ])
+    import_garmin_raw_file(db_session, other_user.id, raw_path)
+
+    rows = {row.garmin_activity_id: row for row in db_session.scalars(select(Activity))}
+    rows[1].raw_metrics = {
+        **raw_metrics,
+        "strength": {"sets": [{"set_index": 1, "set_type": "active", "weight_kg": 2.5}]},
+    }
+    db_session.flush()
+    start, end = date(2026, 8, 23), date(2026, 11, 23)
+
+    assert backfill_strength_weights(db_session, start, end, apply=False)["recoverable"] == 1
+    assert rows[1].raw_json["raw_data"]["strength"]["sets"][0]["weight_kg"] is None
+    assert backfill_strength_weights(db_session, start, end, apply=True)["updated"] == 1
+    db_session.flush()
+    db_session.expire_all()
+    assert rows[1].raw_json["raw_data"]["strength"]["sets"][0]["weight_kg"] == 2.5
+    assert rows[1].raw_metrics["strength"]["sets"][0]["weight_kg"] == 2.5
+    assert rows[1].raw_json["raw_data"]["training_stress_score"] == 10
+    assert all(rows[i].raw_json["raw_data"] == raw_metrics for i in (2, 3, 4))
+    assert backfill_strength_weights(db_session, start, end, apply=True)["already_current"] == 1
 
 
 def test_importing_same_garmin_raw_file_twice_does_not_duplicate_activities(db_session, tmp_path):
